@@ -93,12 +93,28 @@ Examples:
 should not collide with real domains. The suffix should be configurable later,
 but V1 can assume `.lewp`.
 
+Subdomain-per-instance is the typical workflow, but V1 must also support
+explicit project apex hosts:
+
+```text
+<root>.lewp
+```
+
+Example:
+
+```sh
+lewp lease --host audit.lewp
+```
+
+This registers `audit.lewp` for the current folder. Custom hosts must stay
+inside `.lewp` in V1; non-`.lewp` domains are out of scope.
+
 ## Name Discovery
 
-Root and instance discovery order:
+Root, instance, and explicit host discovery order:
 
-1. CLI flags: `--root`, `--name`
-2. environment variables: `LEWP_ROOT`, `LEWP_NAME`
+1. CLI flags: `--root`, `--name`, `--host`
+2. environment variables: `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
 3. nearest `.lewp.local.toml`
 4. path inference
 
@@ -155,6 +171,7 @@ Users can override inferred values:
 
 ```sh
 lewp lease --root audit --name sso-callback
+lewp lease --host audit.lewp
 ```
 
 Overrides become the remembered identity for that folder until explicitly
@@ -207,23 +224,25 @@ Port assignment requirements:
 - stable for the same folder/identity when possible
 - persisted in SQLite
 - never silently steals a live assignment
-- reuses the same port after expiry if still free
+- reuses the same port for a remembered identity when still free
 - supports a configurable global port range later
 
-V1 may support optional CLI flags for requested port or range, but this is not
-required for the first implementation if the default range is reliable.
+Requested routed-app port/range flags are out of V1. The default range should be
+reliable enough for first implementation. Bare internal port leases are covered
+by `lewp port --name ...`.
 
 ## Lease Lifetime
 
-Lease activity is based primarily on proxy traffic.
+Leases are stable until explicit release. Proxy traffic updates activity metadata
+for display/debugging, but it does not drive automatic expiry or cleanup.
 
 Requirements:
 
-- every HTTP request through the proxy updates `last_seen_at`
-- default expiry should be configurable, with an initial target of 14 days
-- expiry removes active route eligibility but keeps identity history
-- a later `lewp lease` from the same folder should reclaim the same host and
-  port if they are still free
+- HTTP requests through the proxy update `last_seen_at` on a throttled,
+  best-effort basis
+- V1 has no automatic lease expiry sweeper
+- a later `lewp lease` from the same folder reuses the same host and port while
+  the identity remains remembered
 - `lewp release` releases the current folder route
 - `lewp release --forget` removes remembered identity/history for that
   folder
@@ -324,8 +343,8 @@ If a hostname is registered but the target port is closed, the proxy should show
 a debug-first HTML error page rather than a generic blank 502.
 
 Include the requested host, loopback target, project path, root/name, last seen
-time, expiry if applicable, suggested start command, and hints for
-`lewp list` / `lewp doctor`.
+time, release state, suggested start command, and hints for `lewp list` /
+`lewp doctor`.
 
 Example content:
 
@@ -355,11 +374,10 @@ States:
 
 - `up`: TCP connection to target port succeeds
 - `down`: TCP connection fails or is refused
-- `expired`: lease is beyond expiry window
 - `stale`: path is missing or identity can no longer be resolved
 
 Default `lewp list` should show active and recently inactive entries.
-`lewp list --all` should include expired/stale history.
+`lewp list --all` should include released/stale history.
 
 Example:
 
@@ -376,7 +394,8 @@ Core commands:
 ```sh
 lewp setup
 lewp system start|stop|status|restart|uninstall
-lewp lease [--root audit] [--name feature-1] [--json] [--shell]
+lewp lease [--root audit] [--name feature-1] [--host audit.lewp] [--json] [--shell]
+lewp port [--name vite] [--json] [--shell]
 lewp release [--forget]
 lewp list [--all]
 lewp doctor
@@ -392,7 +411,7 @@ HOST=feature-1.audit.lewp
 
 `--shell` outputs eval-safe `export` lines. `--json` outputs machine-readable
 fields for port, URL, host, root, name, normalized values, path, inference
-metadata, warnings, and expiry.
+metadata, warnings, and release state.
 
 ## Environment File Policy
 
@@ -419,6 +438,7 @@ Example:
 ```toml
 root = "audit"
 name = "feature-1"
+host = "audit.lewp" # optional full-host override
 ```
 
 This file is intended to be local/uncommitted and easy to ignore. `lewp init`
@@ -434,10 +454,10 @@ Use SQLite at:
 ```
 
 The registry must persist identities, leases, ports, paths, last-seen timestamps,
-release/expiry state, and enough events to debug routing and conflict behavior.
-The first schema can be small, but it should keep identity history separate from
-the currently active lease so expired projects can reclaim stable names and
-ports later.
+release state, and enough events to debug routing and conflict behavior. The
+first schema can be small, but it should keep identity history separate from the
+currently active lease so released projects can reclaim stable names and ports
+later when remembered history remains.
 
 ## HTTPS Requirement
 
@@ -480,16 +500,18 @@ V1 is acceptable when:
 - `lewp lease` from `~/projects/audit/feature-1` returns stable `PORT`,
   `URL`, and `HOST`
 - `feature-1.audit.lewp` resolves locally after setup
+- `lewp lease --host audit.lewp` registers a stable project apex host
+- `lewp port --name vite` returns a stable bare internal port without a hostname
 - proxy routes to `127.0.0.1:<PORT>`
 - closed ports show a useful debug page, not a blank 502
 - WebSockets/HMR work through the proxy
 - streaming/SSE responses work through the proxy
 - original `Host` is preserved upstream
 - `X-Forwarded-*` headers are passed
-- `lewp list` shows `up`/`down` state without HTTP app probes
+- `lewp list` shows `up`/`down`/`stale` state without HTTP app probes
 - conflicting names get deterministic suffixes and warnings
 - normalized names are valid DNS labels
-- expired leases can be reclaimed by the same folder when host/port are free
+- remembered leases are stable and reclaimed by the same folder
 - `lewp release` frees current folder route
 - `lewp release --forget` removes remembered identity
 - `lewp system uninstall` removes launchd/resolver integration cleanly

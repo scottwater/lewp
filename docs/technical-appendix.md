@@ -38,7 +38,6 @@ leases
 - port
 - state
 - last_seen_at
-- expires_at
 - released_at
 - created_at
 - updated_at
@@ -56,22 +55,22 @@ Events should capture useful debugging breadcrumbs:
 
 - lease created
 - conflict renamed
-- route hit
+- route hit summary
 - proxy target down
 - released
 - forgotten
 - normalized name changed
 
-## HTTPS Investigation Paths
+## HTTPS Direction
 
-Possible implementation directions:
+Implementation direction selected in the plan:
 
-- Go-managed local CA similar to puma-dev or mkcert behavior
-- `mkcert` integration if dependency tradeoff is acceptable
-- CertMagic/local CA if it meaningfully reduces custom TLS code
+- Go-managed local CA using stdlib `crypto/x509`
+- keychain trust during `lewp setup`
+- SNI leaf certificates issued automatically for local `.lewp` hosts
+- no per-project certificate work
 
-The selected implementation should optimize for reliable macOS setup, clear
-uninstall, and no per-project certificate work.
+Rejected for V1: `mkcert`, CertMagic/local CA machinery, and per-project TLS config.
 
 ## Doctor Checks
 
@@ -88,16 +87,16 @@ uninstall, and no per-project certificate work.
 - current lease target port state
 - conflicting hostnames
 
-## Open Implementation Questions
+## Resolved And Open Implementation Questions
 
-These are implementation decisions, not unresolved product requirements:
+Resolved by the plan:
 
-- exact Go router/proxy libraries
-- whether to use raw `net/http/httputil`, Caddy internals, or another proxy
-  package
+- proxy: raw `net/http/httputil`
+- HTTPS: stdlib CA + macOS keychain trust
+- `lewp init`: out of V1
+- requested routed-app ports (`lewp lease --port`): out of V1
+
+Still open:
+
 - exact SQLite schema migrations mechanism
 - launchd plist installation details
-- HTTPS implementation path
-- whether `lewp init` belongs in V1 or V1.1
-- whether requested-port flags belong in V1
-
