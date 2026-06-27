@@ -1,11 +1,11 @@
-# Plan: `domains` — local domain router/proxy (V1)
+# Plan: `lewp` — local domain router/proxy (V1)
 
 ## Context
 
 The repo currently holds only a vision (`overview.md`) and a spec (`docs/requirements.md`,
 `docs/technical-appendix.md`) — no code yet. The goal is a macOS-first Go binary that, from
 any project-instance directory, leases a stable loopback port, assigns a predictable
-`<instance>.<root>.test` hostname, and reverse-proxies browser traffic to a developer-started
+`<instance>.<root>.lewp` hostname, and reverse-proxies browser traffic to a developer-started
 process. It must make callback URLs / SSO redirects / cookies / multi-worktree dev predictable
 **without becoming a process manager** (the explicit boundary that keeps it debuggable, unlike
 puma-dev's auto-booting apps).
@@ -21,9 +21,9 @@ read-only guides, not dependencies — this is a fresh binary.
    around `launch_activate_socket()`. No setuid, no root daemon.
 2. **Port model: registry, no sweeper.** Keep the full queryable SQLite registry (the
    differentiator for orchestrating LLM-driven local services). Assign ports by free-port scan and
-   **pin per identity until explicit `domains release`**. Drop the spec's 14-day auto-expiry sweeper
+   **pin per identity until explicit `lewp release`**. Drop the spec's 14-day auto-expiry sweeper
    and per-request `last_seen` writes. Keep a *throttled, informational* `last_seen` for display only.
-3. **Internal ports: bare-port lease.** Add `domains port [--name vite]` that leases a unique,
+3. **Internal ports: bare-port lease.** Add `lewp port [--name vite]` that leases a unique,
    registered port number with **no hostname/route**, to wire into env like `VITE_RUBY_PORT` and
    kill worktree collisions on internal servers (e.g. Vite's hardcoded 3036).
 4. **HTTPS: V1 = stdlib CA + macOS system keychain.** Covers Safari + every Chromium browser
@@ -33,15 +33,15 @@ read-only guides, not dependencies — this is a fresh binary.
 
 ## Architecture
 
-One Go binary, two roles: `domains <cmd>` (CLI client) and `domains daemon` (launchd-managed).
+One Go binary, two roles: `lewp <cmd>` (CLI client) and `lewp daemon` (launchd-managed).
 CLI talks to daemon over a Unix control socket. Daemon owns: SQLite registry, HTTP(80)/HTTPS(443)
-proxy, DNS server for `.test`, control API.
+proxy, DNS server for `.lewp`, control API.
 
 ```
-cmd/domains/main.go            # cobra-style dispatch: cli vs daemon mode
+cmd/lewp/main.go            # cobra-style dispatch: cli vs daemon mode
 internal/daemon/               # daemon supervisor, control API over unix socket
 internal/proxy/                # httputil.ReverseProxy host->port routing, error page
-internal/dns/                  # UDP DNS responder for *.test -> loopback
+internal/dns/                  # UDP DNS responder for *.lewp -> loopback
 internal/registry/             # SQLite (modernc.org/sqlite, pure-Go, no cgo for DB)
 internal/identity/             # root/name inference, normalization, worktree/branch detection
 internal/tls/                  # local CA, SNI leaf minting + cache
@@ -54,20 +54,20 @@ internal/cli/                  # lease/port/release/list/doctor/setup/system com
 These are the things the references get subtly wrong or that the spec under-specifies — bake them
 in from the start:
 
-- **DNS does not need a privileged port.** `/etc/resolver/test` accepts a `port` line, so the DNS
+- **DNS does not need a privileged port.** `/etc/resolver/lewp` accepts a `port` line, so the DNS
   responder listens on a high port (e.g. 15353) via plain `net.ListenPacket`. Only 80/443 go through
   launchd socket activation. Decouples DNS entirely from the privileged-binding problem.
   Reference: `reference/dot-test/server.go` (resolver file shape), `reference/puma-dev/dev/resolver.go`.
 - **Bind the proxy to `127.0.0.1` and `::1`, NOT `0.0.0.0`.** puma-dev's plist uses `0.0.0.0`,
   exposing every app to the LAN — which violates our explicit non-goal. Set `SockNodeName=127.0.0.1`.
-- **Two-level wildcard routing.** Resolve *anything* under `.test` to loopback at the DNS layer;
-  route by **full host** in the registry. Do NOT copy dot-test's `TrimSuffix(host, ".test")` +
-  single-label lookup (it breaks `feature-1.audit.test`).
+- **Two-level wildcard routing.** Resolve *anything* under `.lewp` to loopback at the DNS layer;
+  route by **full host** in the registry. Do NOT copy dot-test's `TrimSuffix(host, ".lewp")` +
+  single-label lookup (it breaks `feature-1.audit.lewp`).
 - **Streaming: `FlushInterval = -1`** on the ReverseProxy (immediate flush). puma-dev's `1s` adds up
   to a second of latency to SSE/streamed responses. WebSocket upgrades work by default in modern Go's
   `httputil.ReverseProxy`.
 - **Host preservation:** use `ReverseProxy.Rewrite` (Go 1.20+) — set `r.SetXForwarded()` then
-  `r.Out.Host = r.In.Host` so the upstream sees `feature-1.audit.test`, not `127.0.0.1:port`.
+  `r.Out.Host = r.In.Host` so the upstream sees `feature-1.audit.lewp`, not `127.0.0.1:port`.
   Pass `X-Forwarded-Host/Proto/For`.
 - **`last_seen` is throttled, best-effort, in-memory-coalesced** (flush at most every ~N seconds per
   lease). Never one DB write per request. The appendix's "route hit" event is informational only — do
@@ -82,8 +82,8 @@ in from the start:
 
 ## Identity, normalization, worktrees
 
-`internal/identity` discovery order (per spec): CLI flags → env (`DOMAINS_ROOT`/`DOMAINS_NAME`) →
-nearest `.domains.local.toml` → inference. Inference must be *announced* in human output.
+`internal/identity` discovery order (per spec): CLI flags → env (`LEWP_ROOT`/`LEWP_NAME`) →
+nearest `.lewp.local.toml` → inference. Inference must be *announced* in human output.
 
 - **Default inference:** parent dir → `root`, basename → `instance`.
 - **Worktree detection (new):** if `git rev-parse --git-common-dir` differs from `--git-dir`, it's a
@@ -104,18 +104,18 @@ forgotten, normalized-name-changed) — **but no per-request rows**.
   created_at, updated_at)` — `kind='port'` rows are bare-port leases with no host.
 - `leases(id, identity_id, port, state, last_seen_at, released_at, created_at, updated_at)` — no
   active `expires_at` sweeper; `last_seen_at` is throttled/informational.
-- Path: `~/Library/Application Support/domains/registry.sqlite`.
+- Path: `~/Library/Application Support/lewp/registry.sqlite`.
 
 ## CLI contract
 
 ```
-domains setup                                   # resolver file, CA+trust, launchd install, port-bind check
-domains system start|stop|status|restart|uninstall
-domains lease [--root R] [--name N] [--json|--shell]   # routed port + hostname (default env-style output)
-domains port [--name vite] [--json|--shell]            # NEW: bare internal port, no hostname
-domains release [--forget]
-domains list [--all]                            # registry-backed; TCP up/down; no HTTP app probes
-domains doctor
+lewp setup                                   # resolver file, CA+trust, launchd install, port-bind check
+lewp system start|stop|status|restart|uninstall
+lewp lease [--root R] [--name N] [--json|--shell]   # routed port + hostname (default env-style output)
+lewp port [--name vite] [--json|--shell]            # NEW: bare internal port, no hostname
+lewp release [--forget]
+lewp list [--all]                            # registry-backed; TCP up/down; no HTTP app probes
+lewp doctor
 ```
 
 `lease` default output: `PORT=`, `URL=http://...`, `HOST=...` env lines + inferred-from notes.
@@ -125,8 +125,8 @@ domains doctor
 
 1. **Skeleton + registry:** binary dispatch, SQLite registry, `identity` inference + normalization +
    worktree detection. Unit-test inference/normalization against spec examples.
-2. **DNS + resolver:** UDP `.test`→loopback responder on high port; `setup` writes `/etc/resolver/test`.
-   Verify with `dig feature-1.audit.test @127.0.0.1 -p 15353` and (after setup) `ping`/`dscacheutil`.
+2. **DNS + resolver:** UDP `.lewp`→loopback responder on high port; `setup` writes `/etc/resolver/lewp`.
+   Verify with `dig feature-1.audit.lewp @127.0.0.1 -p 15353` and (after setup) `ping`/`dscacheutil`.
 3. **Proxy (HTTP) + error page:** host→port routing, Host preservation, X-Forwarded-*, WebSocket,
    `FlushInterval=-1`, debug-first HTML error page when target port is closed.
 4. **launchd + privileged bind:** plist generation (127.0.0.1 sockets), cgo socket-activation handoff,
@@ -137,24 +137,24 @@ domains doctor
 
 ## Verification (end-to-end)
 
-- From `~/projects/audit/feature-1`: `domains lease` returns stable `PORT`/`URL`/`HOST`; re-running is
+- From `~/projects/audit/feature-1`: `lewp lease` returns stable `PORT`/`URL`/`HOST`; re-running is
   idempotent.
-- `feature-1.audit.test` resolves to loopback after `domains setup`.
-- Start a throwaway server on the leased port → `http://feature-1.audit.test` proxies to it; closed port
+- `feature-1.audit.lewp` resolves to loopback after `lewp setup`.
+- Start a throwaway server on the leased port → `http://feature-1.audit.lewp` proxies to it; closed port
   shows the debug page, not a blank 502.
 - WebSocket + SSE pass through (test with a tiny echo WS + an SSE endpoint).
 - Real-stack check: run `thocstock_v2` via `PORT=<leased> bin/dev`; confirm the app loads through the
-  `.test` host **and Vite HMR works** (rides the Rails origin via vite_ruby's dev-server proxy). Confirm
-  `domains port --name vite` hands out a unique port to set `VITE_RUBY_PORT` so two worktrees don't collide
+  `.lewp` host **and Vite HMR works** (rides the Rails origin via vite_ruby's dev-server proxy). Confirm
+  `lewp port --name vite` hands out a unique port to set `VITE_RUBY_PORT` so two worktrees don't collide
   on 3036.
 - Worktree check: create a git worktree in a non-standard location; confirm `root`/`instance` infer
   correctly without a config file.
-- `domains list` shows up/down via TCP only; conflicting names get deterministic suffixes + warnings.
-- HTTPS: `https://feature-1.audit.test` is trusted in Safari + a Chromium browser; `system uninstall`
+- `lewp list` shows up/down via TCP only; conflicting names get deterministic suffixes + warnings.
+- HTTPS: `https://feature-1.audit.lewp` is trusted in Safari + a Chromium browser; `system uninstall`
   removes launchd + resolver + keychain cert cleanly.
 
 ## Out of scope (V1) / vNext
 
 - Firefox/NSS trust (`certutil`), multi-service-per-instance subdomain routing
-  (`vite.feature-1.audit.test`), `.env` mutation, dashboard/sharing/tunnels, auto-expiry sweeper,
+  (`vite.feature-1.audit.lewp`), `.env` mutation, dashboard/sharing/tunnels, auto-expiry sweeper,
   Linux support, proxying non-loopback targets, starting any app process.

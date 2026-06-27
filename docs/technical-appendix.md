@@ -8,7 +8,7 @@ Useful reference behavior:
 
 - `dot-test`: simple DNS server, reverse proxy, stable local names, debug error
   pages.
-- `puma-dev`: good precedent for `.test`, HTTPS, and macOS setup, but app
+- `puma-dev`: good precedent for `.lewp`, HTTPS, and macOS setup, but app
   auto-booting is out of scope because it makes failures hard to debug.
 - `outport`: useful ideas around deterministic ports and instances, but V1
   should avoid its broader service orchestration, dashboard, sharing, and env
@@ -75,12 +75,12 @@ uninstall, and no per-project certificate work.
 
 ## Doctor Checks
 
-`domains doctor` should inspect:
+`lewp doctor` should inspect:
 
 - daemon running
 - control socket reachable
 - DNS resolver file exists
-- `.test` resolves to loopback
+- `.lewp` resolves to loopback
 - proxy can bind or is bound on port 80
 - HTTPS CA state when enabled
 - registry readable
@@ -98,6 +98,6 @@ These are implementation decisions, not unresolved product requirements:
 - exact SQLite schema migrations mechanism
 - launchd plist installation details
 - HTTPS implementation path
-- whether `domains init` belongs in V1 or V1.1
+- whether `lewp init` belongs in V1 or V1.1
 - whether requested-port flags belong in V1
 

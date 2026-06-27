@@ -4,7 +4,7 @@
 
 Build a macOS-first local domain router/proxy for parallel local development.
 
-The tool grants stable loopback ports, assigns predictable `.test` hostnames,
+The tool grants stable loopback ports, assigns predictable `.lewp` hostnames,
 and reverse-proxies browser traffic to developer-started processes. It should
 make callback URLs, SSO redirects, cookies, and multi-worktree development
 predictable without becoming a process manager.
@@ -41,15 +41,15 @@ From a project instance directory:
 
 ```sh
 cd ~/projects/audit/feature-1
-domains lease
+lewp lease
 ```
 
 Default output:
 
 ```sh
 PORT=42137
-URL=http://feature-1.audit.test
-HOST=feature-1.audit.test
+URL=http://feature-1.audit.lewp
+HOST=feature-1.audit.lewp
 ```
 
 The same command both leases the port and registers the route. The user starts
@@ -64,11 +64,11 @@ PORT=42137 bin/dev
 The hostname should work as a normal browser URL:
 
 ```text
-http://feature-1.audit.test
+http://feature-1.audit.lewp
 ```
 
 Nice hostnames are the point of the tool. A design that requires users to type a
-proxy port in the browser, such as `http://feature-1.audit.test:49200`, does not
+proxy port in the browser, such as `http://feature-1.audit.lewp:49200`, does not
 meet the product goal.
 
 ## Hostname Contract
@@ -76,30 +76,30 @@ meet the product goal.
 Default hostname format:
 
 ```text
-<instance>.<root>.test
+<instance>.<root>.lewp
 ```
 
 Examples:
 
 ```text
 ~/projects/audit/feature-1
--> feature-1.audit.test
+-> feature-1.audit.lewp
 
 ~/projects/audit/scott/JIRA-123 Add SSO callback!
--> jira-123-add-sso-callback.audit.test
+-> jira-123-add-sso-callback.audit.lewp
 ```
 
-`.test` is the default suffix because it is reserved for testing and should not
-collide with a real public TLD. The suffix should be configurable later, but V1
-can assume `.test`.
+`.lewp` is the default suffix for this tool. It is not a real public TLD, so it
+should not collide with real domains. The suffix should be configurable later,
+but V1 can assume `.lewp`.
 
 ## Name Discovery
 
 Root and instance discovery order:
 
 1. CLI flags: `--root`, `--name`
-2. environment variables: `DOMAINS_ROOT`, `DOMAINS_NAME`
-3. nearest `.domains.local.toml`
+2. environment variables: `LEWP_ROOT`, `LEWP_NAME`
+3. nearest `.lewp.local.toml`
 4. path inference
 
 Path inference rule:
@@ -117,8 +117,8 @@ Example:
 
 ```text
 PORT=42137
-URL=http://feature-1.audit.test
-HOST=feature-1.audit.test
+URL=http://feature-1.audit.lewp
+HOST=feature-1.audit.lewp
 
 # inferred root=audit from parent folder
 # inferred name=feature-1 from current folder
@@ -146,7 +146,7 @@ scott/feature/JIRA-123 Add SSO callback!
 -> jira-123-add-sso-callback
 ```
 
-If normalization would produce an unusable name, `domains lease` must fail with
+If normalization would produce an unusable name, `lewp lease` must fail with
 a clear error and ask for `--name`.
 
 ## CLI Overrides
@@ -154,7 +154,7 @@ a clear error and ask for `--name`.
 Users can override inferred values:
 
 ```sh
-domains lease --root audit --name sso-callback
+lewp lease --root audit --name sso-callback
 ```
 
 Overrides become the remembered identity for that folder until explicitly
@@ -179,10 +179,10 @@ V1 behavior:
 Example:
 
 ```text
-warning: feature-1.audit.test is already assigned to:
+warning: feature-1.audit.lewp is already assigned to:
   /Users/scott/projects/audit/feature-1
 
-using: feature-1-a8f3.audit.test
+using: feature-1-a8f3.audit.lewp
 ```
 
 Suffixes should be deterministic for the folder/identity so repeated leases do
@@ -222,14 +222,14 @@ Requirements:
 - every HTTP request through the proxy updates `last_seen_at`
 - default expiry should be configurable, with an initial target of 14 days
 - expiry removes active route eligibility but keeps identity history
-- a later `domains lease` from the same folder should reclaim the same host and
+- a later `lewp lease` from the same folder should reclaim the same host and
   port if they are still free
-- `domains release` releases the current folder route
-- `domains release --forget` removes remembered identity/history for that
+- `lewp release` releases the current folder route
+- `lewp release --forget` removes remembered identity/history for that
   folder
 
 The user should not need to keep running the CLI during normal development. They
-run `domains lease` when creating or returning to a branch/worktree, then use
+run `lewp lease` when creating or returning to a branch/worktree, then use
 the URL while building.
 
 ## Daemon Architecture
@@ -237,8 +237,8 @@ the URL while building.
 One Go binary with two roles:
 
 ```sh
-domains ...         # CLI client
-domains daemon      # launchd-managed daemon
+lewp ...         # CLI client
+lewp daemon      # launchd-managed daemon
 ```
 
 The daemon owns:
@@ -246,7 +246,7 @@ The daemon owns:
 - SQLite registry
 - HTTP proxy on port 80
 - HTTPS proxy on port 443 when enabled
-- DNS server for `.test`
+- DNS server for `.lewp`
 - local control API over a Unix socket
 
 The CLI talks to the daemon over the local socket.
@@ -257,8 +257,8 @@ of silently starting background services.
 Example:
 
 ```text
-domains daemon is not running
-Run: domains system start
+lewp daemon is not running
+Run: lewp system start
 ```
 
 ## macOS Setup
@@ -268,33 +268,33 @@ V1 target platform: macOS.
 Required setup command:
 
 ```sh
-domains setup
+lewp setup
 ```
 
 Setup responsibilities:
 
-- configure macOS DNS for `.test`, likely via `/etc/resolver/test`
+- configure macOS DNS for `.lewp`, likely via `/etc/resolver/lewp`
 - install or prepare the launchd service
 - verify that port 80 can be bound by the daemon setup
 - prepare local HTTPS trust when HTTPS support is enabled
 - provide clear cleanup/uninstall instructions
 
-Service commands are `domains system start|stop|status|restart|uninstall`.
+Service commands are `lewp system start|stop|status|restart|uninstall`.
 
 `system uninstall` must remove launchd/resolver integration cleanly.
 
 ## DNS
 
-V1 should run its own tiny DNS server for `.test` and integrate with macOS using
-`/etc/resolver/test`.
+V1 should run its own tiny DNS server for `.lewp` and integrate with macOS using
+`/etc/resolver/lewp`.
 
 Reasons:
 
-- `/etc/hosts` cannot express wildcard local domains cleanly
+- `/etc/hosts` cannot express wildcard local lewp cleanly
 - Caddy alone does not solve DNS
 - puma-dev and dot-test validate this integration shape
 
-All matching `.test` names owned by the tool should resolve to loopback.
+All matching `.lewp` names owned by the tool should resolve to loopback.
 
 ## Proxy Requirements
 
@@ -325,12 +325,12 @@ a debug-first HTML error page rather than a generic blank 502.
 
 Include the requested host, loopback target, project path, root/name, last seen
 time, expiry if applicable, suggested start command, and hints for
-`domains list` / `domains doctor`.
+`lewp list` / `lewp doctor`.
 
 Example content:
 
 ```text
-feature-1.audit.test is registered but not responding
+feature-1.audit.lewp is registered but not responding
 
 Target: 127.0.0.1:42137
 Project: /Users/scott/projects/audit/feature-1
@@ -349,7 +349,7 @@ Reasons:
 
 - avoids changing app state
 - avoids app-specific route assumptions
-- fast enough for `domains list`
+- fast enough for `lewp list`
 
 States:
 
@@ -358,15 +358,15 @@ States:
 - `expired`: lease is beyond expiry window
 - `stale`: path is missing or identity can no longer be resolved
 
-Default `domains list` should show active and recently inactive entries.
-`domains list --all` should include expired/stale history.
+Default `lewp list` should show active and recently inactive entries.
+`lewp list --all` should include expired/stale history.
 
 Example:
 
 ```text
 HOST                         PORT   STATE   PATH
-feature-1.audit.test         42137  down    ~/projects/audit/feature-1
-main.blog.test               42138  up      ~/projects/blog
+feature-1.audit.lewp         42137  down    ~/projects/audit/feature-1
+main.blog.lewp               42138  up      ~/projects/blog
 ```
 
 ## CLI Contract
@@ -374,20 +374,20 @@ main.blog.test               42138  up      ~/projects/blog
 Core commands:
 
 ```sh
-domains setup
-domains system start|stop|status|restart|uninstall
-domains lease [--root audit] [--name feature-1] [--json] [--shell]
-domains release [--forget]
-domains list [--all]
-domains doctor
+lewp setup
+lewp system start|stop|status|restart|uninstall
+lewp lease [--root audit] [--name feature-1] [--json] [--shell]
+lewp release [--forget]
+lewp list [--all]
+lewp doctor
 ```
 
-`domains lease` defaults to simple env-style lines:
+`lewp lease` defaults to simple env-style lines:
 
 ```sh
 PORT=42137
-URL=http://feature-1.audit.test
-HOST=feature-1.audit.test
+URL=http://feature-1.audit.lewp
+HOST=feature-1.audit.lewp
 ```
 
 `--shell` outputs eval-safe `export` lines. `--json` outputs machine-readable
@@ -411,7 +411,7 @@ not the core registry.
 Optional local config file:
 
 ```text
-.domains.local.toml
+.lewp.local.toml
 ```
 
 Example:
@@ -421,7 +421,7 @@ root = "audit"
 name = "feature-1"
 ```
 
-This file is intended to be local/uncommitted and easy to ignore. `domains init`
+This file is intended to be local/uncommitted and easy to ignore. `lewp init`
 may be added later to create it, but `lease` must work without it through flags,
 env vars, or inference.
 
@@ -430,7 +430,7 @@ env vars, or inference.
 Use SQLite at:
 
 ```text
-~/Library/Application Support/domains/registry.sqlite
+~/Library/Application Support/lewp/registry.sqlite
 ```
 
 The registry must persist identities, leases, ports, paths, last-seen timestamps,
@@ -450,14 +450,14 @@ API behavior, and realistic development.
 Target behavior:
 
 ```text
-https://feature-1.audit.test
+https://feature-1.audit.lewp
 ```
 
 Requirements:
 
 - local CA generated or managed by the tool
 - setup installs/trusts the CA on macOS, or gives exact manual steps
-- certificates issued automatically for local `.test` hosts
+- certificates issued automatically for local `.lewp` hosts
 - no per-project TLS config
 - user-facing output clearly states whether HTTPS is enabled
 
@@ -466,8 +466,8 @@ tool must not pretend HTTPS works.
 
 ## Doctor Command
 
-`domains doctor` should inspect common failure points: daemon state, control
-socket, resolver file, `.test` lookup, proxy port binding, registry readability,
+`lewp doctor` should inspect common failure points: daemon state, control
+socket, resolver file, `.lewp` lookup, proxy port binding, registry readability,
 current-folder inference, target port state, conflicts, and HTTPS CA state when
 enabled.
 
@@ -477,20 +477,20 @@ Doctor output should be concrete and command-oriented.
 
 V1 is acceptable when:
 
-- `domains lease` from `~/projects/audit/feature-1` returns stable `PORT`,
+- `lewp lease` from `~/projects/audit/feature-1` returns stable `PORT`,
   `URL`, and `HOST`
-- `feature-1.audit.test` resolves locally after setup
+- `feature-1.audit.lewp` resolves locally after setup
 - proxy routes to `127.0.0.1:<PORT>`
 - closed ports show a useful debug page, not a blank 502
 - WebSockets/HMR work through the proxy
 - streaming/SSE responses work through the proxy
 - original `Host` is preserved upstream
 - `X-Forwarded-*` headers are passed
-- `domains list` shows `up`/`down` state without HTTP app probes
+- `lewp list` shows `up`/`down` state without HTTP app probes
 - conflicting names get deterministic suffixes and warnings
 - normalized names are valid DNS labels
 - expired leases can be reclaimed by the same folder when host/port are free
-- `domains release` frees current folder route
-- `domains release --forget` removes remembered identity
-- `domains system uninstall` removes launchd/resolver integration cleanly
+- `lewp release` frees current folder route
+- `lewp release --forget` removes remembered identity
+- `lewp system uninstall` removes launchd/resolver integration cleanly
 - V1 cannot proxy remote targets
