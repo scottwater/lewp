@@ -177,6 +177,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runList(cfg)
+	case "suffix":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, suffixHelp)
+			return 0
+		}
+		return runSuffix(cfg)
 	case "doctor":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, doctorHelp)
@@ -383,6 +389,78 @@ func runSetup(cfg Config) int {
 		return 0
 	}
 	fmt.Fprintln(cfg.Stdout, "Next: lewp system start && lewp doctor")
+	return 0
+}
+
+func runSuffix(cfg Config) int {
+	if len(cfg.Args) < 2 {
+		fmt.Fprint(cfg.Stderr, suffixHelp)
+		return 2
+	}
+	switch cfg.Args[1] {
+	case "list":
+		return runSuffixList(cfg)
+	case "remove":
+		return runSuffixRemove(cfg)
+	default:
+		fmt.Fprintf(cfg.Stderr, "lewp suffix: unknown subcommand %q\n\n", cfg.Args[1])
+		fmt.Fprint(cfg.Stderr, suffixHelp)
+		return 2
+	}
+}
+
+func runSuffixList(cfg Config) int {
+	if len(cfg.Args) != 2 {
+		fmt.Fprintln(cfg.Stderr, "usage: lewp suffix list")
+		return 2
+	}
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "read suffix config: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(cfg.Stdout, "SUFFIX\tKIND")
+	fmt.Fprintf(cfg.Stdout, "%s\tbuilt-in\n", suffix.BuiltIn)
+	for _, s := range suffixCfg.Suffixes {
+		fmt.Fprintf(cfg.Stdout, "%s\tcustom\n", s)
+	}
+	return 0
+}
+
+func runSuffixRemove(cfg Config) int {
+	if len(cfg.Args) != 3 {
+		fmt.Fprintln(cfg.Stderr, "usage: lewp suffix remove <suffix>")
+		return 2
+	}
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "read suffix config: %v\n", err)
+		return 1
+	}
+	updated, removedSuffix, removed, err := suffix.Remove(suffixCfg, cfg.Args[2])
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "validate suffix: %v\n", err)
+		return 1
+	}
+	if !removed {
+		fmt.Fprintf(cfg.Stdout, "suffix %s is not configured\n", removedSuffix)
+		return 0
+	}
+	resolverPath := resolverPathForSuffix(cfg, removedSuffix)
+	if err := ensureLewpOwnedOrMissing(resolverPath, dns.ResolverFile(dns.DefaultPort)); err != nil {
+		fmt.Fprintf(cfg.Stderr, "refusing to remove resolver file: %v\n", err)
+		return 1
+	}
+	if err := removePath(cfg, resolverPath); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(cfg.Stderr, "remove resolver file: %v\n", err)
+		return 1
+	}
+	if err := suffix.Save(cfg.SuffixesPath, updated); err != nil {
+		fmt.Fprintf(cfg.Stderr, "write suffix config: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(cfg.Stdout, "removed suffix %s\n", removedSuffix)
+	fmt.Fprintf(cfg.Stdout, "removed resolver %s\n", resolverPath)
 	return 0
 }
 
@@ -653,7 +731,7 @@ func writeResolver(cfg Config, path string) error {
 }
 
 func removePath(cfg Config, path string) error {
-	if path == defaultResolverPath() && os.Geteuid() != 0 {
+	if filepath.Dir(path) == "/etc/resolver" && os.Geteuid() != 0 {
 		return cfg.RunCommand(context.Background(), []string{"sudo", "rm", "-f", path})
 	}
 	return os.Remove(path)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/scottwater/lewp/internal/dns"
 	"github.com/scottwater/lewp/internal/launchd"
 	"github.com/scottwater/lewp/internal/suffix"
 )
@@ -521,6 +522,73 @@ func TestRunSetupAdditiveSuffixConfig(t *testing.T) {
 	assertResolverPort(t, dir+"/resolver/lewp")
 	assertResolverPort(t, dir+"/resolver/local.new.com")
 	assertResolverPort(t, dir+"/resolver/local.old.com")
+}
+
+func TestRunSuffixListShowsBuiltInAndCustom(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	suffixesPath := dir + "/config/suffixes.toml"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	code := Run(Config{
+		Args:         []string{"suffix", "list"},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		SuffixesPath: suffixesPath,
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got, want := stdout.String(), "SUFFIX\tKIND\nlewp\tbuilt-in\nlocal.todoordie.com\tcustom\n"; got != want {
+		t.Fatalf("stdout=%q want %q", got, want)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+}
+
+func TestRunSuffixRemoveDeletesConfigAndResolver(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	suffixesPath := dir + "/config/suffixes.toml"
+	resolverPath := dir + "/resolver/lewp"
+	customResolverPath := dir + "/resolver/local.todoordie.com"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dns.WriteResolverFile(customResolverPath, dns.DefaultPort); err != nil {
+		t.Fatal(err)
+	}
+
+	code := Run(Config{
+		Args:         []string{"suffix", "remove", "local.todoordie.com"},
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		ResolverPath: resolverPath,
+		SuffixesPath: suffixesPath,
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(customResolverPath); !os.IsNotExist(err) {
+		t.Fatalf("resolver should be removed: %v", err)
+	}
+	cfg, err := suffix.Load(suffixesPath)
+	if err != nil {
+		t.Fatalf("Load suffix config: %v", err)
+	}
+	if len(cfg.Suffixes) != 0 {
+		t.Fatalf("suffixes=%v want empty", cfg.Suffixes)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "removed suffix local.todoordie.com") || !strings.Contains(got, "removed resolver "+customResolverPath) {
+		t.Fatalf("stdout missing removal details:\n%s", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
 }
 
 func assertResolverPort(t *testing.T, path string) {

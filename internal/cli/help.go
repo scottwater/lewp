@@ -30,6 +30,7 @@ Commands:
   port       Lease a bare internal port without a hostname
   release    Release the route for the current directory
   list       List active routes and their health
+  suffix     List or remove custom managed suffixes
   doctor     Diagnose daemon state, DNS, and CA trust
   logs       Show or tail the daemon logs
   completion Print a shell completion script (bash|zsh|fish)
@@ -245,6 +246,19 @@ Flags:
 Examples:
   lewp list
   lewp list --json | jq '.[] | select(.kind == "route")'
+`
+
+	suffixHelp = `lewp suffix — list or remove custom managed suffixes
+
+Usage:
+  lewp suffix list
+  lewp suffix remove <suffix>
+
+Commands:
+  list             List built-in and custom managed suffixes
+  remove <suffix>  Remove a custom managed suffix and its resolver file
+
+.lewp is built in and cannot be removed.
 `
 
 	doctorHelp = `lewp doctor — diagnose daemon, DNS, and CA trust
