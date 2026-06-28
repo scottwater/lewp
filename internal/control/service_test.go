@@ -344,15 +344,21 @@ func TestServiceMoveRejectsDestinationWithActiveRoute(t *testing.T) {
 func TestDoctorReportsHTTPSState(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
-	checks := svc.Doctor()
-	found := false
+	checks := svc.Doctor(context.Background())
+	var https, registryOK bool
 	for _, check := range checks {
 		if strings.Contains(check, "https:") {
-			found = true
+			https = true
+		}
+		if check == "registry: readable" {
+			registryOK = true
 		}
 	}
-	if !found {
+	if !https {
 		t.Fatalf("doctor checks missing HTTPS state: %v", checks)
+	}
+	if !registryOK {
+		t.Fatalf("doctor checks missing registry readability: %v", checks)
 	}
 }
 

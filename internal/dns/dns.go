@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -83,6 +84,86 @@ func WriteResolverFile(path string, port int) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(ResolverFile(port)), 0o644)
+}
+
+// ResolverPort extracts the "port N" value from /etc/resolver/lewp content. It
+// reports ok=false when no port line is present, so doctor can distinguish a
+// malformed resolver file from one pointing at the wrong port.
+func ResolverPort(content string) (int, bool) {
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "port" {
+			n, ok := atoi(fields[1])
+			if ok {
+				return n, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// Lookup queries the .lewp DNS responder at server (host:port) for host's A
+// record and returns the first address. It is used by doctor to confirm the
+// daemon's DNS responder answers .lewp names with loopback.
+func Lookup(ctx context.Context, server, host string) (net.IP, error) {
+	fqdn := strings.TrimSuffix(strings.ToLower(host), ".") + "."
+	name, err := dnsmessage.NewName(fqdn)
+	if err != nil {
+		return nil, err
+	}
+	msg := dnsmessage.Message{
+		Header: dnsmessage.Header{RecursionDesired: true},
+		Questions: []dnsmessage.Question{{
+			Name:  name,
+			Type:  dnsmessage.TypeA,
+			Class: dnsmessage.ClassINET,
+		}},
+	}
+	packed, err := msg.Pack()
+	if err != nil {
+		return nil, err
+	}
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "udp", server)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if _, err := conn.Write(packed); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	var reply dnsmessage.Message
+	if err := reply.Unpack(buf[:n]); err != nil {
+		return nil, err
+	}
+	for _, ans := range reply.Answers {
+		if a, ok := ans.Body.(*dnsmessage.AResource); ok {
+			return net.IP(a.A[:]), nil
+		}
+	}
+	return nil, errors.New("no A record in response")
+}
+
+func atoi(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n, true
 }
 
 func isLewp(host string) bool {

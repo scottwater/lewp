@@ -2,11 +2,14 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/scottwater/lewp/internal/control"
 	"github.com/scottwater/lewp/internal/daemon"
@@ -37,6 +40,13 @@ type Config struct {
 	// start's launchctl print) where the output itself is the signal. Tests
 	// inject a fake to avoid touching the real system.
 	RunCommandOutput func(context.Context, []string) (string, error)
+	// DialAddr reports whether a TCP address accepts connections. doctor uses it
+	// to confirm the proxy is bound on loopback port 80; tests inject a fake.
+	DialAddr func(network, addr string) error
+	// LookupLewp queries a .lewp DNS responder (server is host:port) for host's
+	// A record. doctor uses it to confirm the daemon answers .lewp with
+	// loopback; tests inject a fake.
+	LookupLewp func(ctx context.Context, server, host string) (net.IP, error)
 }
 
 func Run(cfg Config) int {
@@ -75,6 +85,12 @@ func Run(cfg Config) int {
 	}
 	if cfg.RunCommandOutput == nil {
 		cfg.RunCommandOutput = runCommandOutput
+	}
+	if cfg.DialAddr == nil {
+		cfg.DialAddr = dialAddr
+	}
+	if cfg.LookupLewp == nil {
+		cfg.LookupLewp = dns.Lookup
 	}
 	if cfg.Version == "" {
 		cfg.Version = defaultVersion()
@@ -221,86 +237,14 @@ func runDaemon(cfg Config) int {
 	return 0
 }
 
-func runDoctor(cfg Config) int {
-	exit := 0
-	resp, err := call(cfg, control.Request{Command: "doctor"})
-	if err != nil {
-		fmt.Fprintln(cfg.Stdout, "daemon: not responding (run lewp system start)")
-		exit = 1
-	} else {
-		for _, check := range resp.Checks {
-			fmt.Fprintln(cfg.Stdout, check)
-		}
-	}
-	fmt.Fprintln(cfg.Stdout, keychainTrustLine(context.Background(), cfg.CAPath, cfg.RunCommand))
-	for _, line := range installedDaemonChecks(cfg) {
-		fmt.Fprintln(cfg.Stdout, line)
-	}
-	return exit
-}
-
-// installedDaemonChecks compares the binary and config launchd is set up to run
-// against the CLI invoking doctor right now, so the user can tell whether
-// bin/install / bin/reinstall actually updated what launchd launches.
-func installedDaemonChecks(cfg Config) []string {
-	var lines []string
-	lines = append(lines, "cli binary: "+cfg.ProgramPath)
-
-	if _, err := os.Stat(cfg.PlistPath); err != nil {
-		lines = append(lines, fmt.Sprintf("launchd plist: missing (%s) — run lewp setup", cfg.PlistPath))
-		return lines
-	}
-	lines = append(lines, "launchd plist: "+cfg.PlistPath)
-
-	installed, err := launchd.ReadProgram(cfg.PlistPath)
-	if err != nil {
-		lines = append(lines, fmt.Sprintf("installed program: unreadable (%v)", err))
-		return lines
-	}
-	lines = append(lines, "installed program: "+installed)
-
-	if _, err := os.Stat(installed); err != nil {
-		lines = append(lines, fmt.Sprintf("installed program: missing on disk (%s) — run bin/install", installed))
-	} else if installed != cfg.ProgramPath {
-		lines = append(lines, fmt.Sprintf("mismatch: launchd runs %s but this CLI is %s — run bin/reinstall and lewp system restart", installed, cfg.ProgramPath))
-	} else {
-		lines = append(lines, "installed program matches this CLI")
-	}
-
-	lines = append(lines, "current version: "+cfg.Version)
-	if out, err := cfg.RunCommandOutput(context.Background(), []string{installed, "version"}); err == nil {
-		installedVersion := firstVersionLine(out)
-		lines = append(lines, "installed version: "+installedVersion)
-		if cfg.Version != "" && cfg.Version != "dev" && !strings.Contains(installedVersion, cfg.Version) {
-			lines = append(lines, "version mismatch: installed daemon differs from this CLI — run bin/reinstall and lewp system restart")
-		}
-	} else {
-		lines = append(lines, fmt.Sprintf("installed version: unavailable (%v)", err))
-	}
-
-	lines = append(lines, "daemon log: "+cfg.LogDir+"/daemon.err.log")
-	return lines
-}
-
-// firstVersionLine pulls the version string out of `lewp version` output, whose
-// first line looks like "lewp version 1.2.3".
-func firstVersionLine(out string) string {
-	line := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
-	line = strings.TrimPrefix(line, "lewp version ")
-	if line == "" {
-		return "(empty)"
-	}
-	return line
-}
-
-func keychainTrustLine(ctx context.Context, certPath string, run func(context.Context, []string) error) string {
-	if err := run(ctx, localtls.TrustCheckCommand(certPath)); err != nil {
-		return "keychain: not trusted (run lewp setup)"
-	}
-	return "keychain: trusted"
-}
-
 func runSetup(cfg Config) int {
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	fs.SetOutput(cfg.Stderr)
+	start := fs.Bool("start", false, "")
+	if fs.Parse(cfg.Args[1:]) != nil {
+		return 2
+	}
+
 	fmt.Fprintf(cfg.Stdout, "# setup may prompt for your password (sudo) to install %s\n", cfg.ResolverPath)
 	fmt.Fprintln(cfg.Stdout, "# setup may prompt macOS to trust the local development CA in your keychain")
 	if err := ensureLewpOwnedOrMissing(cfg.PlistPath, launchd.DefaultLabel); err != nil {
@@ -311,6 +255,15 @@ func runSetup(cfg Config) int {
 	if err := ensureLewpOwnedOrMissing(cfg.ResolverPath, dns.ResolverFile(dns.DefaultPort)); err != nil {
 		fmt.Fprintf(cfg.Stderr, "refusing to overwrite resolver file: %v\n", err)
 		fmt.Fprintf(cfg.Stderr, "Next: inspect %s and remove it if it is not Lewp-owned, then re-run: lewp setup\n", cfg.ResolverPath)
+		return 1
+	}
+	// Create the local CA first. It is local and needs no sudo, so doing it
+	// before the sudo resolver write and the keychain prompt avoids leaving the
+	// system half-configured if CA generation fails after the user has already
+	// authenticated.
+	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, "Lewp Local Development CA"); err != nil {
+		fmt.Fprintf(cfg.Stderr, "create CA: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.CAPath)
 		return 1
 	}
 	if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
@@ -333,9 +286,11 @@ func runSetup(cfg Config) int {
 		fmt.Fprintln(cfg.Stderr, "Next: confirm you can run sudo (the failing command is shown above), then re-run: lewp setup")
 		return 1
 	}
-	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, "Lewp Local Development CA"); err != nil {
-		fmt.Fprintf(cfg.Stderr, "create CA: %v\n", err)
-		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.CAPath)
+	// Validate the resolver landed correctly: a wrong/garbled port silently
+	// breaks .lewp resolution, so confirm it before claiming setup succeeded.
+	if err := validateResolver(cfg.ResolverPath); err != nil {
+		fmt.Fprintf(cfg.Stderr, "verify resolver file: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: inspect %s, then re-run: lewp setup\n", cfg.ResolverPath)
 		return 1
 	}
 	trust := localtls.TrustCommand(cfg.CAPath)
@@ -351,7 +306,56 @@ func runSetup(cfg Config) int {
 	fmt.Fprintf(cfg.Stdout, "CA=%s\n", cfg.CAPath)
 	fmt.Fprintf(cfg.Stdout, "LOGS=%s\n", cfg.LogDir)
 	fmt.Fprintln(cfg.Stdout, strings.Join(trust, " "))
+
+	warnBinarySkew(cfg)
+
+	if *start {
+		fmt.Fprintln(cfg.Stdout, "# --start: bringing up the daemon")
+		if code := runSystemStart(cfg); code != 0 {
+			return code
+		}
+		fmt.Fprintln(cfg.Stdout, "Next: lewp doctor")
+		return 0
+	}
+	fmt.Fprintln(cfg.Stdout, "Next: lewp system start && lewp doctor")
 	return 0
+}
+
+// validateResolver re-reads the resolver file written during setup and confirms
+// it points at the .lewp responder port, so setup never claims success on a
+// malformed file.
+func validateResolver(path string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	port, ok := dns.ResolverPort(string(body))
+	if !ok {
+		return fmt.Errorf("%s has no port line", path)
+	}
+	if port != dns.DefaultPort {
+		return fmt.Errorf("%s points at port %d, expected %d", path, port, dns.DefaultPort)
+	}
+	return nil
+}
+
+// warnBinarySkew warns when the binary launchd will run (cfg.ProgramPath) is not
+// the one `lewp` resolves to on PATH, since the user could keep editing a binary
+// that the daemon never picks up.
+func warnBinarySkew(cfg Config) {
+	out, err := cfg.RunCommandOutput(context.Background(), []string{"command", "-v", "lewp"})
+	if err != nil {
+		out, err = cfg.RunCommandOutput(context.Background(), []string{"which", "lewp"})
+	}
+	if err != nil {
+		fmt.Fprintln(cfg.Stdout, "# note: 'lewp' is not on your PATH; add its install dir (e.g. ~/.local/bin) to PATH")
+		return
+	}
+	pathBinary := strings.TrimSpace(out)
+	if pathBinary != "" && pathBinary != cfg.ProgramPath {
+		fmt.Fprintf(cfg.Stdout, "# warning: PATH 'lewp' is %s but setup registered %s with launchd\n", pathBinary, cfg.ProgramPath)
+		fmt.Fprintln(cfg.Stdout, "# run bin/reinstall (or re-run setup from the intended binary) to align them")
+	}
 }
 
 func runSystem(cfg Config) int {
@@ -365,6 +369,7 @@ func runSystem(cfg Config) int {
 			return daemonError(cfg, err)
 		}
 		fmt.Fprintln(cfg.Stdout, "lewp daemon is running")
+		fmt.Fprintln(cfg.Stdout, "Run: lewp doctor for full diagnostics")
 		return 0
 	case "start":
 		return runSystemStart(cfg)
@@ -406,6 +411,13 @@ func runSystem(cfg Config) int {
 }
 
 func runSystemStart(cfg Config) int {
+	// Preflight: launchctl bootstrap of a missing plist fails with an opaque
+	// error. If setup has not installed the plist, say so directly.
+	if _, err := os.Stat(cfg.PlistPath); err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp is not set up yet: launchd plist is missing (%s)\n", cfg.PlistPath)
+		fmt.Fprintln(cfg.Stderr, "Run: lewp setup first, then: lewp system start")
+		return 1
+	}
 	plan, err := launchd.Plan("start", launchd.Config{Label: launchd.DefaultLabel, PlistPath: cfg.PlistPath})
 	if err != nil {
 		fmt.Fprintln(cfg.Stderr, err)
@@ -523,6 +535,16 @@ func runCommand(ctx context.Context, argv []string) error {
 		return fmt.Errorf("%s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// dialAddr reports whether addr accepts a TCP connection within a short
+// timeout. doctor uses it for the loopback proxy-bind check.
+func dialAddr(network, addr string) error {
+	conn, err := net.DialTimeout(network, addr, time.Second)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func runCommandOutput(ctx context.Context, argv []string) (string, error) {

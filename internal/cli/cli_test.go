@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -38,7 +39,7 @@ func TestRunSystemStartPrintsLaunchdPlan(t *testing.T) {
 	code := Run(Config{
 		Args:      []string{"system", "start"},
 		WorkDir:   t.TempDir(),
-		PlistPath: t.TempDir() + "/dev.lewp.daemon.plist",
+		PlistPath: writeTempPlist(t),
 		Stdout:    &stdout,
 		Stderr:    &stderr,
 		RunCommand: func(_ context.Context, argv []string) error {
@@ -64,7 +65,7 @@ func TestRunSystemStartKickstartsLoadedJob(t *testing.T) {
 	code := Run(Config{
 		Args:      []string{"system", "start"},
 		WorkDir:   t.TempDir(),
-		PlistPath: t.TempDir() + "/dev.lewp.daemon.plist",
+		PlistPath: writeTempPlist(t),
 		Stdout:    &stdout,
 		Stderr:    &stderr,
 		RunCommand: func(_ context.Context, argv []string) error {
@@ -89,10 +90,14 @@ func TestRunSystemStartKickstartsLoadedJob(t *testing.T) {
 func TestRunSystemStartHardFailureShowsDiagnostics(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	code := Run(Config{
 		Args:      []string{"system", "start"},
 		WorkDir:   t.TempDir(),
-		PlistPath: dir + "/dev.lewp.daemon.plist",
+		PlistPath: plistPath,
 		LogDir:    dir + "/Logs/lewp",
 		Stdout:    &stdout,
 		Stderr:    &stderr,
@@ -122,7 +127,29 @@ func TestRunSystemStartHardFailureShowsDiagnostics(t *testing.T) {
 	}
 }
 
-func TestInstalledDaemonChecksDetectsMismatch(t *testing.T) {
+// writeTempPlist creates a minimal Lewp-owned plist so `system start` clears its
+// missing-setup preflight in tests that only care about the launchctl plan.
+func writeTempPlist(t *testing.T) string {
+	t.Helper()
+	path := t.TempDir() + "/dev.lewp.daemon.plist"
+	if err := os.WriteFile(path, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func findCheck(t *testing.T, checks []doctorCheck, name string) doctorCheck {
+	t.Helper()
+	for _, c := range checks {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no %q check in %+v", name, checks)
+	return doctorCheck{}
+}
+
+func TestInstalledBinaryChecksDetectsMismatch(t *testing.T) {
 	dir := t.TempDir()
 	installed := dir + "/installed-lewp"
 	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -132,7 +159,7 @@ func TestInstalledDaemonChecksDetectsMismatch(t *testing.T) {
 	if err := launchd.WritePlist(plistPath, launchd.Config{Label: "dev.lewp.daemon", Program: installed}); err != nil {
 		t.Fatal(err)
 	}
-	lines := installedDaemonChecks(Config{
+	checks := installedBinaryChecks(Config{
 		ProgramPath: dir + "/current-lewp",
 		PlistPath:   plistPath,
 		LogDir:      dir + "/Logs",
@@ -141,19 +168,21 @@ func TestInstalledDaemonChecksDetectsMismatch(t *testing.T) {
 			return "lewp version 0.9.0\n", nil
 		},
 	})
-	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "mismatch: launchd runs "+installed) {
-		t.Fatalf("missing binary mismatch:\n%s", joined)
+	prog := findCheck(t, checks, "installed program")
+	if prog.Status != statusWarn || !strings.Contains(prog.Detail, "launchd runs "+installed) {
+		t.Fatalf("missing binary mismatch: %+v", prog)
 	}
-	if !strings.Contains(joined, "installed version: 0.9.0") || !strings.Contains(joined, "version mismatch") {
-		t.Fatalf("missing version mismatch:\n%s", joined)
+	ver := findCheck(t, checks, "installed version")
+	if ver.Status != statusWarn || !strings.Contains(ver.Detail, "0.9.0") {
+		t.Fatalf("missing version mismatch: %+v", ver)
 	}
-	if !strings.Contains(joined, "daemon log: "+dir+"/Logs/daemon.err.log") {
-		t.Fatalf("missing daemon log path:\n%s", joined)
+	log := findCheck(t, checks, "daemon log")
+	if !strings.Contains(log.Detail, dir+"/Logs/daemon.err.log") {
+		t.Fatalf("missing daemon log path: %+v", log)
 	}
 }
 
-func TestInstalledDaemonChecksMatches(t *testing.T) {
+func TestInstalledBinaryChecksMatches(t *testing.T) {
 	dir := t.TempDir()
 	installed := dir + "/lewp"
 	if err := os.WriteFile(installed, []byte("#!/bin/sh\n"), 0o755); err != nil {
@@ -163,7 +192,7 @@ func TestInstalledDaemonChecksMatches(t *testing.T) {
 	if err := launchd.WritePlist(plistPath, launchd.Config{Label: "dev.lewp.daemon", Program: installed}); err != nil {
 		t.Fatal(err)
 	}
-	lines := installedDaemonChecks(Config{
+	checks := installedBinaryChecks(Config{
 		ProgramPath: installed,
 		PlistPath:   plistPath,
 		LogDir:      dir + "/Logs",
@@ -172,25 +201,51 @@ func TestInstalledDaemonChecksMatches(t *testing.T) {
 			return "lewp version 1.2.3\n", nil
 		},
 	})
-	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "installed program matches this CLI") {
-		t.Fatalf("expected match line:\n%s", joined)
+	prog := findCheck(t, checks, "installed program")
+	if prog.Status != statusOK || !strings.Contains(prog.Detail, "matches this CLI") {
+		t.Fatalf("expected match: %+v", prog)
 	}
-	if strings.Contains(joined, "version mismatch") || strings.Contains(joined, "mismatch: launchd") {
-		t.Fatalf("unexpected mismatch reported:\n%s", joined)
+	ver := findCheck(t, checks, "installed version")
+	if ver.Status != statusOK {
+		t.Fatalf("unexpected version mismatch: %+v", ver)
 	}
 }
 
-func TestInstalledDaemonChecksMissingPlist(t *testing.T) {
+func TestInstalledBinaryChecksMissingPlist(t *testing.T) {
 	dir := t.TempDir()
-	lines := installedDaemonChecks(Config{
+	checks := installedBinaryChecks(Config{
 		ProgramPath:      dir + "/lewp",
 		PlistPath:        dir + "/nope.plist",
 		LogDir:           dir + "/Logs",
 		RunCommandOutput: func(_ context.Context, _ []string) (string, error) { return "", nil },
 	})
-	if !strings.Contains(strings.Join(lines, "\n"), "launchd plist: missing") {
-		t.Fatalf("expected missing-plist line:\n%s", strings.Join(lines, "\n"))
+	// With no plist, installedBinaryChecks only reports the running CLI binary;
+	// the missing plist itself is reported by setupArtifactChecks.
+	if len(checks) != 1 || checks[0].Name != "cli binary" {
+		t.Fatalf("expected only cli binary check, got %+v", checks)
+	}
+}
+
+func TestDoctorKeychainCheckReflectsTrust(t *testing.T) {
+	dir := t.TempDir()
+	base := Config{CAPath: dir + "/ca.pem", CAKeyPath: dir + "/ca-key.pem", PlistPath: dir + "/none.plist"}
+
+	var ran []string
+	trusted := base
+	trusted.RunCommand = func(_ context.Context, argv []string) error { ran = argv; return nil }
+	kc := findCheck(t, setupArtifactChecks(trusted), "keychain trust")
+	if kc.Status != statusOK {
+		t.Fatalf("expected trusted keychain: %+v", kc)
+	}
+	if !strings.Contains(strings.Join(ran, " "), "security verify-cert -c "+dir+"/ca.pem -p ssl") {
+		t.Fatalf("trust check did not run security command: %v", ran)
+	}
+
+	untrusted := base
+	untrusted.RunCommand = func(_ context.Context, _ []string) error { return errors.New("not trusted") }
+	kc = findCheck(t, setupArtifactChecks(untrusted), "keychain trust")
+	if kc.Status != statusWarn || kc.Run != "lewp setup" {
+		t.Fatalf("expected untrusted keychain warn: %+v", kc)
 	}
 }
 
@@ -206,14 +261,18 @@ func TestRunDoctorPrintsInstalledChecksWhenDaemonDown(t *testing.T) {
 	}
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:        []string{"doctor"},
-		SocketPath:  dir + "/missing.sock",
-		ProgramPath: installed,
-		PlistPath:   plistPath,
-		LogDir:      dir + "/Logs",
-		Version:     "1.2.3",
-		Stdout:      &stdout,
-		Stderr:      &stderr,
+		Args:         []string{"doctor"},
+		WorkDir:      dir,
+		SocketPath:   dir + "/missing.sock",
+		ProgramPath:  installed,
+		PlistPath:    plistPath,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		LogDir:       dir + "/Logs",
+		Version:      "1.2.3",
+		Stdout:       &stdout,
+		Stderr:       &stderr,
 		RunCommand: func(context.Context, []string) error {
 			return errors.New("not trusted")
 		},
@@ -230,13 +289,51 @@ func TestRunDoctorPrintsInstalledChecksWhenDaemonDown(t *testing.T) {
 	got := stdout.String()
 	for _, want := range []string{
 		"daemon: not responding",
-		"installed program matches this CLI",
+		"installed program: matches this CLI",
 		"installed version: 1.2.3",
 		"daemon log: " + dir + "/Logs/daemon.err.log",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestRunDoctorJSONEmitsCheckArray(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:         []string{"doctor", "--json"},
+		WorkDir:      dir,
+		SocketPath:   dir + "/missing.sock",
+		ProgramPath:  dir + "/lewp",
+		PlistPath:    dir + "/nope.plist",
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		LogDir:       dir + "/Logs",
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand:   func(context.Context, []string) error { return errors.New("not trusted") },
+	})
+	if code != 1 {
+		t.Fatalf("code=%d (expected fail from missing setup)", code)
+	}
+	var parsed struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("doctor --json not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if parsed.OK {
+		t.Fatalf("expected ok=false with missing setup: %s", stdout.String())
+	}
+	if len(parsed.Checks) == 0 {
+		t.Fatalf("expected checks in JSON: %s", stdout.String())
 	}
 }
 
@@ -503,26 +600,5 @@ func TestRunSetupTrustFailureShowsExactCommandAndNextStep(t *testing.T) {
 	got := stderr.String()
 	if !strings.Contains(got, "trust CA:") || !strings.Contains(got, "Next: trust the CA manually") || !strings.Contains(got, "security add-trusted-cert") {
 		t.Fatalf("trust failure missing exact command/next step: %q", got)
-	}
-}
-
-func TestKeychainTrustLineChecksSecurity(t *testing.T) {
-	var ran []string
-	got := keychainTrustLine(context.Background(), "/tmp/lewp-ca.pem", func(_ context.Context, argv []string) error {
-		ran = argv
-		return nil
-	})
-	if got != "keychain: trusted" {
-		t.Fatalf("line=%q", got)
-	}
-	if !strings.Contains(strings.Join(ran, " "), "security verify-cert -c /tmp/lewp-ca.pem -p ssl") {
-		t.Fatalf("trust check did not run security command: %v", ran)
-	}
-
-	got = keychainTrustLine(context.Background(), "/tmp/lewp-ca.pem", func(_ context.Context, _ []string) error {
-		return errors.New("not trusted")
-	})
-	if got != "keychain: not trusted (run lewp setup)" {
-		t.Fatalf("line=%q", got)
 	}
 }
