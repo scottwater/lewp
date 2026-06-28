@@ -77,6 +77,44 @@ func TestServeRoutesHTTPSWithSNI(t *testing.T) {
 	}
 }
 
+func TestServeCleanShutdownReturnsNil(t *testing.T) {
+	registryPath := t.TempDir() + "/registry.sqlite"
+	httpLn := listenLocal(t)
+	httpsLn := listenLocal(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, Config{
+			RegistryPath:   registryPath,
+			HTTPListeners:  []net.Listener{httpLn},
+			HTTPSListeners: []net.Listener{httpsLn},
+		})
+	}()
+
+	// Wait until the proxy is actually accepting connections before shutting down,
+	// so the listeners are closed by ctx cancellation rather than never opened.
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		c, err := net.Dial("tcp", httpLn.Addr().String())
+		if err == nil {
+			_ = c.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("clean shutdown returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after ctx cancellation")
+	}
+}
+
 func listenLocal(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

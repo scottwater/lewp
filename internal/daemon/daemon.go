@@ -49,11 +49,17 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 
 	var wg sync.WaitGroup
+	var servers []*http.Server
 	errs := make(chan error, len(cfg.HTTPListeners)+len(cfg.HTTPSListeners))
 	serve := func(server *http.Server, ln net.Listener) {
+		servers = append(servers, server)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// server.Serve returns http.ErrServerClosed when the server is
+			// closed via server.Close below; that is a clean shutdown, not a
+			// failure. Closing the listener directly would instead surface
+			// net.ErrClosed, so we always close through the server.
 			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				errs <- err
 			}
@@ -65,20 +71,22 @@ func Serve(ctx context.Context, cfg Config) error {
 	for _, ln := range cfg.HTTPSListeners {
 		serve(&http.Server{Handler: handler, TLSConfig: tlsConfig}, gotls.NewListener(ln, tlsConfig))
 	}
-	go func() {
-		<-ctx.Done()
-		for _, ln := range append(cfg.HTTPListeners, cfg.HTTPSListeners...) {
-			_ = ln.Close()
-		}
-	}()
-	if len(cfg.HTTPListeners)+len(cfg.HTTPSListeners) == 0 {
+	if len(servers) == 0 {
 		<-ctx.Done()
 		return nil
 	}
+	go func() {
+		<-ctx.Done()
+		for _, server := range servers {
+			_ = server.Close()
+		}
+	}()
 	select {
 	case err := <-errs:
 		return err
 	case <-ctx.Done():
+		// Wait for the server goroutines to finish their clean shutdown so we
+		// never return while listeners are still being torn down.
 		wg.Wait()
 		return nil
 	}
