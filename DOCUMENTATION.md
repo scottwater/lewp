@@ -28,7 +28,6 @@ install.
 lewp setup
 lewp system start|stop|status|restart|uninstall
 lewp add [--root R] [--name N] [--host H] [--json|--shell]
-lewp lease [--root R] [--name N] [--host H] [--json|--shell]   # alias for add
 lewp info [--json]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
@@ -115,8 +114,7 @@ lewp daemon is running
 ## `lewp add`
 
 Register a routed app port and a `.lewp` hostname for the current directory.
-This is the primary command for creating a route. `lewp lease` is a backward-
-compatible alias and behaves identically.
+This is the command for creating a route.
 
 ```sh
 lewp add
@@ -385,7 +383,7 @@ common failure modes:
   start command, and `lewp list` / `lewp doctor` hints.
 - **Unregistered `.lewp` host** — when a `.lewp` name has no route, the proxy
   returns `404` with the parsed instance/root labels and next steps
-  (`lewp lease`, `lewp list`, `lewp doctor`). Non-`.lewp` hosts get a plain
+  (`lewp add`, `lewp list`, `lewp doctor`). Non-`.lewp` hosts get a plain
   `404`. The host is HTML-escaped so a crafted hostname cannot inject markup.
 
 ## Browser URLs

@@ -97,8 +97,8 @@ V1 should also leave room for explicit custom `.lewp` hosts, as long as they rem
 and inside the owned suffix:
 
 ```sh
-lewp lease --host audit.lewp
-lewp lease --host sso.audit.lewp
+lewp add --host audit.lewp
+lewp add --host sso.audit.lewp
 ```
 
 `--host` is an override for the final registered hostname. It must be normalized/validated as a
@@ -141,7 +141,7 @@ released, forgotten, normalized-name-changed) — **but no per-request rows**.
 
 Default routed-app port range: `41000-49999`. Allocate by scanning for a free loopback port in that
 range, then persist the assignment so the same remembered identity reuses it. Never silently steal a
-live assignment. Requested routed-app ports (`lewp lease --port`) are **out of V1**; add later only if
+live assignment. Requested routed-app ports (`lewp add --port`) are **out of V1**; add later only if
 the default range proves insufficient. `lewp port --name ...` uses the same registry-backed allocator
 for bare internal ports.
 
@@ -150,14 +150,14 @@ for bare internal ports.
 ```
 lewp setup                                   # resolver file, CA+trust, launchd install, port-bind check
 lewp system start|stop|status|restart|uninstall
-lewp lease [--root R] [--name N] [--host H] [--json|--shell] # routed port + hostname
+lewp add [--root R] [--name N] [--host H] [--json|--shell] # routed port + hostname
 lewp port [--name vite] [--json|--shell]            # NEW: bare internal port, no hostname
 lewp release [--forget]
 lewp list [--all]                            # registry-backed; TCP up/down; no HTTP app probes
 lewp doctor
 ```
 
-`lease` default output: `PORT=`, `URL=http://...`, `HOST=...` env lines + inferred-from notes.
+`add` default output: `PORT=`, `URL=http://...`, `HOST=...` env lines + inferred-from notes.
 `--shell` → `export`; `--json` → full machine fields incl. inference metadata + warnings.
 
 If the daemon is not running, CLI commands fail with a direct fix, not an implicit background start:
@@ -176,7 +176,7 @@ name = "feature-1"
 host = "audit.lewp" # optional full-host override
 ```
 
-The file is local/uncommitted by convention. `lewp init` is out of V1; `lease` must work without it
+The file is local/uncommitted by convention. `lewp init` is out of V1; `add` must work without it
 through flags, env vars, or inference.
 
 ## Status, doctor, and error output
@@ -210,16 +210,16 @@ conflicts. Output should be concrete and command-oriented.
    `FlushInterval=-1`, debug-first HTML error page when target port is closed.
 4. **launchd + privileged bind:** plist generation (127.0.0.1 sockets), cgo socket-activation handoff,
    `system start/stop/status`, port-80 bind check in `doctor`.
-5. **`lease` / `port` / `release` end-to-end** over the control socket; conflict suffixes; `list`/`doctor`.
+5. **`add` / `port` / `release` end-to-end** over the control socket; conflict suffixes; `list`/`doctor`.
 6. **HTTPS:** stdlib CA, SNI leaf minting + cache, keychain trust in `setup`, clean uninstall. Output must
    state plainly whether HTTPS is enabled.
 
 ## Verification (end-to-end)
 
-- From `~/projects/audit/feature-1`: `lewp lease` returns stable `PORT`/`URL`/`HOST`; re-running is
+- From `~/projects/audit/feature-1`: `lewp add` returns stable `PORT`/`URL`/`HOST`; re-running is
   idempotent.
 - `feature-1.audit.lewp` resolves to loopback after `lewp setup`.
-- `lewp lease --host audit.lewp` returns a stable project apex host; `https://audit.lewp` resolves,
+- `lewp add --host audit.lewp` returns a stable project apex host; `https://audit.lewp` resolves,
   routes, preserves Host, and conflicts deterministically.
 - Start a throwaway server on the leased port → `http://feature-1.audit.lewp` proxies to it; closed port
   shows the debug page, not a blank 502.

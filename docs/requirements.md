@@ -41,7 +41,7 @@ From a project instance directory:
 
 ```sh
 cd ~/projects/audit/feature-1
-lewp lease
+lewp add
 ```
 
 Default output:
@@ -103,7 +103,7 @@ explicit project apex hosts:
 Example:
 
 ```sh
-lewp lease --host audit.lewp
+lewp add --host audit.lewp
 ```
 
 This registers `audit.lewp` for the current folder. Custom hosts must stay
@@ -161,7 +161,7 @@ scott/feature/JIRA-123 Add SSO callback!
 -> jira-123-add-sso-callback
 ```
 
-If normalization would produce an unusable name, `lewp lease` must fail with
+If normalization would produce an unusable name, `lewp add` must fail with
 a clear error and ask for `--name`.
 
 ## CLI Overrides
@@ -169,8 +169,8 @@ a clear error and ask for `--name`.
 Users can override inferred values:
 
 ```sh
-lewp lease --root audit --name sso-callback
-lewp lease --host audit.lewp
+lewp add --root audit --name sso-callback
+lewp add --host audit.lewp
 ```
 
 Overrides become the remembered identity for that folder until explicitly
@@ -240,14 +240,14 @@ Requirements:
 - HTTP requests through the proxy update `last_seen_at` on a throttled,
   best-effort basis
 - V1 has no automatic lease expiry sweeper
-- a later `lewp lease` from the same folder reuses the same host and port while
+- a later `lewp add` from the same folder reuses the same host and port while
   the identity remains remembered
 - `lewp release` releases the current folder route
 - `lewp release --forget` removes remembered identity/history for that
   folder
 
 The user should not need to keep running the CLI during normal development. They
-run `lewp lease` when creating or returning to a branch/worktree, then use
+run `lewp add` when creating or returning to a branch/worktree, then use
 the URL while building.
 
 ## Daemon Architecture
@@ -393,14 +393,14 @@ Core commands:
 ```sh
 lewp setup
 lewp system start|stop|status|restart|uninstall
-lewp lease [--root audit] [--name feature-1] [--host audit.lewp] [--json] [--shell]
+lewp add [--root audit] [--name feature-1] [--host audit.lewp] [--json] [--shell]
 lewp port [--name vite] [--json] [--shell]
 lewp release [--forget]
 lewp list [--all]
 lewp doctor
 ```
 
-`lewp lease` defaults to simple env-style lines:
+`lewp add` defaults to simple env-style lines:
 
 ```sh
 PORT=42137
@@ -441,7 +441,7 @@ host = "audit.lewp" # optional full-host override
 ```
 
 This file is intended to be local/uncommitted and easy to ignore. `lewp init`
-may be added later to create it, but `lease` must work without it through flags,
+may be added later to create it, but `add` must work without it through flags,
 env vars, or inference.
 
 ## Registry Storage
@@ -496,10 +496,10 @@ Doctor output should be concrete and command-oriented.
 
 V1 is acceptable when:
 
-- `lewp lease` from `~/projects/audit/feature-1` returns stable `PORT`,
+- `lewp add` from `~/projects/audit/feature-1` returns stable `PORT`,
   `URL`, and `HOST`
 - `feature-1.audit.lewp` resolves locally after setup
-- `lewp lease --host audit.lewp` registers a stable project apex host
+- `lewp add --host audit.lewp` registers a stable project apex host
 - `lewp port --name vite` returns a stable bare internal port without a hostname
 - proxy routes to `127.0.0.1:<PORT>`
 - closed ports show a useful debug page, not a blank 502

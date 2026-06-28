@@ -32,7 +32,6 @@ Commands:
   logs       Show or tail the daemon logs
   version    Print version and build metadata
   daemon     Run the daemon in the foreground (normally launchd-managed)
-  lease      Alias for add (kept for backward compatibility)
 
 Examples:
   lewp setup && lewp system start
@@ -93,28 +92,6 @@ Examples:
   lewp add
   lewp add --root audit --name feature-1
   eval "$(lewp add --shell)"
-`
-
-	leaseHelp = `lewp lease — alias for "lewp add" (kept for backward compatibility)
-
-"lease" behaves exactly like "add"; prefer "lewp add" in new scripts and docs.
-Re-running from the same directory returns the same port and host. Root and name
-are inferred from the directory layout unless overridden.
-
-Usage:
-  lewp lease [--root <root>] [--name <name>] [--host <host>] [--json] [--shell]
-
-Flags:
-  --root <root>   Override the inferred root segment of the hostname
-  --name <name>   Override the inferred instance segment of the hostname
-  --host <host>   Register an explicit apex host (e.g. audit.lewp)
-  --json          Emit the route as a JSON object
-  --shell         Emit shell "export" lines for use with eval
-
-Examples:
-  lewp lease
-  lewp lease --root audit --name feature-1
-  eval "$(lewp lease --shell)"
 `
 
 	infoHelp = `lewp info — show the route registered for the current directory

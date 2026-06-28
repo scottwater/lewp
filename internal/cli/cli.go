@@ -110,13 +110,7 @@ func Run(cfg Config) int {
 			fmt.Fprint(cfg.Stdout, addHelp)
 			return 0
 		}
-		return runLease(cfg, "add")
-	case "lease":
-		if helpRequested(cfg.Args[1:]) {
-			fmt.Fprint(cfg.Stdout, leaseHelp)
-			return 0
-		}
-		return runLease(cfg, "lease")
+		return runAdd(cfg)
 	case "info":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, infoHelp)

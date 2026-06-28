@@ -11,17 +11,17 @@ import (
 	"github.com/scottwater/lewp/internal/launchd"
 )
 
-func TestRunLeaseReportsDaemonNotRunning(t *testing.T) {
+func TestRunAddReportsDaemonNotRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:       []string{"lease"},
+		Args:       []string{"add"},
 		WorkDir:    t.TempDir(),
 		SocketPath: t.TempDir() + "/missing.sock",
 		Stdout:     &stdout,
 		Stderr:     &stderr,
 	})
 	if code == 0 {
-		t.Fatal("lease succeeded without daemon")
+		t.Fatal("add succeeded without daemon")
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout=%q", stdout.String())
@@ -343,10 +343,13 @@ func TestRunHelpVariantsPrintToStdout(t *testing.T) {
 			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr.String())
 		}
 		got := stdout.String()
-		for _, want := range []string{"Usage:", "lease", "setup", "version", "command-specific help"} {
+		for _, want := range []string{"Usage:", "add", "setup", "version", "command-specific help"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("%v help missing %q:\n%s", args, want, got)
 			}
+		}
+		if strings.Contains(got, "\n  lease") || strings.Contains(got, "lewp lease") || strings.Contains(got, "Alias for add") {
+			t.Fatalf("%v help should not mention removed lease command:\n%s", args, got)
 		}
 		if stderr.Len() != 0 {
 			t.Fatalf("%v wrote to stderr: %q", args, stderr.String())
@@ -383,9 +386,24 @@ func TestRunUnknownCommandReturns2WithHelp(t *testing.T) {
 	}
 }
 
+func TestRunLeaseCommandIsRemoved(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"lease"}, Stdout: &stdout, Stderr: &stderr})
+	if code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "unknown command \"lease\"") || !strings.Contains(got, "lewp add") {
+		t.Fatalf("stderr missing removed-command guidance: %q", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
 func TestRunCommandHelpPrintsCommandHelp(t *testing.T) {
 	cases := map[string]string{
-		"lease":   "--shell",
+		"add":     "--shell",
 		"port":    "--name",
 		"release": "--forget",
 		"list":    "--all",

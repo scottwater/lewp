@@ -75,8 +75,6 @@ URL=http://feature-1.audit.lewp
 HOST=feature-1.audit.lewp
 ```
 
-(`lewp lease` is a backward-compatible alias for `lewp add`.)
-
 Start your app yourself on the leased port:
 
 ```sh

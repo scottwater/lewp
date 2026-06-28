@@ -10,8 +10,8 @@ import (
 	"github.com/scottwater/lewp/internal/control"
 )
 
-func runLease(cfg Config, commandName string) int {
-	fs := flag.NewFlagSet(commandName, flag.ContinueOnError)
+func runAdd(cfg Config) int {
+	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	root := fs.String("root", "", "")
 	name := fs.String("name", "", "")
@@ -21,7 +21,7 @@ func runLease(cfg Config, commandName string) int {
 	if fs.Parse(cfg.Args[1:]) != nil {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "lease", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host}})
+	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}

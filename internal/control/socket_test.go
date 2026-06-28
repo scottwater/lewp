@@ -24,7 +24,7 @@ func TestServeConnRecoversFromHandlerPanic(t *testing.T) {
 		})
 	}()
 
-	go func() { _ = json.NewEncoder(client).Encode(Request{Command: "lease"}) }()
+	go func() { _ = json.NewEncoder(client).Encode(Request{Command: "add"}) }()
 
 	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var resp Response
@@ -42,7 +42,7 @@ func TestServeConnRecoversFromHandlerPanic(t *testing.T) {
 	}
 }
 
-func TestSocketCallLeaseUsesTempSocketAndRegistry(t *testing.T) {
+func TestSocketCallAddUsesTempSocketAndRegistry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	socketDir, err := os.MkdirTemp("/tmp", fmt.Sprintf("lewp-%d-", time.Now().UnixNano()))
@@ -60,7 +60,7 @@ func TestSocketCallLeaseUsesTempSocketAndRegistry(t *testing.T) {
 	waitForSocket(t, socketPath, errs)
 
 	resp, err := Call(ctx, socketPath, Request{
-		Command: "lease",
+		Command: "add",
 		Lease: LeaseRequest{
 			WorkDir: t.TempDir(),
 			Root:    "audit",
@@ -71,7 +71,7 @@ func TestSocketCallLeaseUsesTempSocketAndRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp.Lease == nil || resp.Lease.Host != "feature-1.audit.lewp" {
-		t.Fatalf("bad socket lease response: %+v", resp)
+		t.Fatalf("bad socket add response: %+v", resp)
 	}
 
 	cancel()

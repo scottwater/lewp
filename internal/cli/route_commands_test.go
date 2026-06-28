@@ -138,7 +138,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("info empty message missing guidance: %q", stderr.String())
 	}
 
-	// add (the lease alias) registers a route.
+	// add registers a route.
 	stdout.Reset()
 	stderr.Reset()
 	code = Run(Config{Args: []string{"add", "--root", "audit", "--name", "feature-1"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})

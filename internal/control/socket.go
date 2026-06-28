@@ -126,7 +126,7 @@ func serveConn(conn net.Conn, dispatch func(context.Context, Request) (Response,
 
 func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) {
 	switch req.Command {
-	case "lease":
+	case "add":
 		lease, err := svc.Lease(ctx, req.Lease)
 		return Response{Lease: &lease}, err
 	case "port":
