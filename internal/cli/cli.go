@@ -245,7 +245,7 @@ func runDaemon(cfg Config) int {
 	httpsListeners = append(httpsListeners, https6Listeners...)
 	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
 	if err != nil {
-		fmt.Fprintf(cfg.Stderr, "load suffix config: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "read suffix config: %v\n", err)
 		return 1
 	}
 	managedSuffixes := suffix.Managed(suffixCfg.Suffixes)
@@ -253,18 +253,19 @@ func runDaemon(cfg Config) int {
 	defer cancel()
 	errs := make(chan error, 3)
 	go func() {
-		errs <- control.Serve(ctx, cfg.SocketPath, control.DefaultRegistryPath(), registry.PortRange{Start: 41000, End: 49999})
+		errs <- control.ServeWithSuffixes(ctx, cfg.SocketPath, control.DefaultRegistryPath(), registry.PortRange{Start: 41000, End: 49999}, managedSuffixes)
 	}()
 	go func() {
 		errs <- dns.ServeWithSuffixes(ctx, fmt.Sprintf("127.0.0.1:%d", dns.DefaultPort), managedSuffixes)
 	}()
 	go func() {
 		errs <- daemon.Serve(ctx, daemon.Config{
-			RegistryPath:   control.DefaultRegistryPath(),
-			HTTPListeners:  httpListeners,
-			HTTPSListeners: httpsListeners,
-			CAPath:         cfg.CAPath,
-			CAKeyPath:      cfg.CAKeyPath,
+			RegistryPath:    control.DefaultRegistryPath(),
+			HTTPListeners:   httpListeners,
+			HTTPSListeners:  httpsListeners,
+			ManagedSuffixes: managedSuffixes,
+			CAPath:          cfg.CAPath,
+			CAKeyPath:       cfg.CAKeyPath,
 		})
 	}()
 	err = <-errs

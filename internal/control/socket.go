@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/scottwater/lewp/internal/registry"
+	"github.com/scottwater/lewp/internal/suffix"
 )
 
 type Request struct {
@@ -31,6 +32,10 @@ type Response struct {
 }
 
 func Serve(ctx context.Context, socketPath, registryPath string, portRange registry.PortRange) error {
+	return ServeWithSuffixes(ctx, socketPath, registryPath, portRange, []string{suffix.BuiltIn})
+}
+
+func ServeWithSuffixes(ctx context.Context, socketPath, registryPath string, portRange registry.PortRange, managedSuffixes []string) error {
 	if err := os.MkdirAll(dir(socketPath), 0o700); err != nil {
 		return err
 	}
@@ -60,6 +65,7 @@ func Serve(ctx context.Context, socketPath, registryPath string, portRange regis
 	}
 	defer store.Close()
 	svc := NewService(store, portRange)
+	svc.SetManagedSuffixes(managedSuffixes)
 	go func() {
 		<-ctx.Done()
 		_ = ln.Close()

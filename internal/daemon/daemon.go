@@ -18,12 +18,13 @@ import (
 )
 
 type Config struct {
-	RegistryPath   string
-	HTTPListeners  []net.Listener
-	HTTPSListeners []net.Listener
-	TLSConfig      *gotls.Config
-	CAPath         string
-	CAKeyPath      string
+	RegistryPath    string
+	HTTPListeners   []net.Listener
+	HTTPSListeners  []net.Listener
+	ManagedSuffixes []string
+	TLSConfig       *gotls.Config
+	CAPath          string
+	CAKeyPath       string
 	// RequestLog receives one line per proxied request. When nil it defaults to
 	// os.Stdout, which launchd routes to the daemon's StandardOutPath log file.
 	RequestLog io.Writer
