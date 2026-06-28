@@ -36,7 +36,8 @@ lewp port release [--name N] [--forget]
 lewp release [--all] [--forget]
 lewp list [--all] [--json]
 lewp doctor
-lewp logs [--lines N] [--follow] [--path]
+lewp logs [--lines N] [--grep TEXT] [--follow] [--path]
+lewp completion bash|zsh|fish
 lewp version
 lewp daemon
 ```
@@ -98,6 +99,19 @@ and print it. If `start` sees launchd bootstrap status 5 because the job is
 already loaded, it falls back to `launchctl kickstart -k`. `uninstall` also
 removes the Lewp CA trust from the login keychain, LaunchAgent plist, and
 resolver file.
+
+Because `uninstall` is destructive, it first prints an affected-file summary —
+the launchd job to boot out, the keychain trust to remove, the resolver file to
+remove (which may prompt for sudo), and the CA material it keeps — before doing
+any of the work, so the full scope is visible up front:
+
+```text
+uninstall will affect:
+  launchd: bootout dev.lewp.daemon and remove ~/Library/LaunchAgents/dev.lewp.daemon.plist
+  keychain: remove trust for "Lewp Local Development CA"
+  resolver: remove /etc/resolver/lewp (may prompt for sudo)
+  kept: ~/Library/Application Support/lewp/ca.pem (CA material; a later lewp setup reuses it)
+```
 
 When `start` (or the kickstart fallback) fails for any other reason, it prints
 the exact launchctl command that failed, the underlying error, where to find the
@@ -465,6 +479,21 @@ then bounds the matching lines, so `--grep TEXT --lines N` behaves like
 
 `lewp logs` only reads files; it never starts the daemon. When no logs exist
 yet, it prints where they will appear after `lewp setup && lewp system start`.
+
+## `lewp completion`
+
+Print a static shell completion script to stdout for `bash`, `zsh`, or `fish`.
+The script is self-contained and never contacts the daemon; it completes the
+top-level commands plus the `system` actions and `completion`/`port` shells and
+subcommands.
+
+```sh
+lewp completion bash > /usr/local/etc/bash_completion.d/lewp
+lewp completion zsh  > "${fpath[1]}/_lewp"   # then restart zsh
+lewp completion fish > ~/.config/fish/completions/lewp.fish
+```
+
+A missing or unsupported shell argument exits `2` with guidance.
 
 ## `lewp version`
 

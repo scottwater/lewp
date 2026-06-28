@@ -32,6 +32,7 @@ Commands:
   list       List active routes and their health
   doctor     Diagnose daemon state, DNS, and CA trust
   logs       Show or tail the daemon logs
+  completion Print a shell completion script (bash|zsh|fish)
   version    Print version and build metadata
   daemon     Run the daemon in the foreground (normally launchd-managed)
 
@@ -289,6 +290,24 @@ Usage:
   lewp version
 
 Prints the version, git commit, UTC build time, and Go toolchain version.
+`
+
+	completionHelp = `lewp completion — print a shell completion script
+
+Usage:
+  lewp completion bash|zsh|fish
+
+Prints a static completion script for the given shell to stdout. The script is
+self-contained and never contacts the daemon. Redirect it into the location your
+shell loads completions from:
+
+  bash:  lewp completion bash > /usr/local/etc/bash_completion.d/lewp
+  zsh:   lewp completion zsh  > "${fpath[1]}/_lewp"   # then restart zsh
+  fish:  lewp completion fish > ~/.config/fish/completions/lewp.fish
+
+Examples:
+  lewp completion bash
+  lewp completion zsh
 `
 
 	daemonHelp = `lewp daemon — run the daemon in the foreground

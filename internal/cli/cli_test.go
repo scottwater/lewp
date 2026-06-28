@@ -467,6 +467,51 @@ func TestRunSystemUninstallPrintsKeychainCleanup(t *testing.T) {
 	}
 }
 
+// TestRunSystemUninstallPrintsAffectedSummaryFirst proves uninstall prints the
+// affected-file summary before any removal output, so the scope is visible up
+// front rather than inferred from the trailing "removed X" lines.
+func TestRunSystemUninstallPrintsAffectedSummaryFirst(t *testing.T) {
+	var stdout bytes.Buffer
+	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	resolverPath := dir + "/resolver/lewp"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolverPath, []byte("nameserver 127.0.0.1\nport 15353\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"system", "uninstall"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    plistPath,
+		ResolverPath: resolverPath,
+		Stdout:       &stdout,
+		Stderr:       &bytes.Buffer{},
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	got := stdout.String()
+	summaryAt := strings.Index(got, "uninstall will affect:")
+	removedAt := strings.Index(got, "removed "+plistPath)
+	if summaryAt < 0 {
+		t.Fatalf("uninstall missing affected-file summary:\n%s", got)
+	}
+	if removedAt < 0 || summaryAt > removedAt {
+		t.Fatalf("summary must precede removal output:\n%s", got)
+	}
+	for _, want := range []string{"launchd: bootout", "keychain: remove trust", "resolver: remove " + resolverPath} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("uninstall summary missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRunSystemUninstallKeepsAndReportsCAFiles(t *testing.T) {
 	var stdout bytes.Buffer
 	dir := t.TempDir()

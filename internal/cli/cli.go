@@ -183,6 +183,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runLogs(cfg)
+	case "completion":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, completionHelp)
+			return 0
+		}
+		return runCompletion(cfg)
 	case "system":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, systemHelp)
@@ -393,6 +399,13 @@ func runSystem(cfg Config) int {
 			fmt.Fprintln(cfg.Stderr, err)
 			return 2
 		}
+		// uninstall is destructive (removes the plist, resolver, and keychain
+		// trust). Print the full affected-file summary up front so the scope is
+		// visible before any removal happens, not inferred from the trailing
+		// "removed X" lines.
+		if cfg.Args[1] == "uninstall" {
+			reportUninstallPlan(cfg)
+		}
 		if err := cfg.RunCommand(context.Background(), plan); err != nil {
 			fmt.Fprintf(cfg.Stderr, "%s: %v\n", cfg.Args[1], err)
 			return 1
@@ -422,6 +435,27 @@ func runSystem(cfg Config) int {
 	default:
 		fmt.Fprintf(cfg.Stderr, "unknown system action: %s\n", cfg.Args[1])
 		return 2
+	}
+}
+
+// reportUninstallPlan prints the affected-file/scope summary before uninstall
+// touches anything, so the user sees exactly what will be booted out, untrusted,
+// and removed. It is informational and does not gate the action: there is no
+// interactive-confirmation pattern elsewhere in the CLI, so introducing a
+// stdin/--yes prompt here is left for a follow-up rather than changing the
+// established non-interactive contract.
+func reportUninstallPlan(cfg Config) {
+	fmt.Fprintln(cfg.Stdout, "uninstall will affect:")
+	fmt.Fprintf(cfg.Stdout, "  launchd: bootout %s and remove %s\n", launchd.DefaultLabel, cfg.PlistPath)
+	fmt.Fprintln(cfg.Stdout, "  keychain: remove trust for \"Lewp Local Development CA\"")
+	fmt.Fprintf(cfg.Stdout, "  resolver: remove %s (may prompt for sudo)\n", cfg.ResolverPath)
+	for _, path := range []string{cfg.CAPath, cfg.CAKeyPath} {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			fmt.Fprintf(cfg.Stdout, "  kept: %s (CA material; a later lewp setup reuses it)\n", path)
+		}
 	}
 }
 
