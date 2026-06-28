@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if [[ ! -x "$repo_root/lewp" ]]; then
+  "$repo_root/bin/build" >/dev/null
+fi
+
+install_dir="${LEWP_INSTALL_DIR:-$HOME/.local/bin}"
+mkdir -p "$install_dir"
+install -m 0755 "$repo_root/lewp" "$install_dir/lewp"
+echo "$install_dir/lewp"
