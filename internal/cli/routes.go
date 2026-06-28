@@ -32,6 +32,9 @@ func runAdd(cfg Config) int {
 }
 
 func runPort(cfg Config) int {
+	if len(cfg.Args) >= 2 && cfg.Args[1] == "release" {
+		return runPortRelease(cfg)
+	}
 	fs := flag.NewFlagSet("port", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	name := fs.String("name", "port", "")
@@ -45,6 +48,29 @@ func runPort(cfg Config) int {
 		return daemonError(cfg, err)
 	}
 	writeLease(cfg.Stdout, *resp.Lease, *jsonOut, *shell)
+	return 0
+}
+
+// runPortRelease releases a single bare port lease for the current directory.
+// Releasing nothing is reported but not treated as an error: release is
+// idempotent.
+func runPortRelease(cfg Config) int {
+	fs := flag.NewFlagSet("port release", flag.ContinueOnError)
+	fs.SetOutput(cfg.Stderr)
+	name := fs.String("name", "port", "")
+	forget := fs.Bool("forget", false, "")
+	if fs.Parse(cfg.Args[2:]) != nil {
+		return 2
+	}
+	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Name: *name, Kind: identity.KindPort, Forget: *forget}})
+	if err != nil {
+		return daemonError(cfg, err)
+	}
+	if resp.Release == nil || resp.Release.Ports == 0 {
+		fmt.Fprintf(cfg.Stdout, "no active port named %q for this directory\n", *name)
+		return 0
+	}
+	fmt.Fprintf(cfg.Stdout, "released port %q\n", *name)
 	return 0
 }
 
@@ -93,15 +119,32 @@ func runMove(cfg Config) int {
 func runRelease(cfg Config) int {
 	fs := flag.NewFlagSet("release", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
+	all := fs.Bool("all", false, "")
 	forget := fs.Bool("forget", false, "")
 	if fs.Parse(cfg.Args[1:]) != nil {
 		return 2
 	}
-	_, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget}})
+	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget, All: *all}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	fmt.Fprintln(cfg.Stdout, "released")
+	var routes, ports int
+	if resp.Release != nil {
+		routes, ports = resp.Release.Routes, resp.Release.Ports
+	}
+	if *all {
+		if routes == 0 && ports == 0 {
+			fmt.Fprintln(cfg.Stdout, "no active route or port for this directory")
+			return 0
+		}
+		fmt.Fprintf(cfg.Stdout, "released %d route(s) and %d port(s)\n", routes, ports)
+		return 0
+	}
+	if routes == 0 {
+		fmt.Fprintln(cfg.Stdout, "no active route for this directory")
+		return 0
+	}
+	fmt.Fprintf(cfg.Stdout, "released %d route(s)\n", routes)
 	return 0
 }
 

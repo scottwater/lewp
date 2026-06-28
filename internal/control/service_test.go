@@ -46,7 +46,7 @@ func TestServiceLeasePortReleaseAndList(t *testing.T) {
 		t.Fatalf("list entries=%d want 2: %+v", len(entries), entries)
 	}
 
-	if err := svc.Release(ctx, ReleaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1"}); err != nil {
+	if _, err := svc.Release(ctx, ReleaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1"}); err != nil {
 		t.Fatal(err)
 	}
 	entries, err = svc.List(ctx, false)
@@ -163,7 +163,7 @@ func TestReleaseFreesHostForAnotherFolder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Release(ctx, ReleaseRequest{WorkDir: firstDir}); err != nil {
+	if _, err := svc.Release(ctx, ReleaseRequest{WorkDir: firstDir}); err != nil {
 		t.Fatal(err)
 	}
 	second, err := svc.Lease(ctx, LeaseRequest{WorkDir: secondDir, Root: "audit", Name: "feature-1"})

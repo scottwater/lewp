@@ -38,6 +38,11 @@ type ReleaseRequest struct {
 	Root    string
 	Name    string
 	Forget  bool
+	// Kind selects what to release; empty means route. KindPort releases a bare
+	// port lease (by Name, defaulting to "port") for the current directory.
+	Kind identity.Kind
+	// All releases the route and every bare port for the current directory.
+	All bool
 }
 
 type InfoRequest struct {
@@ -50,20 +55,31 @@ type MoveRequest struct {
 }
 
 type LeaseResponse struct {
-	Port           int             `json:"port"`
-	URL            string          `json:"url,omitempty"`
-	Host           string          `json:"host,omitempty"`
-	Root           string          `json:"root"`
-	Name           string          `json:"name"`
-	NormalizedRoot string          `json:"normalized_root"`
-	NormalizedName string          `json:"normalized_name"`
-	Path           string          `json:"path"`
-	Kind           identity.Kind   `json:"kind"`
-	RootSource     identity.Source `json:"root_source"`
-	NameSource     identity.Source `json:"name_source"`
-	HostSource     identity.Source `json:"host_source,omitempty"`
-	Warnings       []string        `json:"warnings,omitempty"`
-	ReleaseState   string          `json:"release_state"`
+	Port           int               `json:"port"`
+	URL            string            `json:"url,omitempty"`
+	HTTPSURL       string            `json:"https_url,omitempty"`
+	Host           string            `json:"host,omitempty"`
+	Root           string            `json:"root"`
+	Name           string            `json:"name"`
+	NormalizedRoot string            `json:"normalized_root"`
+	NormalizedName string            `json:"normalized_name"`
+	Path           string            `json:"path"`
+	Kind           identity.Kind     `json:"kind"`
+	HostKind       identity.HostKind `json:"host_kind,omitempty"`
+	RootSource     identity.Source   `json:"root_source"`
+	NameSource     identity.Source   `json:"name_source"`
+	HostSource     identity.Source   `json:"host_source,omitempty"`
+	Warnings       []string          `json:"warnings,omitempty"`
+	// LeaseState is new, reused, or conflict-renamed for this call.
+	LeaseState   string `json:"lease_state,omitempty"`
+	ReleaseState string `json:"release_state"`
+}
+
+// ReleaseResponse reports how many active leases a release call freed, split by
+// kind so the CLI can report no-op cases and counts.
+type ReleaseResponse struct {
+	Routes int `json:"routes"`
+	Ports  int `json:"ports"`
 }
 
 type ListEntry struct {
@@ -111,6 +127,7 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 			resolved.HostSource = remembered.HostSource
 		}
 	}
+	conflictRenamed := false
 	if owner, ok, err := s.store.FindByHost(ctx, resolved.Host); err != nil {
 		return LeaseResponse{}, err
 	} else if ok && owner.Path != resolved.Path {
@@ -119,12 +136,13 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 		resolved.HostKind = identity.HostKindCustom
 		resolved.Warnings = append(resolved.Warnings,
 			fmt.Sprintf("warning: %s is already assigned to %s; using %s", original, owner.Path, resolved.Host))
+		conflictRenamed = true
 	}
 	lease, err := s.store.Lease(ctx, resolved, s.portRange)
 	if err != nil {
 		return LeaseResponse{}, err
 	}
-	return response(resolved, lease.Port), nil
+	return response(resolved, lease.Port, leaseState(lease, conflictRenamed)), nil
 }
 
 func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, error) {
@@ -141,36 +159,75 @@ func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, err
 	if err != nil {
 		return LeaseResponse{}, err
 	}
-	return response(resolved, lease.Port), nil
+	return response(resolved, lease.Port, leaseState(lease, false)), nil
 }
 
-func (s *Service) Release(ctx context.Context, req ReleaseRequest) error {
-	if req.Root == "" && req.Name == "" {
-		workDir := req.WorkDir
-		if workDir == "" {
-			var err error
-			workDir, err = os.Getwd()
-			if err != nil {
-				return err
-			}
+func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseResponse, error) {
+	kind := req.Kind
+	if kind == "" {
+		kind = identity.KindRoute
+	}
+	// Bare-port release targets a single named port lease for this directory.
+	if kind == identity.KindPort {
+		name := req.Name
+		if name == "" {
+			name = "port"
 		}
-		abs, err := filepath.Abs(workDir)
+		resolved, err := identity.Resolve(identity.Options{
+			WorkDir: req.WorkDir,
+			Name:    name,
+			Env:     map[string]string{},
+			Kind:    identity.KindPort,
+		})
 		if err != nil {
-			return err
+			return ReleaseResponse{}, err
 		}
-		return s.store.ReleasePath(ctx, abs, identity.KindRoute, req.Forget)
+		n, err := s.store.Release(ctx, resolved.Path, identity.KindPort, resolved.NormalizedName, req.Forget)
+		return ReleaseResponse{Ports: n}, err
 	}
-	resolved, err := identity.Resolve(identity.Options{
-		WorkDir: req.WorkDir,
-		Root:    req.Root,
-		Name:    req.Name,
-		Env:     map[string]string{},
-		Kind:    identity.KindRoute,
-	})
+	// Explicit root/name releases a single named route.
+	if req.Root != "" || req.Name != "" {
+		resolved, err := identity.Resolve(identity.Options{
+			WorkDir: req.WorkDir,
+			Root:    req.Root,
+			Name:    req.Name,
+			Env:     map[string]string{},
+			Kind:    identity.KindRoute,
+		})
+		if err != nil {
+			return ReleaseResponse{}, err
+		}
+		n, err := s.store.Release(ctx, resolved.Path, identity.KindRoute, resolved.NormalizedName, req.Forget)
+		return ReleaseResponse{Routes: n}, err
+	}
+	abs, err := absWorkDir(req.WorkDir)
 	if err != nil {
-		return err
+		return ReleaseResponse{}, err
 	}
-	return s.store.Release(ctx, resolved.Path, identity.KindRoute, resolved.NormalizedName, req.Forget)
+	routes, err := s.store.ReleasePath(ctx, abs, identity.KindRoute, req.Forget)
+	if err != nil {
+		return ReleaseResponse{}, err
+	}
+	if !req.All {
+		return ReleaseResponse{Routes: routes}, nil
+	}
+	ports, err := s.store.ReleasePath(ctx, abs, identity.KindPort, req.Forget)
+	if err != nil {
+		return ReleaseResponse{}, err
+	}
+	return ReleaseResponse{Routes: routes, Ports: ports}, nil
+}
+
+// leaseState maps a freshly returned lease to the user-facing new/reused state,
+// preferring conflict-renamed when the host was suffixed to avoid a collision.
+func leaseState(lease registry.Lease, conflictRenamed bool) string {
+	if conflictRenamed {
+		return "conflict-renamed"
+	}
+	if lease.Created {
+		return "new"
+	}
+	return "reused"
 }
 
 func (s *Service) List(ctx context.Context, all bool) ([]ListEntry, error) {
@@ -281,14 +338,17 @@ func (s *Service) Doctor() []string {
 	}
 }
 
-func response(resolved identity.Result, port int) LeaseResponse {
+func response(resolved identity.Result, port int, state string) LeaseResponse {
 	url := ""
+	httpsURL := ""
 	if resolved.Host != "" {
 		url = "http://" + resolved.Host
+		httpsURL = "https://" + resolved.Host
 	}
 	return LeaseResponse{
 		Port:           port,
 		URL:            url,
+		HTTPSURL:       httpsURL,
 		Host:           resolved.Host,
 		Root:           resolved.Root,
 		Name:           resolved.Name,
@@ -296,10 +356,12 @@ func response(resolved identity.Result, port int) LeaseResponse {
 		NormalizedName: resolved.NormalizedName,
 		Path:           resolved.Path,
 		Kind:           resolved.Kind,
+		HostKind:       resolved.HostKind,
 		RootSource:     resolved.RootSource,
 		NameSource:     resolved.NameSource,
 		HostSource:     resolved.HostSource,
 		Warnings:       resolved.Warnings,
+		LeaseState:     state,
 		ReleaseState:   registry.StateActive,
 	}
 }

@@ -23,10 +23,11 @@ type Request struct {
 }
 
 type Response struct {
-	Lease   *LeaseResponse `json:"lease,omitempty"`
-	Entries []ListEntry    `json:"entries,omitempty"`
-	Checks  []string       `json:"checks,omitempty"`
-	Error   string         `json:"error,omitempty"`
+	Lease   *LeaseResponse   `json:"lease,omitempty"`
+	Release *ReleaseResponse `json:"release,omitempty"`
+	Entries []ListEntry      `json:"entries,omitempty"`
+	Checks  []string         `json:"checks,omitempty"`
+	Error   string           `json:"error,omitempty"`
 }
 
 func Serve(ctx context.Context, socketPath, registryPath string, portRange registry.PortRange) error {
@@ -133,7 +134,8 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 		lease, err := svc.Port(ctx, req.Port)
 		return Response{Lease: &lease}, err
 	case "release":
-		return Response{}, svc.Release(ctx, req.Release)
+		res, err := svc.Release(ctx, req.Release)
+		return Response{Release: &res}, err
 	case "list":
 		entries, err := svc.List(ctx, req.All)
 		return Response{Entries: entries}, err

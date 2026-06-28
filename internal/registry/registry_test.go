@@ -138,7 +138,7 @@ func TestLeaseReusesReleasedPortForSameIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Release(ctx, ident.Path, identity.KindRoute, ident.NormalizedName, false); err != nil {
+	if _, err := store.Release(ctx, ident.Path, identity.KindRoute, ident.NormalizedName, false); err != nil {
 		t.Fatal(err)
 	}
 	second, err := store.Lease(ctx, ident, PortRange{Start: 41000, End: 41010})

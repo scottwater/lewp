@@ -42,6 +42,10 @@ type Lease struct {
 	IdentityID int64
 	Port       int
 	State      string
+	// Created reports whether this call allocated a fresh active lease (true)
+	// or returned an existing remembered one (false). Callers use it to surface
+	// new vs reused lease state without a second query.
+	Created bool
 }
 
 type Record struct {
@@ -186,7 +190,7 @@ func (s *Store) Lease(ctx context.Context, ident identity.Result, portRange Port
 	if err := tx.Commit(); err != nil {
 		return Lease{}, err
 	}
-	return Lease{ID: leaseID, IdentityID: identityID, Port: port, State: StateActive}, nil
+	return Lease{ID: leaseID, IdentityID: identityID, Port: port, State: StateActive, Created: true}, nil
 }
 
 func (s *Store) Identity(ctx context.Context, id int64) (identity.Result, error) {
@@ -299,88 +303,112 @@ order by i.host, i.path, i.name`
 	return records, rows.Err()
 }
 
-func (s *Store) Release(ctx context.Context, path string, kind identity.Kind, normalizedName string, forget bool) error {
+// Release releases the active lease for a single identity (path+kind+name) and
+// reports how many active leases were freed (0 if the identity is unknown or
+// already released). With forget it also deletes the remembered identity.
+func (s *Store) Release(ctx context.Context, path string, kind identity.Kind, normalizedName string, forget bool) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	var id int64
 	err = tx.QueryRowContext(ctx, `select id from identities where path=? and kind=? and normalized_name=?`, path, kind, normalizedName).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil
+		return 0, nil
 	}
 	if err != nil {
-		return err
+		return 0, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `update leases set state=?, released_at=?, updated_at=? where identity_id=? and state=?`, StateReleased, now, now, id, StateActive); err != nil {
-		return err
+	res, err := tx.ExecContext(ctx, `update leases set state=?, released_at=?, updated_at=? where identity_id=? and state=?`, StateReleased, now, now, id, StateActive)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, `insert into events(identity_id, event_type, message, created_at) values(?, ?, ?, ?)`, id, "released", "released lease", now); err != nil {
-		return err
+		return 0, err
 	}
 	if forget {
 		if _, err := tx.ExecContext(ctx, `delete from leases where identity_id=?`, id); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, `delete from events where identity_id=?`, id); err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := tx.ExecContext(ctx, `delete from identities where id=?`, id); err != nil {
-			return err
+			return 0, err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int(affected), nil
 }
 
-func (s *Store) ReleasePath(ctx context.Context, path string, kind identity.Kind, forget bool) error {
+// ReleasePath releases the active leases for every identity at path of the given
+// kind and reports how many active leases were freed. With forget it also
+// deletes the remembered identities.
+func (s *Store) ReleasePath(ctx context.Context, path string, kind identity.Kind, forget bool) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, `select id from identities where path=? and kind=?`, path, kind)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var ids []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			_ = rows.Close()
-			return err
+			return 0, err
 		}
 		ids = append(ids, id)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return err
+		return 0, err
 	}
 	if err := rows.Close(); err != nil {
-		return err
+		return 0, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	released := 0
 	for _, id := range ids {
-		if _, err := tx.ExecContext(ctx, `update leases set state=?, released_at=?, updated_at=? where identity_id=? and state=?`, StateReleased, now, now, id, StateActive); err != nil {
-			return err
+		res, err := tx.ExecContext(ctx, `update leases set state=?, released_at=?, updated_at=? where identity_id=? and state=?`, StateReleased, now, now, id, StateActive)
+		if err != nil {
+			return 0, err
 		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return 0, err
+		}
+		released += int(affected)
 		if _, err := tx.ExecContext(ctx, `insert into events(identity_id, event_type, message, created_at) values(?, ?, ?, ?)`, id, "released", "released lease", now); err != nil {
-			return err
+			return 0, err
 		}
 		if forget {
 			if _, err := tx.ExecContext(ctx, `delete from leases where identity_id=?`, id); err != nil {
-				return err
+				return 0, err
 			}
 			if _, err := tx.ExecContext(ctx, `delete from events where identity_id=?`, id); err != nil {
-				return err
+				return 0, err
 			}
 			if _, err := tx.ExecContext(ctx, `delete from identities where id=?`, id); err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return released, nil
 }
 
 func upsertIdentity(ctx context.Context, tx *sql.Tx, ident identity.Result, now string) (int64, error) {
