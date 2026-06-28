@@ -134,8 +134,8 @@ This is the command for creating a route.
 
 ```sh
 lewp add
-lewp add --root audit --name feature-1
-lewp add --host audit.lewp
+lewp add --root atlas --name feature-1
+lewp add --host atlas.lewp
 lewp add --json
 lewp add --shell
 ```
@@ -144,9 +144,9 @@ Default (human) output:
 
 ```sh
 PORT=42137
-URL=http://feature-1.audit.lewp
-HTTPS_URL=https://feature-1.audit.lewp
-HOST=feature-1.audit.lewp
+URL=http://feature-1.atlas.lewp
+HTTPS_URL=https://feature-1.atlas.lewp
+HOST=feature-1.atlas.lewp
 STATE=new
 HOST_KIND=instance
 ```
@@ -166,9 +166,9 @@ sets only the variables you want and nothing else:
 
 ```sh
 export PORT=42137
-export URL=http://feature-1.audit.lewp
-export HTTPS_URL=https://feature-1.audit.lewp
-export HOST=feature-1.audit.lewp
+export URL=http://feature-1.atlas.lewp
+export HTTPS_URL=https://feature-1.atlas.lewp
+export HOST=feature-1.atlas.lewp
 ```
 
 `--json` prints machine-readable fields including `url`, `https_url`,
@@ -178,8 +178,8 @@ state, and release state.
 Host rules:
 
 - default host: `<instance>.<root>.lewp`
-- project apex override: `lewp add --host audit.lewp`
-- custom `.lewp` override: `lewp add --host sso.audit.lewp`
+- project apex override: `lewp add --host atlas.lewp`
+- custom `.lewp` override: `lewp add --host sso.atlas.lewp`
 - non-`.lewp` hosts are rejected
 
 Discovery order (each of `root`, `name`, and `host` is resolved from the first
@@ -198,9 +198,9 @@ stderr so `--shell` and `$(...)` capture stay clean.
 Example `.lewp.local.toml` (write one with [`lewp init`](#lewp-init)):
 
 ```toml
-root = "audit"
+root = "atlas"
 name = "feature-1"
-host = "audit.lewp"
+host = "atlas.lewp"
 ```
 
 By default an inferred host that collides with another folder's is given a
@@ -216,8 +216,8 @@ the file — it never contacts the daemon, allocates a port, or leases a route.
 
 ```sh
 lewp init
-lewp init --root audit --name feature-1
-lewp init --host audit.lewp
+lewp init --root atlas --name feature-1
+lewp init --host atlas.lewp
 lewp init --force
 ```
 
@@ -226,7 +226,7 @@ uses). Flags:
 
 - `--root R` — root segment to record (defaults to the inferred root)
 - `--name N` — instance segment to record (defaults to the inferred name)
-- `--host H` — record an explicit full `.lewp` host (e.g. `audit.lewp`)
+- `--host H` — record an explicit full `.lewp` host (e.g. `atlas.lewp`)
 - `--force` — overwrite an existing file; the replacement is rebuilt from flags
   and inference only, never from the file being replaced
 
@@ -251,17 +251,17 @@ Default output for a directory with one route and one bare port:
 ```sh
 ROUTES
 PORT=42137
-URL=http://feature-1.audit.lewp
-HTTPS_URL=https://feature-1.audit.lewp
-HOST=feature-1.audit.lewp
+URL=http://feature-1.atlas.lewp
+HTTPS_URL=https://feature-1.atlas.lewp
+HOST=feature-1.atlas.lewp
 STATE=up
-DIR=/Users/scott/projects/audit/feature-1
+DIR=/Users/scott/projects/atlas/feature-1
 
 PORTS
 NAME=vite
 PORT=42138
 STATE=down
-DIR=/Users/scott/projects/audit/feature-1
+DIR=/Users/scott/projects/atlas/feature-1
 ```
 
 The project directory is reported as `DIR=` (not `PATH=`) so the env-style
@@ -285,8 +285,8 @@ the same host and port. Use this after relocating or renaming a project folder
 so its stable URL follows it.
 
 ```sh
-lewp move --from ~/projects/audit/old-feature
-lewp move --from ~/projects/audit/old-feature --json
+lewp move --from ~/projects/atlas/old-feature
+lewp move --from ~/projects/atlas/old-feature --json
 ```
 
 `--from` is required and names the directory that currently owns the route. The
@@ -377,8 +377,8 @@ Human columns:
 
 ```text
 HOST              NAME       KIND   PORT   STATE  PATH
-feature-1.audit.lewp  feature-1  route  42137  up     /Users/scott/projects/audit/feature-1
--                 vite       port   42138  down   /Users/scott/projects/audit/feature-1
+feature-1.atlas.lewp  feature-1  route  42137  up     /Users/scott/projects/atlas/feature-1
+-                 vite       port   42138  down   /Users/scott/projects/atlas/feature-1
 ```
 
 `KIND` is `route` or `port`; a bare port has no host, so `HOST` shows `-`.
@@ -559,7 +559,7 @@ https://<host>
 ```
 
 DNS resolves all `.lewp` names to loopback. The proxy routes by full registered
-host, so `feature-1.audit.lewp` and `audit.lewp` can point to different local
+host, so `feature-1.atlas.lewp` and `atlas.lewp` can point to different local
 ports.
 
 HTTPS uses Lewp's local CA, created and trusted by `lewp setup`. Browser support

@@ -40,7 +40,7 @@ It does not:
 From a project instance directory:
 
 ```sh
-cd ~/projects/audit/feature-1
+cd ~/projects/atlas/feature-1
 lewp add
 ```
 
@@ -48,8 +48,8 @@ Default output:
 
 ```sh
 PORT=42137
-URL=http://feature-1.audit.lewp
-HOST=feature-1.audit.lewp
+URL=http://feature-1.atlas.lewp
+HOST=feature-1.atlas.lewp
 ```
 
 The same command both leases the port and registers the route. The user starts
@@ -64,11 +64,11 @@ PORT=42137 bin/dev
 The hostname should work as a normal browser URL:
 
 ```text
-http://feature-1.audit.lewp
+http://feature-1.atlas.lewp
 ```
 
 Nice hostnames are the point of the tool. A design that requires users to type a
-proxy port in the browser, such as `http://feature-1.audit.lewp:49200`, does not
+proxy port in the browser, such as `http://feature-1.atlas.lewp:49200`, does not
 meet the product goal.
 
 ## Hostname Contract
@@ -82,11 +82,11 @@ Default hostname format:
 Examples:
 
 ```text
-~/projects/audit/feature-1
--> feature-1.audit.lewp
+~/projects/atlas/feature-1
+-> feature-1.atlas.lewp
 
-~/projects/audit/scott/JIRA-123 Add SSO callback!
--> jira-123-add-sso-callback.audit.lewp
+~/projects/atlas/scott/JIRA-123 Add SSO callback!
+-> jira-123-add-sso-callback.atlas.lewp
 ```
 
 `.lewp` is the default suffix for this tool. It is not a real public TLD, so it
@@ -103,10 +103,10 @@ explicit project apex hosts:
 Example:
 
 ```sh
-lewp add --host audit.lewp
+lewp add --host atlas.lewp
 ```
 
-This registers `audit.lewp` for the current folder. Custom hosts must stay
+This registers `atlas.lewp` for the current folder. Custom hosts must stay
 inside `.lewp` in V1; non-`.lewp` domains are out of scope.
 
 ## Name Discovery
@@ -132,10 +132,10 @@ Example:
 
 ```text
 PORT=42137
-URL=http://feature-1.audit.lewp
-HOST=feature-1.audit.lewp
+URL=http://feature-1.atlas.lewp
+HOST=feature-1.atlas.lewp
 
-# inferred root=audit from parent folder
+# inferred root=atlas from parent folder
 # inferred name=feature-1 from current folder
 ```
 
@@ -169,8 +169,8 @@ a clear error and ask for `--name`.
 Users can override inferred values:
 
 ```sh
-lewp add --root audit --name sso-callback
-lewp add --host audit.lewp
+lewp add --root atlas --name sso-callback
+lewp add --host atlas.lewp
 ```
 
 Overrides become the remembered identity for that folder until explicitly
@@ -195,10 +195,10 @@ V1 behavior:
 Example:
 
 ```text
-warning: feature-1.audit.lewp is already assigned to:
-  /Users/scott/projects/audit/feature-1
+warning: feature-1.atlas.lewp is already assigned to:
+  /Users/scott/projects/atlas/feature-1
 
-using: feature-1-a8f3.audit.lewp
+using: feature-1-a8f3.atlas.lewp
 ```
 
 Suffixes should be deterministic for the folder/identity so repeated leases do
@@ -348,10 +348,10 @@ time, release state, suggested start command, and hints for `lewp list` /
 Example content:
 
 ```text
-feature-1.audit.lewp is registered but not responding
+feature-1.atlas.lewp is registered but not responding
 
 Target: 127.0.0.1:42137
-Project: /Users/scott/projects/audit/feature-1
+Project: /Users/scott/projects/atlas/feature-1
 Last seen: 2026-06-26 21:44
 Try: PORT=42137 bin/dev
 ```
@@ -382,7 +382,7 @@ Example:
 
 ```text
 HOST                         PORT   STATE   PATH
-feature-1.audit.lewp         42137  down    ~/projects/audit/feature-1
+feature-1.atlas.lewp         42137  down    ~/projects/atlas/feature-1
 main.blog.lewp               42138  up      ~/projects/blog
 ```
 
@@ -393,7 +393,7 @@ Core commands:
 ```sh
 lewp setup
 lewp system start|stop|status|restart|uninstall
-lewp add [--root audit] [--name feature-1] [--host audit.lewp] [--json] [--shell]
+lewp add [--root atlas] [--name feature-1] [--host atlas.lewp] [--json] [--shell]
 lewp port [--name vite] [--json] [--shell]
 lewp release [--forget]
 lewp list [--all]
@@ -404,8 +404,8 @@ lewp doctor
 
 ```sh
 PORT=42137
-URL=http://feature-1.audit.lewp
-HOST=feature-1.audit.lewp
+URL=http://feature-1.atlas.lewp
+HOST=feature-1.atlas.lewp
 ```
 
 `--shell` outputs eval-safe `export` lines. `--json` outputs machine-readable
@@ -435,9 +435,9 @@ Optional local config file:
 Example:
 
 ```toml
-root = "audit"
+root = "atlas"
 name = "feature-1"
-host = "audit.lewp" # optional full-host override
+host = "atlas.lewp" # optional full-host override
 ```
 
 This file is intended to be local/uncommitted and easy to ignore. `lewp init`
@@ -469,7 +469,7 @@ API behavior, and realistic development.
 Target behavior:
 
 ```text
-https://feature-1.audit.lewp
+https://feature-1.atlas.lewp
 ```
 
 Requirements:
@@ -496,10 +496,10 @@ Doctor output should be concrete and command-oriented.
 
 V1 is acceptable when:
 
-- `lewp add` from `~/projects/audit/feature-1` returns stable `PORT`,
+- `lewp add` from `~/projects/atlas/feature-1` returns stable `PORT`,
   `URL`, and `HOST`
-- `feature-1.audit.lewp` resolves locally after setup
-- `lewp add --host audit.lewp` registers a stable project apex host
+- `feature-1.atlas.lewp` resolves locally after setup
+- `lewp add --host atlas.lewp` registers a stable project apex host
 - `lewp port --name vite` returns a stable bare internal port without a hostname
 - proxy routes to `127.0.0.1:<PORT>`
 - closed ports show a useful debug page, not a blank 502

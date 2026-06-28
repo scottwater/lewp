@@ -64,12 +64,12 @@ in from the start:
   exposing every app to the LAN — which violates our explicit non-goal. Set `SockNodeName=127.0.0.1`.
 - **Full-host wildcard routing.** Resolve *anything* under `.lewp` to loopback at the DNS layer;
   route by **full host** in the registry. Do NOT copy dot-test's `TrimSuffix(host, ".lewp")` +
-  single-label lookup (it breaks `feature-1.audit.lewp`).
+  single-label lookup (it breaks `feature-1.atlas.lewp`).
 - **Streaming: `FlushInterval = -1`** on the ReverseProxy (immediate flush). puma-dev's `1s` adds up
   to a second of latency to SSE/streamed responses. WebSocket upgrades work by default in modern Go's
   `httputil.ReverseProxy`.
 - **Host preservation:** use `ReverseProxy.Rewrite` (Go 1.20+) — set `r.SetXForwarded()` then
-  `r.Out.Host = r.In.Host` so the upstream sees `feature-1.audit.lewp`, not `127.0.0.1:port`.
+  `r.Out.Host = r.In.Host` so the upstream sees `feature-1.atlas.lewp`, not `127.0.0.1:port`.
   Pass `X-Forwarded-Host/Proto/For`.
 - **`last_seen` is throttled, best-effort, in-memory-coalesced** (flush at most every ~N seconds per
   lease). Never one DB write per request. The appendix's "route hit" event is informational only — do
@@ -88,8 +88,8 @@ Subdomain-per-instance is the default workflow, but V1 must not be subdomain-onl
 resolve any `.lewp` name to loopback, and the proxy should route by exact registered host. That
 means both of these are first-class route shapes:
 
-- **Instance host:** `<instance>.<root>.lewp` (default), e.g. `feature-1.audit.lewp`.
-- **Project apex host:** `<root>.lewp` (explicit), e.g. `audit.lewp`.
+- **Instance host:** `<instance>.<root>.lewp` (default), e.g. `feature-1.atlas.lewp`.
+- **Project apex host:** `<root>.lewp` (explicit), e.g. `atlas.lewp`.
 
 Use "project apex" for `<root>.lewp` in docs/UI to avoid confusing it with the `.lewp` suffix
 itself. Apex routes are useful for known, stable local apps where the project name should be the
@@ -99,8 +99,8 @@ V1 should also leave room for explicit custom `.lewp` hosts, as long as they rem
 and inside the owned suffix:
 
 ```sh
-lewp add --host audit.lewp
-lewp add --host sso.audit.lewp
+lewp add --host atlas.lewp
+lewp add --host sso.atlas.lewp
 ```
 
 `--host` is an override for the final registered hostname. It must be normalized/validated as a
@@ -173,9 +173,9 @@ Optional local config file:
 
 ```toml
 # .lewp.local.toml
-root = "audit"
+root = "atlas"
 name = "feature-1"
-host = "audit.lewp" # optional full-host override
+host = "atlas.lewp" # optional full-host override
 ```
 
 The file is local/uncommitted by convention. `lewp init` is out of V1; `add` must work without it
@@ -206,7 +206,7 @@ conflicts. Output should be concrete and command-oriented.
 1. **Skeleton + registry:** binary dispatch, SQLite registry, `identity` inference + normalization +
    worktree detection. Unit-test inference/normalization against spec examples.
 2. **DNS + resolver:** UDP `.lewp`→loopback responder on high port; `setup` writes `/etc/resolver/lewp`.
-   Verify with `dig feature-1.audit.lewp @127.0.0.1 -p 15353`, `dig audit.lewp @127.0.0.1 -p 15353`,
+   Verify with `dig feature-1.atlas.lewp @127.0.0.1 -p 15353`, `dig atlas.lewp @127.0.0.1 -p 15353`,
    and (after setup) `ping`/`dscacheutil`.
 3. **Proxy (HTTP) + error page:** host→port routing, Host preservation, X-Forwarded-*, WebSocket,
    `FlushInterval=-1`, debug-first HTML error page when target port is closed.
@@ -218,12 +218,12 @@ conflicts. Output should be concrete and command-oriented.
 
 ## Verification (end-to-end)
 
-- From `~/projects/audit/feature-1`: `lewp add` returns stable `PORT`/`URL`/`HOST`; re-running is
+- From `~/projects/atlas/feature-1`: `lewp add` returns stable `PORT`/`URL`/`HOST`; re-running is
   idempotent.
-- `feature-1.audit.lewp` resolves to loopback after `lewp setup`.
-- `lewp add --host audit.lewp` returns a stable project apex host; `https://audit.lewp` resolves,
+- `feature-1.atlas.lewp` resolves to loopback after `lewp setup`.
+- `lewp add --host atlas.lewp` returns a stable project apex host; `https://atlas.lewp` resolves,
   routes, preserves Host, and conflicts deterministically.
-- Start a throwaway server on the leased port → `http://feature-1.audit.lewp` proxies to it; closed port
+- Start a throwaway server on the leased port → `http://feature-1.atlas.lewp` proxies to it; closed port
   shows the debug page, not a blank 502.
 - WebSocket + SSE pass through (test with a tiny echo WS + an SSE endpoint).
 - Real-stack check: run `thocstock_v2` via `PORT=<leased> bin/dev`; confirm the app loads through the
@@ -234,11 +234,11 @@ conflicts. Output should be concrete and command-oriented.
   correctly without a config file.
 - `lewp list` shows up/down/stale via TCP only; `--all` includes released/stale history; conflicting
   names get deterministic suffixes + warnings.
-- HTTPS: `https://feature-1.audit.lewp` is trusted in Safari + a Chromium browser; `system uninstall`
+- HTTPS: `https://feature-1.atlas.lewp` is trusted in Safari + a Chromium browser; `system uninstall`
   removes launchd + resolver + keychain cert cleanly.
 
 ## Out of scope (V1) / vNext
 
 - Firefox/NSS trust (`certutil`), multi-service-per-instance subdomain routing
-  (`vite.feature-1.audit.lewp`), `.env` mutation, dashboard/sharing/tunnels, auto-expiry sweeper,
+  (`vite.feature-1.atlas.lewp`), `.env` mutation, dashboard/sharing/tunnels, auto-expiry sweeper,
   Linux support, proxying non-loopback targets, starting any app process.

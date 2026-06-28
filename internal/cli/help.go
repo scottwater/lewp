@@ -38,7 +38,7 @@ Commands:
 
 Examples:
   lewp setup && lewp system start
-  cd ~/projects/audit/feature-1 && lewp add
+  cd ~/projects/atlas/feature-1 && lewp add
   eval "$(lewp add --shell)" && PORT=$PORT bin/dev
 
 Configuration (highest priority first):
@@ -101,7 +101,7 @@ Usage:
 Flags:
   --root <root>   Override the inferred root segment of the hostname
   --name <name>   Override the inferred instance segment of the hostname
-  --host <host>   Register an explicit host inside .lewp (e.g. audit.lewp)
+  --host <host>   Register an explicit host inside .lewp (e.g. atlas.lewp)
   --auto-suffix   On an explicit --host conflict, append a deterministic suffix
                   instead of failing
   --json          Emit the route as a JSON object
@@ -113,7 +113,7 @@ conflicts is given a stable deterministic suffix automatically.
 
 Examples:
   lewp add
-  lewp add --root audit --name feature-1
+  lewp add --root atlas --name feature-1
   eval "$(lewp add --shell)"
 `
 
@@ -130,7 +130,7 @@ Usage:
 Flags:
   --root <root>   Root segment to record (defaults to the inferred root)
   --name <name>   Instance segment to record (defaults to the inferred name)
-  --host <host>   Record an explicit full host inside .lewp (e.g. audit.lewp)
+  --host <host>   Record an explicit full host inside .lewp (e.g. atlas.lewp)
   --force         Overwrite an existing .lewp.local.toml
 
 The file is meant to stay uncommitted. init prints the .git/info/exclude line to
@@ -138,8 +138,8 @@ keep it out of version control.
 
 Examples:
   lewp init
-  lewp init --root audit --name feature-1
-  lewp init --host audit.lewp
+  lewp init --root atlas --name feature-1
+  lewp init --host atlas.lewp
 `
 
 	infoHelp = `lewp info — show routes and bare ports for the current directory
@@ -173,7 +173,7 @@ Flags:
   --json          Emit the moved route(s) as a JSON array
 
 Examples:
-  lewp move --from ~/projects/audit/old-feature
+  lewp move --from ~/projects/atlas/old-feature
 `
 
 	portHelp = `lewp port — lease a bare internal port without a hostname

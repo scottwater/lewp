@@ -63,7 +63,7 @@ lewp version
 From a project instance directory:
 
 ```sh
-cd ~/projects/audit/feature-1
+cd ~/projects/atlas/feature-1
 lewp add
 ```
 
@@ -71,9 +71,9 @@ Example output:
 
 ```sh
 PORT=42137
-URL=http://feature-1.audit.lewp
-HTTPS_URL=https://feature-1.audit.lewp
-HOST=feature-1.audit.lewp
+URL=http://feature-1.atlas.lewp
+HTTPS_URL=https://feature-1.atlas.lewp
+HOST=feature-1.atlas.lewp
 STATE=new
 HOST_KIND=instance
 ```
@@ -93,15 +93,15 @@ PORT=42137 <your dev command>
 Then open either scheme:
 
 ```text
-http://feature-1.audit.lewp
-https://feature-1.audit.lewp
+http://feature-1.atlas.lewp
+https://feature-1.atlas.lewp
 ```
 
 Check or relocate a route later:
 
 ```sh
 lewp info                                  # show this directory's route and ports
-lewp move --from ~/projects/audit/feature-1   # bring its route here, same port
+lewp move --from ~/projects/atlas/feature-1   # bring its route here, same port
 ```
 
 ## Identity and configuration
@@ -110,7 +110,7 @@ A route's hostname is `<name>.<root>.lewp`. Lewp resolves `root`, `name`, and an
 optional explicit `host` from the first source that provides each, in priority
 order:
 
-1. **Flags** — `lewp add --root audit --name feature-1 --host audit.lewp`
+1. **Flags** — `lewp add --root atlas --name feature-1 --host atlas.lewp`
 2. **Environment** — `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
 3. **Config file** — the nearest `.lewp.local.toml` up the directory tree
 4. **Inference** — parent directory → `root`, current directory → `name`
@@ -119,22 +119,22 @@ The environment variables are read from the CLI process and forwarded to the
 daemon (the daemon never reads its own environment), so they work per-shell:
 
 ```sh
-LEWP_ROOT=audit LEWP_NAME=feature-1 lewp add
-export LEWP_HOST=sso.audit.lewp     # pin an explicit host for this shell
+LEWP_ROOT=atlas LEWP_NAME=feature-1 lewp add
+export LEWP_HOST=sso.atlas.lewp     # pin an explicit host for this shell
 ```
 
 For a stable, path-independent identity, write a `.lewp.local.toml` with
 `lewp init`:
 
 ```sh
-lewp init --root audit --name feature-1
+lewp init --root atlas --name feature-1
 # writes ./.lewp.local.toml and prints a .git/info/exclude line to keep it local
 ```
 
 ```toml
-root = "audit"
+root = "atlas"
 name = "feature-1"
-host = "audit.lewp"   # optional explicit host
+host = "atlas.lewp"   # optional explicit host
 ```
 
 `lewp init` only writes the file; it never contacts the daemon or leases
@@ -147,16 +147,16 @@ from the file being replaced).
 
 Lewp shines with `git worktree`, where each checkout needs its own stable URL
 and ports. Suppose your worktrees live somewhere non-standard — not under a
-tidy `audit/<name>` layout:
+tidy `atlas/<name>` layout:
 
 ```sh
-cd ~/scratch/wt/audit-login-fix          # a worktree checkout
+cd ~/scratch/wt/atlas-login-fix          # a worktree checkout
 lewp add
-# inferred root=wt name=audit-login-fix      (note on stderr)
+# inferred root=wt name=atlas-login-fix      (note on stderr)
 # PORT=42150
-# URL=http://audit-login-fix.wt.lewp
-# HTTPS_URL=https://audit-login-fix.wt.lewp
-# HOST=audit-login-fix.wt.lewp
+# URL=http://atlas-login-fix.wt.lewp
+# HTTPS_URL=https://atlas-login-fix.wt.lewp
+# HOST=atlas-login-fix.wt.lewp
 # STATE=new
 # HOST_KIND=instance
 ```
@@ -165,9 +165,9 @@ If the inferred `root`/`name` are not what you want, pin them explicitly so the
 host is predictable regardless of where the worktree lives:
 
 ```sh
-lewp init --root audit --name login-fix     # write .lewp.local.toml
+lewp init --root atlas --name login-fix     # write .lewp.local.toml
 lewp release --forget                        # drop the inferred wt.lewp route
-lewp add                                      # now -> login-fix.audit.lewp
+lewp add                                      # now -> login-fix.atlas.lewp
 ```
 
 If two worktrees infer the same host, the second is given a deterministic
@@ -179,9 +179,9 @@ worktree, relocate the route so its URL follows it:
 PORT=42150 <your dev command>                 # Lewp routes; it never starts apps
 lewp info                                      # this directory's route and ports
 
-git worktree move ~/scratch/wt/audit-login-fix ~/projects/audit/login-fix
-cd ~/projects/audit/login-fix
-lewp move --from ~/scratch/wt/audit-login-fix  # same host and port, new directory
+git worktree move ~/scratch/wt/atlas-login-fix ~/projects/atlas/login-fix
+cd ~/projects/atlas/login-fix
+lewp move --from ~/scratch/wt/atlas-login-fix  # same host and port, new directory
 ```
 
 ## HTTPS
