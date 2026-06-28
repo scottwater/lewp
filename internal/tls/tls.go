@@ -68,8 +68,17 @@ func EnsureCA(certPath, keyPath, commonName string) (*CA, error) {
 	if err == nil {
 		return ca, nil
 	}
+	if fileExists(certPath) && !fileExists(keyPath) {
+		if removeErr := os.Remove(certPath); removeErr != nil {
+			return nil, err
+		}
+	} else if fileExists(keyPath) && !fileExists(certPath) {
+		if removeErr := os.Remove(keyPath); removeErr != nil {
+			return nil, err
+		}
+	}
 	// Only regenerate from a clean slate. If either file already exists, the
-	// load failure means corrupt, half-written, or unreadable material — never
+	// load failure means corrupt, mismatched, or unreadable material — never
 	// overwrite it, or we silently mint a new untrusted CA and break HTTPS.
 	if fileExists(certPath) || fileExists(keyPath) {
 		return nil, err
@@ -126,10 +135,31 @@ func (c *CA) Save(certPath, keyPath string) error {
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.CertDER})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(c.Key)})
-	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil {
+	if err := writeFileAtomic(keyPath, keyPEM, 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(keyPath, keyPEM, 0o600)
+	return writeFileAtomic(certPath, certPEM, 0o644)
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (c *CA) Leaf(host string) (*gotls.Certificate, error) {
@@ -203,15 +233,15 @@ func (m *Manager) TLSConfig() *gotls.Config {
 }
 
 func TrustCommand(certPath string) []string {
-	return []string{"security", "add-trusted-cert", "-d", "-r", "trustRoot", "-k", "login.keychain", certPath}
+	return []string{"security", "add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", "login.keychain", certPath}
 }
 
 func UntrustCommand(commonName string) []string {
 	return []string{"security", "delete-certificate", "-c", commonName}
 }
 
-func TrustCheckCommand(commonName string) []string {
-	return []string{"security", "find-certificate", "-c", commonName, "login.keychain"}
+func TrustCheckCommand(certPath string) []string {
+	return []string{"security", "verify-cert", "-c", certPath, "-p", "ssl"}
 }
 
 func DefaultCAPath() string {

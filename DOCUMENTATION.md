@@ -50,7 +50,7 @@ LAUNCHD=/Users/scott/Library/LaunchAgents/dev.lewp.daemon.plist
 RESOLVER=/etc/resolver/lewp
 CA=/Users/scott/Library/Application Support/lewp/ca.pem
 LOGS=/Users/scott/Library/Logs/lewp
-security add-trusted-cert -d -r trustRoot -k login.keychain ...
+security add-trusted-cert -r trustRoot -p ssl -k login.keychain ...
 ```
 
 Current setup state:

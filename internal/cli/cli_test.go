@@ -181,19 +181,19 @@ func TestRunSystemUninstallPrintsKeychainCleanup(t *testing.T) {
 
 func TestKeychainTrustLineChecksSecurity(t *testing.T) {
 	var ran []string
-	got := keychainTrustLine(context.Background(), func(_ context.Context, argv []string) error {
+	got := keychainTrustLine(context.Background(), "/tmp/lewp-ca.pem", func(_ context.Context, argv []string) error {
 		ran = argv
 		return nil
 	})
 	if got != "keychain: trusted" {
 		t.Fatalf("line=%q", got)
 	}
-	if !strings.Contains(strings.Join(ran, " "), "security find-certificate") {
+	if !strings.Contains(strings.Join(ran, " "), "security verify-cert -c /tmp/lewp-ca.pem -p ssl") {
 		t.Fatalf("trust check did not run security command: %v", ran)
 	}
 
-	got = keychainTrustLine(context.Background(), func(_ context.Context, _ []string) error {
-		return errors.New("missing")
+	got = keychainTrustLine(context.Background(), "/tmp/lewp-ca.pem", func(_ context.Context, _ []string) error {
+		return errors.New("not trusted")
 	})
 	if got != "keychain: not trusted (run lewp setup)" {
 		t.Fatalf("line=%q", got)

@@ -130,6 +130,28 @@ func TestServiceRemembersExplicitNameOnPlainLease(t *testing.T) {
 	}
 }
 
+func TestServiceLeaseIgnoresDaemonEnvironment(t *testing.T) {
+	t.Setenv("LEWP_ROOT", "env-root")
+	t.Setenv("LEWP_NAME", "env-name")
+	t.Setenv("LEWP_HOST", "env.lewp")
+
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	lease, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.RootSource == "env" || lease.NameSource == "env" || lease.HostSource == "env" {
+		t.Fatalf("lease used daemon environment: %+v", lease)
+	}
+	if lease.Host == "env.lewp" || lease.Root == "env-root" || lease.Name == "env-name" {
+		t.Fatalf("lease values came from daemon environment: %+v", lease)
+	}
+}
+
 func TestReleaseFreesHostForAnotherFolder(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})

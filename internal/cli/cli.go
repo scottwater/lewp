@@ -224,12 +224,12 @@ func runDoctor(cfg Config) int {
 	for _, check := range resp.Checks {
 		fmt.Fprintln(cfg.Stdout, check)
 	}
-	fmt.Fprintln(cfg.Stdout, keychainTrustLine(context.Background(), cfg.RunCommand))
+	fmt.Fprintln(cfg.Stdout, keychainTrustLine(context.Background(), cfg.CAPath, cfg.RunCommand))
 	return 0
 }
 
-func keychainTrustLine(ctx context.Context, run func(context.Context, []string) error) string {
-	if err := run(ctx, localtls.TrustCheckCommand("Lewp Local Development CA")); err != nil {
+func keychainTrustLine(ctx context.Context, certPath string, run func(context.Context, []string) error) string {
+	if err := run(ctx, localtls.TrustCheckCommand(certPath)); err != nil {
 		return "keychain: not trusted (run lewp setup)"
 	}
 	return "keychain: trusted"

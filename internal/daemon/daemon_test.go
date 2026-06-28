@@ -115,6 +115,93 @@ func TestServeCleanShutdownReturnsNil(t *testing.T) {
 	}
 }
 
+func TestServeShutdownLetsInFlightRequestFinish(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release
+		_, _ = w.Write([]byte("finished"))
+	})}
+	upstreamLn := listenLocal(t)
+	go func() { _ = upstream.Serve(upstreamLn) }()
+	t.Cleanup(func() { _ = upstream.Close() })
+
+	registryPath := t.TempDir() + "/registry.sqlite"
+	store, err := registry.Open(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.Remember(context.Background(), identity.Result{
+		Root:           "audit",
+		Name:           "feature-1",
+		NormalizedRoot: "audit",
+		NormalizedName: "feature-1",
+		Host:           "feature-1.audit.lewp",
+		HostKind:       identity.HostKindInstance,
+		HostSource:     identity.SourceInferred,
+		Path:           t.TempDir(),
+		Kind:           identity.KindRoute,
+	}, upstreamLn.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.Close()
+
+	httpLn := listenLocal(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, Config{
+			RegistryPath:  registryPath,
+			HTTPListeners: []net.Listener{httpLn},
+		})
+	}()
+
+	clientDone := make(chan string, 1)
+	go func() {
+		req, err := http.NewRequest(http.MethodGet, "http://"+httpLn.Addr().String()+"/", nil)
+		if err != nil {
+			clientDone <- err.Error()
+			return
+		}
+		req.Host = "feature-1.audit.lewp"
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			clientDone <- err.Error()
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		clientDone <- string(body)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach upstream")
+	}
+	cancel()
+	close(release)
+
+	select {
+	case got := <-clientDone:
+		if got != "finished" {
+			t.Fatalf("client got %q", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client request did not finish")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Serve returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after request finished")
+	}
+}
+
 func listenLocal(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

@@ -104,7 +104,7 @@ func TestEnsureCADoesNotOverwriteCorruptCA(t *testing.T) {
 	}
 }
 
-func TestEnsureCADoesNotOverwriteWhenKeyMissing(t *testing.T) {
+func TestEnsureCARecoversCertOnlyPartialSave(t *testing.T) {
 	dir := t.TempDir()
 	certPath := dir + "/ca.pem"
 	keyPath := dir + "/ca-key.pem"
@@ -122,15 +122,22 @@ func TestEnsureCADoesNotOverwriteWhenKeyMissing(t *testing.T) {
 	if err := os.Remove(keyPath); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA"); err == nil {
-		t.Fatal("EnsureCA succeeded with existing cert but missing key")
+	recovered, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA")
+	if err != nil {
+		t.Fatal(err)
 	}
 	got, err := os.ReadFile(certPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(original) {
-		t.Fatal("EnsureCA regenerated and overwrote existing certificate")
+	if string(got) == string(original) {
+		t.Fatal("EnsureCA kept orphaned cert-only CA")
+	}
+	if recovered.Certificate.SerialNumber.Cmp(ca.Certificate.SerialNumber) == 0 {
+		t.Fatal("EnsureCA reused orphaned certificate")
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("EnsureCA did not recreate key: %v", err)
 	}
 }
 
@@ -199,12 +206,16 @@ func TestManagerRejectsNonLewpSNI(t *testing.T) {
 
 func TestKeychainCommands(t *testing.T) {
 	add := TrustCommand("/tmp/lewp-ca.pem")
-	if got := join(add); got != "security add-trusted-cert -d -r trustRoot -k login.keychain /tmp/lewp-ca.pem" {
+	if got := join(add); got != "security add-trusted-cert -r trustRoot -p ssl -k login.keychain /tmp/lewp-ca.pem" {
 		t.Fatalf("trust command=%q", got)
 	}
 	remove := UntrustCommand("Lewp Local Development CA")
 	if got := join(remove); got != "security delete-certificate -c Lewp Local Development CA" {
 		t.Fatalf("untrust command=%q", got)
+	}
+	check := TrustCheckCommand("/tmp/lewp-ca.pem")
+	if got := join(check); got != "security verify-cert -c /tmp/lewp-ca.pem -p ssl" {
+		t.Fatalf("trust check command=%q", got)
 	}
 }
 

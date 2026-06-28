@@ -76,6 +76,7 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 		Root:    req.Root,
 		Name:    req.Name,
 		Host:    req.Host,
+		Env:     map[string]string{},
 		Kind:    identity.KindRoute,
 	})
 	if err != nil {
@@ -120,6 +121,7 @@ func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, err
 	resolved, err := identity.Resolve(identity.Options{
 		WorkDir: req.WorkDir,
 		Name:    req.Name,
+		Env:     map[string]string{},
 		Kind:    identity.KindPort,
 	})
 	if err != nil {
@@ -152,6 +154,7 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) error {
 		WorkDir: req.WorkDir,
 		Root:    req.Root,
 		Name:    req.Name,
+		Env:     map[string]string{},
 		Kind:    identity.KindRoute,
 	})
 	if err != nil {

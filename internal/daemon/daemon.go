@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/scottwater/lewp/internal/proxy"
 	"github.com/scottwater/lewp/internal/registry"
@@ -50,16 +51,13 @@ func Serve(ctx context.Context, cfg Config) error {
 
 	var wg sync.WaitGroup
 	var servers []*http.Server
-	errs := make(chan error, len(cfg.HTTPListeners)+len(cfg.HTTPSListeners))
+	listenerCount := len(cfg.HTTPListeners) + len(cfg.HTTPSListeners)
+	errs := make(chan error, listenerCount)
 	serve := func(server *http.Server, ln net.Listener) {
 		servers = append(servers, server)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			// server.Serve returns http.ErrServerClosed when the server is
-			// closed via server.Close below; that is a clean shutdown, not a
-			// failure. Closing the listener directly would instead surface
-			// net.ErrClosed, so we always close through the server.
 			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				errs <- err
 			}
@@ -75,19 +73,24 @@ func Serve(ctx context.Context, cfg Config) error {
 		<-ctx.Done()
 		return nil
 	}
-	go func() {
-		<-ctx.Done()
-		for _, server := range servers {
-			_ = server.Close()
-		}
-	}()
 	select {
 	case err := <-errs:
+		shutdownServers(servers)
+		wg.Wait()
 		return err
 	case <-ctx.Done():
-		// Wait for the server goroutines to finish their clean shutdown so we
-		// never return while listeners are still being torn down.
+		shutdownServers(servers)
 		wg.Wait()
 		return nil
+	}
+}
+
+func shutdownServers(servers []*http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, server := range servers {
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+		}
 	}
 }
