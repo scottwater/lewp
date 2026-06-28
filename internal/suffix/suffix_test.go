@@ -22,6 +22,8 @@ func TestValidateCustomPSLCases(t *testing.T) {
 		{name: "rejects registrable co uk", input: "todoordie.co.uk", wantErr: true},
 		{name: "rejects leftmost www", input: "www.todoordie.com", wantErr: true},
 		{name: "rejects local", input: "local", wantErr: true},
+		{name: "rejects local rightmost label", input: "foo.local", wantErr: true},
+		{name: "rejects nested local rightmost label", input: "bar.foo.local", wantErr: true},
 		{name: "rejects test", input: "test", wantErr: true},
 		{name: "rejects public suffix jp", input: "jp", wantErr: true},
 		{name: "rejects public suffix com", input: "com", wantErr: true},
@@ -133,6 +135,21 @@ func TestLoadSaveAddRemoveRoundTrip(t *testing.T) {
 	}
 	if want := []string{"a.todoordie.com"}; !reflect.DeepEqual(loaded.Suffixes, want) {
 		t.Fatalf("after Remove=%v want %v", loaded.Suffixes, want)
+	}
+}
+
+func TestLoadRejectsUnknownKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "suffixes.toml")
+	if err := os.WriteFile(path, []byte("suffix = [\"local.todoordie.com\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted unknown key")
+	}
+	if !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "suffix") {
+		t.Fatalf("error should name unknown key: %v", err)
 	}
 }
 

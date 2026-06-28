@@ -34,10 +34,11 @@ func ValidateCustom(input string) (string, error) {
 	if normalized == BuiltIn {
 		return "", fmt.Errorf("suffix %q is built in", normalized)
 	}
-	if _, ok := reservedSuffixes[normalized]; ok {
+	labels := strings.Split(normalized, ".")
+	if _, ok := reservedSuffixes[labels[len(labels)-1]]; ok {
 		return "", fmt.Errorf("suffix %q is reserved", normalized)
 	}
-	if strings.Split(normalized, ".")[0] == "www" {
+	if labels[0] == "www" {
 		return "", fmt.Errorf("suffix %q cannot start with www", normalized)
 	}
 
@@ -114,8 +115,18 @@ func Load(path string) (Config, error) {
 		}
 		return cfg, err
 	}
-	if _, err := toml.DecodeFile(path, &cfg); err != nil {
+	meta, err := toml.DecodeFile(path, &cfg)
+	if err != nil {
 		return Config{}, err
+	}
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, k := range undecoded {
+			keys = append(keys, k.String())
+		}
+		sort.Strings(keys)
+		return Config{}, fmt.Errorf("%s: unknown key(s): %s (allowed keys: suffixes)",
+			path, strings.Join(keys, ", "))
 	}
 	suffixes, err := validateCustomList(cfg.Suffixes)
 	if err != nil {
