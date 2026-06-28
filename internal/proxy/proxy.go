@@ -1,13 +1,17 @@
 package proxy
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"html"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +23,10 @@ type Proxy struct {
 	store    *registry.Store
 	lastSeen map[int64]time.Time
 	mu       sync.Mutex
+	// Logger, when set, receives one line per proxied request with the host,
+	// method, scheme, upstream target, and resulting status (or error). It is
+	// left nil in tests so request logging stays quiet unless asserted.
+	Logger *log.Logger
 }
 
 func New(store *registry.Store) *Proxy {
@@ -30,18 +38,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route, ok, err := p.store.RouteByHost(r.Context(), host)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		p.logRequest(r, host, "", http.StatusInternalServerError, err)
 		return
 	}
 	if !ok {
 		if strings.HasSuffix(host, ".lewp") {
 			writeUnknownRoutePage(w, host)
+			p.logRequest(r, host, "", http.StatusNotFound, errors.New("no route registered"))
 			return
 		}
 		http.NotFound(w, r)
+		p.logRequest(r, host, "", http.StatusNotFound, nil)
 		return
 	}
 	p.touch(r.Context(), route.LeaseID)
 	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", fmt.Sprint(route.Port))}
+	var proxyErr error
 	proxy := &httputil.ReverseProxy{
 		FlushInterval: -1,
 		Rewrite: func(out *httputil.ProxyRequest) {
@@ -52,10 +64,79 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			out.Out.Header.Set("X-Forwarded-Proto", scheme(out.In))
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			proxyErr = err
 			writeDebugPage(w, r, route)
 		},
 	}
-	proxy.ServeHTTP(w, r)
+	if p.Logger == nil {
+		proxy.ServeHTTP(w, r)
+		return
+	}
+	rec := &statusRecorder{ResponseWriter: w}
+	proxy.ServeHTTP(rec, r)
+	if !rec.wrote {
+		rec.status = http.StatusOK
+	}
+	p.logRequest(r, host, target.Host, rec.status, proxyErr)
+}
+
+// logRequest emits a single structured request line when a logger is attached.
+// It never panics on a missing logger so callers can invoke it unconditionally.
+func (p *Proxy) logRequest(r *http.Request, host, target string, status int, err error) {
+	if p.Logger == nil {
+		return
+	}
+	fields := fmt.Sprintf("request host=%s method=%s proto=%s path=%s status=%d",
+		host, r.Method, scheme(r), r.URL.Path, status)
+	if target != "" {
+		fields += " target=" + target
+	}
+	if err != nil {
+		fields += " error=" + strconv.Quote(err.Error())
+	}
+	p.Logger.Println(fields)
+}
+
+// statusRecorder wraps an http.ResponseWriter to remember the status code while
+// forwarding Flush and Hijack so SSE streaming and WebSocket upgrades keep
+// working through the proxy.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if !s.wrote {
+		s.status = code
+		s.wrote = true
+	}
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if !s.wrote {
+		s.status = http.StatusOK
+		s.wrote = true
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		if !s.wrote {
+			s.status = http.StatusSwitchingProtocols
+			s.wrote = true
+		}
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("proxy: underlying ResponseWriter does not support hijacking")
 }
 
 func (p *Proxy) touch(ctx context.Context, leaseID int64) {

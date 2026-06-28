@@ -32,6 +32,11 @@ type Config struct {
 	Commit       string
 	BuildDate    string
 	RunCommand   func(context.Context, []string) error
+	// RunCommandOutput runs a command and returns its combined output. It is
+	// used for read-only diagnostics (doctor's installed-version probe, system
+	// start's launchctl print) where the output itself is the signal. Tests
+	// inject a fake to avoid touching the real system.
+	RunCommandOutput func(context.Context, []string) (string, error)
 }
 
 func Run(cfg Config) int {
@@ -67,6 +72,9 @@ func Run(cfg Config) int {
 	}
 	if cfg.RunCommand == nil {
 		cfg.RunCommand = runCommand
+	}
+	if cfg.RunCommandOutput == nil {
+		cfg.RunCommandOutput = runCommandOutput
 	}
 	if cfg.Version == "" {
 		cfg.Version = defaultVersion()
@@ -145,6 +153,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runDoctor(cfg)
+	case "logs":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, logsHelp)
+			return 0
+		}
+		return runLogs(cfg)
 	case "system":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, systemHelp)
@@ -214,15 +228,75 @@ func runDaemon(cfg Config) int {
 }
 
 func runDoctor(cfg Config) int {
+	exit := 0
 	resp, err := call(cfg, control.Request{Command: "doctor"})
 	if err != nil {
-		return daemonError(cfg, err)
-	}
-	for _, check := range resp.Checks {
-		fmt.Fprintln(cfg.Stdout, check)
+		fmt.Fprintln(cfg.Stdout, "daemon: not responding (run lewp system start)")
+		exit = 1
+	} else {
+		for _, check := range resp.Checks {
+			fmt.Fprintln(cfg.Stdout, check)
+		}
 	}
 	fmt.Fprintln(cfg.Stdout, keychainTrustLine(context.Background(), cfg.CAPath, cfg.RunCommand))
-	return 0
+	for _, line := range installedDaemonChecks(cfg) {
+		fmt.Fprintln(cfg.Stdout, line)
+	}
+	return exit
+}
+
+// installedDaemonChecks compares the binary and config launchd is set up to run
+// against the CLI invoking doctor right now, so the user can tell whether
+// bin/install / bin/reinstall actually updated what launchd launches.
+func installedDaemonChecks(cfg Config) []string {
+	var lines []string
+	lines = append(lines, "cli binary: "+cfg.ProgramPath)
+
+	if _, err := os.Stat(cfg.PlistPath); err != nil {
+		lines = append(lines, fmt.Sprintf("launchd plist: missing (%s) — run lewp setup", cfg.PlistPath))
+		return lines
+	}
+	lines = append(lines, "launchd plist: "+cfg.PlistPath)
+
+	installed, err := launchd.ReadProgram(cfg.PlistPath)
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("installed program: unreadable (%v)", err))
+		return lines
+	}
+	lines = append(lines, "installed program: "+installed)
+
+	if _, err := os.Stat(installed); err != nil {
+		lines = append(lines, fmt.Sprintf("installed program: missing on disk (%s) — run bin/install", installed))
+	} else if installed != cfg.ProgramPath {
+		lines = append(lines, fmt.Sprintf("mismatch: launchd runs %s but this CLI is %s — run bin/reinstall and lewp system restart", installed, cfg.ProgramPath))
+	} else {
+		lines = append(lines, "installed program matches this CLI")
+	}
+
+	lines = append(lines, "current version: "+cfg.Version)
+	if out, err := cfg.RunCommandOutput(context.Background(), []string{installed, "version"}); err == nil {
+		installedVersion := firstVersionLine(out)
+		lines = append(lines, "installed version: "+installedVersion)
+		if cfg.Version != "" && cfg.Version != "dev" && !strings.Contains(installedVersion, cfg.Version) {
+			lines = append(lines, "version mismatch: installed daemon differs from this CLI — run bin/reinstall and lewp system restart")
+		}
+	} else {
+		lines = append(lines, fmt.Sprintf("installed version: unavailable (%v)", err))
+	}
+
+	lines = append(lines, "daemon log: "+cfg.LogDir+"/daemon.err.log")
+	return lines
+}
+
+// firstVersionLine pulls the version string out of `lewp version` output, whose
+// first line looks like "lewp version 1.2.3".
+func firstVersionLine(out string) string {
+	line := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
+	line = strings.TrimPrefix(line, "lewp version ")
+	if line == "" {
+		return "(empty)"
+	}
+	return line
 }
 
 func keychainTrustLine(ctx context.Context, certPath string, run func(context.Context, []string) error) string {
@@ -345,23 +419,40 @@ func runSystemStart(cfg Config) int {
 	}
 	if err := cfg.RunCommand(context.Background(), plan); err != nil {
 		if !isAlreadyLoadedLaunchdError(err) {
-			fmt.Fprintf(cfg.Stderr, "start: %v\n", err)
-			return 1
+			return reportSystemStartFailure(cfg, plan, err)
 		}
+		fmt.Fprintf(cfg.Stdout, "service already loaded; falling back to kickstart\n")
 		fallback, fallbackErr := launchd.Plan("restart", launchd.Config{Label: launchd.DefaultLabel, PlistPath: cfg.PlistPath})
 		if fallbackErr != nil {
 			fmt.Fprintln(cfg.Stderr, fallbackErr)
 			return 2
 		}
 		if err := cfg.RunCommand(context.Background(), fallback); err != nil {
-			fmt.Fprintf(cfg.Stderr, "start: %v\n", err)
-			return 1
+			return reportSystemStartFailure(cfg, fallback, err)
 		}
 		fmt.Fprintln(cfg.Stdout, strings.Join(fallback, " "))
 		return 0
 	}
 	fmt.Fprintln(cfg.Stdout, strings.Join(plan, " "))
 	return 0
+}
+
+// reportSystemStartFailure prints the exact failing launchctl command, the
+// error, where to find the daemon's captured startup errors, and — when
+// launchctl print is available — the service's current launchd state. It is the
+// diagnostics path for bootstrap/kickstart failures.
+func reportSystemStartFailure(cfg Config, failed []string, err error) int {
+	fmt.Fprintf(cfg.Stderr, "start: command failed: %s\n", strings.Join(failed, " "))
+	fmt.Fprintf(cfg.Stderr, "start: %v\n", err)
+	fmt.Fprintf(cfg.Stderr, "Inspect the daemon error log: %s/daemon.err.log\n", cfg.LogDir)
+	fmt.Fprintf(cfg.Stderr, "Then re-run: lewp system start (or: lewp logs --lines 50)\n")
+	if printPlan, planErr := launchd.Plan("print", launchd.Config{Label: launchd.DefaultLabel, PlistPath: cfg.PlistPath}); planErr == nil {
+		if out, outErr := cfg.RunCommandOutput(context.Background(), printPlan); outErr == nil && strings.TrimSpace(out) != "" {
+			fmt.Fprintf(cfg.Stderr, "$ %s\n", strings.Join(printPlan, " "))
+			fmt.Fprintln(cfg.Stderr, strings.TrimRight(out, "\n"))
+		}
+	}
+	return 1
 }
 
 func isAlreadyLoadedLaunchdError(err error) bool {
@@ -438,6 +529,15 @@ func runCommand(ctx context.Context, argv []string) error {
 		return fmt.Errorf("%s: %w: %s", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+func runCommandOutput(ctx context.Context, argv []string) (string, error) {
+	if len(argv) == 0 {
+		return "", nil
+	}
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func call(cfg Config, req control.Request) (control.Response, error) {

@@ -1,13 +1,18 @@
 package proxy
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/registry"
@@ -62,6 +67,28 @@ func TestProxyClosedTargetShowsDebugPage(t *testing.T) {
 	for _, want := range []string{"feature-1.audit.lewp is registered but not responding", "Target: 127.0.0.1:", "lewp list", "lewp doctor"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestProxyClosedTargetPageIncludesStartCommandAndPath(t *testing.T) {
+	store := openProxyStore(t)
+	port := freePort(t)
+	registerRoute(t, store, "feature-1.audit.lewp", port)
+	handler := New(store)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-1.audit.lewp/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	for _, want := range []string{
+		"Project: ",
+		"Root/name: audit/feature-1",
+		fmt.Sprintf("Try: PORT=%d bin/dev", port),
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("debug page missing %q:\n%s", want, body)
 		}
 	}
 }
@@ -156,6 +183,172 @@ func TestProxyUnknownNonLewpHostReturnsGeneric404(t *testing.T) {
 	body := rr.Body.String()
 	if strings.Contains(body, "no route registered") || strings.Contains(body, "lewp doctor") {
 		t.Fatalf("non-.lewp host should get generic 404, got:\n%s", body)
+	}
+}
+
+func TestProxyLogsRequestDetails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+
+	store := openProxyStore(t)
+	registerRoute(t, store, "feature-1.audit.lewp", port)
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+
+	req := httptest.NewRequest(http.MethodPost, "http://feature-1.audit.lewp/widgets", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	got := logs.String()
+	for _, want := range []string{
+		"host=feature-1.audit.lewp",
+		"method=POST",
+		"proto=http",
+		"path=/widgets",
+		"status=202",
+		"target=127.0.0.1:" + fmt.Sprint(port),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("request log missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestProxyLogsDefaultOKForHeaderlessResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+
+	store := openProxyStore(t)
+	registerRoute(t, store, "feature-1.audit.lewp", port)
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-1.audit.lewp/no-body", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got := logs.String(); !strings.Contains(got, "status=200") {
+		t.Fatalf("headerless response log should default to 200:\n%s", got)
+	}
+}
+
+func TestProxyLogsClosedTargetError(t *testing.T) {
+	store := openProxyStore(t)
+	registerRoute(t, store, "feature-1.audit.lewp", freePort(t))
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-1.audit.lewp/", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	got := logs.String()
+	if !strings.Contains(got, "status=502") || !strings.Contains(got, "error=") {
+		t.Fatalf("closed-target log missing status/error:\n%s", got)
+	}
+}
+
+func TestProxyLoggingPreservesWebSocketUpgrade(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, rw, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("upstream hijack: %v", err)
+			return
+		}
+		defer conn.Close()
+		fmt.Fprint(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n")
+		if err := rw.Flush(); err != nil {
+			t.Errorf("flush upgrade: %v", err)
+			return
+		}
+		line, err := rw.ReadString('\n')
+		if err != nil {
+			t.Errorf("read tunneled data: %v", err)
+			return
+		}
+		if line != "ping\n" {
+			t.Errorf("tunneled line=%q", line)
+			return
+		}
+		fmt.Fprint(rw, "pong\n")
+		_ = rw.Flush()
+	}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+
+	store := openProxyStore(t)
+	registerRoute(t, store, "feature-1.audit.lewp", port)
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+	proxyServer := httptest.NewServer(handler)
+	defer proxyServer.Close()
+	proxyPort := proxyServer.Listener.Addr().(*net.TCPAddr).Port
+
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(proxyPort)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET /socket HTTP/1.1\r\nHost: feature-1.audit.lewp\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	status, err := rw.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "101 Switching Protocols") {
+		t.Fatalf("upgrade status=%q", status)
+	}
+	for {
+		line, err := rw.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	fmt.Fprint(rw, "ping\n")
+	if err := rw.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rw.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "pong\n" {
+		t.Fatalf("tunneled response=%q", got)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		if strings.Contains(logs.String(), "status=101") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if logLine := logs.String(); !strings.Contains(logLine, "status=101") {
+		t.Fatalf("upgrade log missing 101:\n%s", logLine)
+	}
+}
+
+func TestProxyUnknownLewpHostLogsRequest(t *testing.T) {
+	store := openProxyStore(t)
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-2.audit.lewp/", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	got := logs.String()
+	if !strings.Contains(got, "host=feature-2.audit.lewp") || !strings.Contains(got, "status=404") {
+		t.Fatalf("unknown-host log missing host/status:\n%s", got)
 	}
 }
 

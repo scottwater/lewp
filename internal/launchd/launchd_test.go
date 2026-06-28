@@ -58,6 +58,54 @@ func TestWritePlistCreatesLaunchAgentFile(t *testing.T) {
 	}
 }
 
+func TestPlistDeclaresAllSocketActivationNames(t *testing.T) {
+	got := Plist(Config{Label: "dev.lewp.daemon", Program: "/usr/local/bin/lewp"})
+	for _, name := range SocketNames {
+		if !strings.Contains(got, "<key>"+name+"</key>") {
+			t.Fatalf("plist missing socket %q:\n%s", name, got)
+		}
+	}
+}
+
+func TestReadProgramRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev.lewp.daemon.plist")
+	if err := WritePlist(path, Config{Label: "dev.lewp.daemon", Program: "/opt/homebrew/bin/lewp"}); err != nil {
+		t.Fatal(err)
+	}
+	program, err := ReadProgram(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if program != "/opt/homebrew/bin/lewp" {
+		t.Fatalf("program=%q", program)
+	}
+}
+
+func TestReadProgramUnescapesXML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dev.lewp.daemon.plist")
+	if err := WritePlist(path, Config{Label: "dev.lewp.daemon", Program: "/tmp/a&b/lewp"}); err != nil {
+		t.Fatal(err)
+	}
+	program, err := ReadProgram(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if program != "/tmp/a&b/lewp" {
+		t.Fatalf("program=%q", program)
+	}
+}
+
+func TestPlanPrint(t *testing.T) {
+	got, err := Plan("print", Config{Label: "dev.lewp.daemon", PlistPath: "/tmp/x.plist"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(got, " ")
+	if !strings.Contains(joined, "launchctl print gui/") || !strings.HasSuffix(joined, "/dev.lewp.daemon") {
+		t.Fatalf("print plan=%v", got)
+	}
+}
+
 func TestPlanSystemCommands(t *testing.T) {
 	cfg := Config{Label: "dev.lewp.daemon", PlistPath: "/tmp/dev.lewp.daemon.plist"}
 	tests := map[string][]string{

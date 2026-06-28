@@ -35,6 +35,7 @@ lewp port [--name N] [--json|--shell]
 lewp release [--forget]
 lewp list [--all]
 lewp doctor
+lewp logs [--lines N] [--follow] [--path]
 lewp version
 lewp daemon
 ```
@@ -96,6 +97,14 @@ and print it. If `start` sees launchd bootstrap status 5 because the job is
 already loaded, it falls back to `launchctl kickstart -k`. `uninstall` also
 removes the Lewp CA trust from the login keychain, LaunchAgent plist, and
 resolver file.
+
+When `start` (or the kickstart fallback) fails for any other reason, it prints
+the exact launchctl command that failed, the underlying error, where to find the
+daemon's captured startup errors (`~/Library/Logs/lewp/daemon.err.log`, also via
+`lewp logs --lines 50`), and — when `launchctl print` is available — the
+service's current launchd state. The daemon's plist always declares the four
+socket-activation entries `HTTP`, `HTTP6`, `HTTPS`, and `HTTPS6` (loopback ports
+80/443 over IPv4 and IPv6), which the daemon claims back on startup.
 
 `status` checks the daemon control socket and prints:
 
@@ -271,13 +280,30 @@ daemon: ok
 control socket: ok
 https: configured (local CA present)
 keychain: trusted
+cli binary: /usr/local/bin/lewp
+launchd plist: /Users/scott/Library/LaunchAgents/dev.lewp.daemon.plist
+installed program: /usr/local/bin/lewp
+installed program matches this CLI
+current version: 0.1.0
+installed version: 0.1.0
+daemon log: /Users/scott/Library/Logs/lewp/daemon.err.log
 ```
 
 The current implementation checks daemon reachability, control socket
-reachability, local CA material, and keychain trust. The V1 doctor contract also
-tracks resolver file state, `.lewp` lookup, proxy port binding, registry
-readability, current-folder identity inference, current target port state, and
-hostname conflicts.
+reachability, local CA material, and keychain trust. It then compares the binary
+and config launchd is set up to run against the CLI you are invoking now, so you
+can tell whether `bin/install` / `bin/reinstall` updated what launchd launches.
+It reads the program path out of the installed launchd plist, confirms that
+program exists on disk, and runs `<installed> version` to compare the installed
+daemon's build against the current CLI. When they differ it prints a `mismatch:`
+or `version mismatch:` line pointing at `bin/reinstall` and `lewp system
+restart`. The installed-binary checks print even when the daemon is not
+responding (the common symptom of running the wrong binary), and `doctor` exits
+non-zero in that case.
+
+The V1 doctor contract also tracks resolver file state, `.lewp` lookup, proxy
+port binding, registry readability, current-folder identity inference, current
+target port state, and hostname conflicts.
 
 If setup has not created local CA material:
 
@@ -285,6 +311,31 @@ If setup has not created local CA material:
 https: not configured (run lewp setup)
 keychain: not trusted (run lewp setup)
 ```
+
+If launchd runs a different binary than the current CLI:
+
+```text
+mismatch: launchd runs /old/bin/lewp but this CLI is /usr/local/bin/lewp — run bin/reinstall and lewp system restart
+```
+
+## `lewp logs`
+
+Show or tail the launchd-managed daemon's logs. launchd writes the daemon's
+stdout and stderr to `daemon.out.log` and `daemon.err.log` under
+`~/Library/Logs/lewp` (set as `StandardOutPath` / `StandardErrorPath` in the
+plist). The daemon's stdout carries one request line per proxied request
+(host, method, scheme, upstream target, status, and any proxy error); startup
+failures land on stderr.
+
+```sh
+lewp logs              # last 50 lines of each log, with a header per file
+lewp logs --lines 200  # last 200 lines of each log
+lewp logs --follow     # stream new output until Ctrl-C (alias: -f)
+lewp logs --path       # print the two log file paths and exit
+```
+
+`lewp logs` only reads files; it never starts the daemon. When no logs exist
+yet, it prints where they will appear after `lewp setup && lewp system start`.
 
 ## `lewp version`
 
@@ -318,6 +369,24 @@ The daemon owns:
 - HTTP proxy listeners from launchd
 - HTTPS proxy listeners from launchd
 - SNI certificate minting from the persisted local CA
+
+The daemon logs one line per proxied request to stdout (captured in
+`daemon.out.log`); inspect it with `lewp logs`. Startup errors are written to
+stderr (`daemon.err.log`).
+
+## `.lewp` error pages
+
+The proxy serves debuggable HTML rather than blank gateway errors for the two
+common failure modes:
+
+- **Registered but not responding** — when a host is leased but its target port
+  is closed, the proxy returns `502` with the host, loopback target, project
+  path, root/name, last-seen time, release state, a suggested `PORT=<n> bin/dev`
+  start command, and `lewp list` / `lewp doctor` hints.
+- **Unregistered `.lewp` host** — when a `.lewp` name has no route, the proxy
+  returns `404` with the parsed instance/root labels and next steps
+  (`lewp lease`, `lewp list`, `lewp doctor`). Non-`.lewp` hosts get a plain
+  `404`. The host is HTML-escaped so a crafted hostname cannot inject markup.
 
 ## Browser URLs
 

@@ -29,6 +29,7 @@ Commands:
   release    Release the route for the current directory
   list       List active routes and their health
   doctor     Diagnose daemon state, DNS, and CA trust
+  logs       Show or tail the daemon logs
   version    Print version and build metadata
   daemon     Run the daemon in the foreground (normally launchd-managed)
   lease      Alias for add (kept for backward compatibility)
@@ -197,7 +198,31 @@ Usage:
   lewp doctor
 
 Reports daemon state, control-socket reachability, resolver configuration, and
-whether the local CA is trusted in the macOS keychain.
+whether the local CA is trusted in the macOS keychain. It also compares the
+binary launchd is configured to run against the CLI you are running now, so you
+can tell whether bin/install / bin/reinstall updated what launchd launches.
+`
+
+	logsHelp = `lewp logs — show or tail the launchd-managed daemon logs
+
+Reads the daemon's stdout/stderr logs under ~/Library/Logs/lewp (request
+routing details, startup errors). It only reads files; it never starts the
+daemon.
+
+Usage:
+  lewp logs [--lines N] [--follow] [--path]
+
+Flags:
+  --lines N   Number of trailing lines to show per log (default 50)
+  --follow    Print new log output as it is appended (Ctrl-C to stop)
+  -f          Alias for --follow
+  --path      Print the log file paths only and exit
+
+Examples:
+  lewp logs
+  lewp logs --lines 200
+  lewp logs --follow
+  lewp logs --path
 `
 
 	versionHelp = `lewp version — print version and build metadata

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const DefaultLabel = "dev.lewp.daemon"
@@ -111,7 +112,63 @@ func Plan(action string, cfg Config) ([]string, error) {
 		return []string{"launchctl", "kickstart", "-k", target + "/" + cfg.Label}, nil
 	case "uninstall":
 		return []string{"launchctl", "bootout", target, cfg.PlistPath}, nil
+	case "print":
+		return []string{"launchctl", "print", target + "/" + cfg.Label}, nil
 	default:
 		return nil, errors.New("unknown system action")
 	}
+}
+
+// SocketNames is the ordered set of socket-activation entries the plist must
+// declare so the daemon can claim loopback ports 80/443 over IPv4 and IPv6.
+// runDaemon reads exactly these names back via the launch_activate_socket API.
+var SocketNames = []string{"HTTP", "HTTP6", "HTTPS", "HTTPS6"}
+
+// ReadProgram returns the program the installed plist tells launchd to run
+// (the first entry of ProgramArguments). It lets the CLI compare what launchd
+// launches against the binary the user is invoking now.
+func ReadProgram(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	program, ok := programFromPlist(string(data))
+	if !ok {
+		return "", fmt.Errorf("no ProgramArguments found in %s", path)
+	}
+	return program, nil
+}
+
+// programFromPlist extracts the first <string> inside the ProgramArguments
+// array. It is a deliberately small scan rather than a full plist parser; the
+// plist we read is the one WritePlist produced.
+func programFromPlist(body string) (string, bool) {
+	idx := strings.Index(body, "<key>ProgramArguments</key>")
+	if idx < 0 {
+		return "", false
+	}
+	rest := body[idx:]
+	open := strings.Index(rest, "<string>")
+	if open < 0 {
+		return "", false
+	}
+	rest = rest[open+len("<string>"):]
+	close := strings.Index(rest, "</string>")
+	if close < 0 {
+		return "", false
+	}
+	return xmlUnescape(rest[:close]), true
+}
+
+func xmlUnescape(s string) string {
+	replacer := strings.NewReplacer(
+		"&amp;", "&",
+		"&lt;", "<",
+		"&gt;", ">",
+		"&quot;", "\"",
+		"&apos;", "'",
+		"&#39;", "'",
+		"&#34;", "\"",
+	)
+	return replacer.Replace(s)
 }

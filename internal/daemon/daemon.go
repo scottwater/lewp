@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	gotls "crypto/tls"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -22,6 +24,9 @@ type Config struct {
 	TLSConfig      *gotls.Config
 	CAPath         string
 	CAKeyPath      string
+	// RequestLog receives one line per proxied request. When nil it defaults to
+	// os.Stdout, which launchd routes to the daemon's StandardOutPath log file.
+	RequestLog io.Writer
 }
 
 func Serve(ctx context.Context, cfg Config) error {
@@ -34,6 +39,11 @@ func Serve(ctx context.Context, cfg Config) error {
 	}
 	defer store.Close()
 	handler := proxy.New(store)
+	requestLog := cfg.RequestLog
+	if requestLog == nil {
+		requestLog = os.Stdout
+	}
+	handler.Logger = log.New(requestLog, "", log.LstdFlags|log.LUTC)
 	tlsConfig := cfg.TLSConfig
 	if tlsConfig == nil && len(cfg.HTTPSListeners) > 0 {
 		var ca *localtls.CA
