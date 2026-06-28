@@ -1,8 +1,11 @@
 package tls
 
 import (
+	"crypto/rand"
 	gotls "crypto/tls"
 	"crypto/x509"
+	"errors"
+	"os"
 	"testing"
 )
 
@@ -69,6 +72,92 @@ func TestEnsureCALoadsPersistedCA(t *testing.T) {
 	if _, err := second.Leaf("feature-1.audit.lewp"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestEnsureCADoesNotOverwriteCorruptCA(t *testing.T) {
+	dir := t.TempDir()
+	certPath := dir + "/ca.pem"
+	keyPath := dir + "/ca-key.pem"
+	corrupt := []byte("not a valid PEM file")
+	if err := os.WriteFile(certPath, corrupt, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, corrupt, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA"); err == nil {
+		t.Fatal("EnsureCA succeeded over corrupt CA material")
+	}
+	got, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(corrupt) {
+		t.Fatal("EnsureCA overwrote existing CA certificate on load error")
+	}
+	gotKey, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotKey) != string(corrupt) {
+		t.Fatal("EnsureCA overwrote existing CA key on load error")
+	}
+}
+
+func TestEnsureCADoesNotOverwriteWhenKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	certPath := dir + "/ca.pem"
+	keyPath := dir + "/ca-key.pem"
+	ca, err := NewCA("Lewp Local Development CA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ca.Save(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA"); err == nil {
+		t.Fatal("EnsureCA succeeded with existing cert but missing key")
+	}
+	got, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatal("EnsureCA regenerated and overwrote existing certificate")
+	}
+}
+
+func TestSerialReturnsErrorOnEntropyFailure(t *testing.T) {
+	if _, err := serial(failingReader{}); err == nil {
+		t.Fatal("serial did not propagate entropy failure")
+	}
+}
+
+func TestSerialUsesProvidedEntropy(t *testing.T) {
+	first, err := serial(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := serial(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Cmp(second) == 0 {
+		t.Fatal("serial returned identical values from random entropy")
+	}
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("no entropy available")
 }
 
 func TestManagerEvictsOldSNILeaves(t *testing.T) {

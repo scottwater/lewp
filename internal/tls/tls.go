@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -38,8 +39,12 @@ func NewCA(commonName string) (*CA, error) {
 	if err != nil {
 		return nil, err
 	}
+	sn, err := serial(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          serial(),
+		SerialNumber:          sn,
 		Subject:               pkix.Name{CommonName: commonName},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().AddDate(10, 0, 0),
@@ -63,6 +68,12 @@ func EnsureCA(certPath, keyPath, commonName string) (*CA, error) {
 	if err == nil {
 		return ca, nil
 	}
+	// Only regenerate from a clean slate. If either file already exists, the
+	// load failure means corrupt, half-written, or unreadable material — never
+	// overwrite it, or we silently mint a new untrusted CA and break HTTPS.
+	if fileExists(certPath) || fileExists(keyPath) {
+		return nil, err
+	}
 	ca, err = NewCA(commonName)
 	if err != nil {
 		return nil, err
@@ -71,6 +82,11 @@ func EnsureCA(certPath, keyPath, commonName string) (*CA, error) {
 		return nil, err
 	}
 	return ca, nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func LoadCA(certPath, keyPath string) (*CA, error) {
@@ -121,8 +137,12 @@ func (c *CA) Leaf(host string) (*gotls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
+	sn, err := serial(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
 	tmpl := &x509.Certificate{
-		SerialNumber: serial(),
+		SerialNumber: sn,
 		Subject:      pkix.Name{CommonName: host},
 		DNSNames:     []string{host},
 		NotBefore:    time.Now().Add(-time.Hour),
@@ -210,10 +230,6 @@ func DefaultCAKeyPath() string {
 	return filepath.Join(home, "Library", "Application Support", "lewp", "ca-key.pem")
 }
 
-func serial() *big.Int {
-	n, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return big.NewInt(time.Now().UnixNano())
-	}
-	return n
+func serial(r io.Reader) (*big.Int, error) {
+	return rand.Int(r, new(big.Int).Lsh(big.NewInt(1), 128))
 }
