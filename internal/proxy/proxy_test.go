@@ -161,6 +161,23 @@ func TestProxyUnknownLewpHostShowsHelpfulPage(t *testing.T) {
 	}
 }
 
+func TestProxyUnknownConfiguredSuffixShowsLewpDebugPage(t *testing.T) {
+	store := openProxyStore(t)
+	handler := NewWithSuffixes(store, []string{"lewp", "local.todoordie.com"})
+
+	req := httptest.NewRequest(http.MethodGet, "http://missing.local.todoordie.com/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "missing.local.todoordie.com is not registered with Lewp") {
+		t.Fatalf("custom suffix did not get Lewp debug page:\n%s", body)
+	}
+}
+
 func TestProxyUnknownLewpHostEscapesHost(t *testing.T) {
 	store := openProxyStore(t)
 	handler := New(store)

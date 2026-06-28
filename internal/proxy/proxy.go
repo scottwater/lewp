@@ -17,12 +17,14 @@ import (
 	"time"
 
 	"github.com/scottwater/lewp/internal/registry"
+	"github.com/scottwater/lewp/internal/suffix"
 )
 
 type Proxy struct {
-	store    *registry.Store
-	lastSeen map[int64]time.Time
-	mu       sync.Mutex
+	store           *registry.Store
+	lastSeen        map[int64]time.Time
+	managedSuffixes []string
+	mu              sync.Mutex
 	// Logger, when set, receives one line per proxied request with the host,
 	// method, scheme, upstream target, and resulting status (or error). It is
 	// left nil in tests so request logging stays quiet unless asserted.
@@ -30,7 +32,15 @@ type Proxy struct {
 }
 
 func New(store *registry.Store) *Proxy {
-	return &Proxy{store: store, lastSeen: map[int64]time.Time{}}
+	return NewWithSuffixes(store, []string{suffix.BuiltIn})
+}
+
+func NewWithSuffixes(store *registry.Store, managed []string) *Proxy {
+	return &Proxy{
+		store:           store,
+		lastSeen:        map[int64]time.Time{},
+		managedSuffixes: suffix.Managed(managed),
+	}
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +52,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		if strings.HasSuffix(host, ".lewp") {
+		if proxyHostInManagedSuffix(host, p.managedSuffixes) {
 			writeUnknownRoutePage(w, host)
 			p.logRequest(r, host, "", http.StatusNotFound, errors.New("no route registered"))
 			return
@@ -78,6 +88,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rec.status = http.StatusOK
 	}
 	p.logRequest(r, host, target.Host, rec.status, proxyErr)
+}
+
+func proxyHostInManagedSuffix(host string, managed []string) bool {
+	if suffix.HostInManagedSuffix(host, managed) {
+		return true
+	}
+	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
+	for _, raw := range managed {
+		s, err := suffix.Normalize(raw)
+		if err != nil {
+			continue
+		}
+		if h == s || strings.HasSuffix(h, "."+s) {
+			return true
+		}
+	}
+	return false
 }
 
 // logRequest emits a single structured request line when a logger is attached.
@@ -235,7 +262,7 @@ func writeUnknownRoutePage(w http.ResponseWriter, host string) {
 
 	writePageHead(w, "No Lewp route for "+host)
 	fmt.Fprint(w, "<h1>Lewp: no route registered</h1>")
-	fmt.Fprintf(w, "<p class=\"sub\">Nothing is registered for <code>%s</code>.</p>", esc)
+	fmt.Fprintf(w, "<p class=\"sub\">%s is not registered with Lewp.</p>", esc)
 
 	if name != "" && root != "" {
 		fmt.Fprintf(w, "<p>This host looks like instance <code>%s</code> in root <code>%s</code>.</p>",

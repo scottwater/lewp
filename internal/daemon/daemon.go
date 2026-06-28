@@ -39,7 +39,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer store.Close()
-	handler := proxy.New(store)
+	handler := proxy.NewWithSuffixes(store, cfg.ManagedSuffixes)
 	requestLog := cfg.RequestLog
 	if requestLog == nil {
 		requestLog = os.Stdout
