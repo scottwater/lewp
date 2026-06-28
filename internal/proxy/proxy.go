@@ -151,19 +151,75 @@ func (p *Proxy) touch(ctx context.Context, leaseID int64) {
 	_ = p.store.TouchLastSeen(ctx, leaseID)
 }
 
+// pageCSS is a small, framework-neutral stylesheet shared by the proxy error
+// pages. It is intentionally lightweight (no external assets, no web fonts) so
+// the pages render instantly and read well in both light and dark mode.
+const pageCSS = `:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{margin:0;padding:3rem 1.25rem;font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#f5f5f7}
+main{max-width:42rem;margin:0 auto}
+h1{font-size:1.4rem;margin:0 0 .35rem}
+h2{font-size:1rem;margin:1.75rem 0 .5rem}
+.sub{color:#6e6e73;margin:0 0 1.5rem}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:.4rem 1.25rem;margin:1.5rem 0}
+dt{color:#6e6e73}
+dd{margin:0}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(127,127,127,.16);padding:.1rem .35rem;border-radius:.3rem}
+.cmd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#1d1d1f;color:#f5f5f7;padding:.85rem 1rem;border-radius:.6rem;overflow-x:auto;margin:.6rem 0 0;user-select:all}
+.hint{color:#6e6e73;font-size:.9rem;margin-top:1.5rem}
+ol{padding-left:1.25rem}
+li{margin:.25rem 0}
+a{color:#0a84ff}
+@media(prefers-color-scheme:dark){body{color:#f5f5f7;background:#1d1d1f}.cmd{background:#000;border:1px solid #333}}`
+
+// writePageHead emits the doctype, head, and opening <main> shared by the proxy
+// error pages. The pages stay deliberately script-free so a crafted hostname
+// can never smuggle executable markup past the HTML escaping.
+func writePageHead(w http.ResponseWriter, title string) {
+	fmt.Fprintf(w, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"+
+		"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"+
+		"<title>%s</title><style>%s</style></head><body><main>", html.EscapeString(title), pageCSS)
+}
+
+// writeCommandBlock renders a copyable, framework-neutral command block. The
+// block uses `user-select:all` so a single click selects the whole command for
+// copying, without needing any JavaScript.
+func writeCommandBlock(w http.ResponseWriter, command string) {
+	fmt.Fprintf(w, "<pre class=\"cmd\">%s</pre>", html.EscapeString(command))
+}
+
 func writeDebugPage(w http.ResponseWriter, r *http.Request, route registry.Record) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadGateway)
 	target := "127.0.0.1:" + fmt.Sprint(route.Port)
-	fmt.Fprintf(w, "<!doctype html><title>%s down</title>", html.EscapeString(route.Host))
+
+	writePageHead(w, route.Host+" is not responding")
 	fmt.Fprintf(w, "<h1>%s is registered but not responding</h1>", html.EscapeString(route.Host))
-	fmt.Fprintf(w, "<p>Target: %s</p>", html.EscapeString(target))
-	fmt.Fprintf(w, "<p>Project: %s</p>", html.EscapeString(route.Path))
-	fmt.Fprintf(w, "<p>Root/name: %s/%s</p>", html.EscapeString(route.Root), html.EscapeString(route.Name))
-	fmt.Fprintf(w, "<p>Last seen: %s</p>", html.EscapeString(route.LastSeenAt))
-	fmt.Fprintf(w, "<p>Release state: %s</p>", html.EscapeString(route.State))
-	fmt.Fprintf(w, "<p>Try: PORT=%d bin/dev</p>", route.Port)
-	fmt.Fprint(w, "<p>Hints: lewp list; lewp doctor</p>")
+	fmt.Fprint(w, "<p class=\"sub\">Lewp has a route for this host, but nothing is listening on its loopback port yet.</p>")
+
+	fmt.Fprint(w, "<dl>")
+	fmt.Fprintf(w, "<dt>Target</dt><dd><code>%s</code></dd>", html.EscapeString(target))
+	fmt.Fprintf(w, "<dt>Project</dt><dd><code>%s</code></dd>", html.EscapeString(route.Path))
+	fmt.Fprintf(w, "<dt>Root/name</dt><dd>%s / %s</dd>", html.EscapeString(route.Root), html.EscapeString(route.Name))
+	fmt.Fprintf(w, "<dt>Last seen</dt><dd>%s</dd>", html.EscapeString(lastSeenOrNever(route.LastSeenAt)))
+	fmt.Fprintf(w, "<dt>Release state</dt><dd>%s</dd>", html.EscapeString(route.State))
+	fmt.Fprint(w, "</dl>")
+
+	fmt.Fprint(w, "<h2>Start your app on the leased port</h2>")
+	fmt.Fprint(w, "<p>Lewp routes traffic but never starts processes. Run your usual dev command with this port, then reload:</p>")
+	writeCommandBlock(w, fmt.Sprintf("PORT=%d <your dev command>", route.Port))
+
+	fmt.Fprintf(w, "<p class=\"hint\">Inspect routes with <code>lewp list</code> or diagnose with <code>lewp doctor</code>.</p>")
+	fmt.Fprintf(w, "</main></body></html>")
+}
+
+// lastSeenOrNever keeps the debug page readable when a lease has never seen
+// traffic (empty timestamp) by printing a word instead of a blank field.
+func lastSeenOrNever(lastSeen string) string {
+	if strings.TrimSpace(lastSeen) == "" {
+		return "never"
+	}
+	return lastSeen
 }
 
 // writeUnknownRoutePage renders a Lewp-branded 404 for a `.lewp` hostname that
@@ -177,9 +233,9 @@ func writeUnknownRoutePage(w http.ResponseWriter, host string) {
 	esc := html.EscapeString(host)
 	root, name := parseLewpHost(host)
 
-	fmt.Fprintf(w, "<!doctype html><meta charset=\"utf-8\"><title>No Lewp route for %s</title>", esc)
+	writePageHead(w, "No Lewp route for "+host)
 	fmt.Fprint(w, "<h1>Lewp: no route registered</h1>")
-	fmt.Fprintf(w, "<p>Nothing is registered for <code>%s</code>.</p>", esc)
+	fmt.Fprintf(w, "<p class=\"sub\">Nothing is registered for <code>%s</code>.</p>", esc)
 
 	if name != "" && root != "" {
 		fmt.Fprintf(w, "<p>This host looks like instance <code>%s</code> in root <code>%s</code>.</p>",
@@ -188,12 +244,15 @@ func writeUnknownRoutePage(w http.ResponseWriter, host string) {
 		fmt.Fprintf(w, "<p>This host looks like root <code>%s</code>.</p>", html.EscapeString(root))
 	}
 
-	fmt.Fprint(w, "<h2>Next steps</h2><ol>")
-	fmt.Fprint(w, "<li>From the project folder you want this host to point at, run <code>lewp add</code> to claim a port and hostname.</li>")
+	fmt.Fprint(w, "<h2>Next steps</h2>")
+	fmt.Fprint(w, "<p>From the project folder you want this host to point at, claim a port and hostname:</p>")
+	writeCommandBlock(w, "lewp add")
+	fmt.Fprint(w, "<ol>")
 	fmt.Fprint(w, "<li>See what is currently registered: <code>lewp list</code>.</li>")
 	fmt.Fprint(w, "<li>Check daemon, DNS, and TLS health: <code>lewp doctor</code>.</li>")
 	fmt.Fprint(w, "</ol>")
-	fmt.Fprint(w, "<p>Lewp routes traffic to developer-started processes; it does not start them for you.</p>")
+	fmt.Fprint(w, "<p class=\"hint\">Lewp routes traffic to developer-started processes; it does not start them for you.</p>")
+	fmt.Fprintf(w, "</main></body></html>")
 }
 
 // parseLewpHost splits a `<instance>.<root>.lewp` (or `<root>.lewp`) hostname

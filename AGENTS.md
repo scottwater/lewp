@@ -14,11 +14,19 @@ DNS responder, and a local control socket.
 
 ## Status
 
-Pre-implementation. The repo currently holds a vision (`overview.md`) and a spec
-under `docs/`:
+Implemented and building. The single Go binary ships the CLI and daemon roles,
+the SQLite registry, the `.lewp` DNS responder, the HTTP/HTTPS proxy, and the
+launchd integration described below.
+
+User-facing contract (current):
+
+- `README.md` — install, setup, and quick start
+- `DOCUMENTATION.md` — the full CLI reference
+
+Design and history:
 
 - `docs/requirements.md` — the V1 product contract and CLI behavior
-- `docs/plan.md` — the build plan and locked design decisions
+- `docs/plan.md` — the build plan and locked design decisions (design rationale)
 - `docs/technical-appendix.md` — reference-project observations and open
   implementation questions
 

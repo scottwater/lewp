@@ -432,6 +432,70 @@ func TestRunSystemUninstallPrintsKeychainCleanup(t *testing.T) {
 	}
 }
 
+func TestRunSystemUninstallKeepsAndReportsCAFiles(t *testing.T) {
+	var stdout bytes.Buffer
+	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	resolverPath := dir + "/resolver/lewp"
+	// The real default CA dir is "~/Library/Application Support/lewp", which
+	// contains a space. Mirror that here so the test proves the safe-removal
+	// guidance shell-quotes paths rather than emitting an unsafe `rm a b`.
+	caDir := dir + "/Application Support/lewp"
+	if err := os.MkdirAll(caDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	caPath := caDir + "/ca.pem"
+	caKeyPath := caDir + "/ca-key.pem"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{caPath, caKeyPath} {
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolverPath, []byte("nameserver 127.0.0.1\nport 15353\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"system", "uninstall"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    plistPath,
+		ResolverPath: resolverPath,
+		CAPath:       caPath,
+		CAKeyPath:    caKeyPath,
+		Stdout:       &stdout,
+		Stderr:       &bytes.Buffer{},
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d", code)
+	}
+	// Uninstall leaves the CA material on disk by default.
+	if _, err := os.Stat(caPath); err != nil {
+		t.Fatalf("CA cert should be retained: %v", err)
+	}
+	if _, err := os.Stat(caKeyPath); err != nil {
+		t.Fatalf("CA key should be retained: %v", err)
+	}
+	got := stdout.String()
+	// The retained-file list shows the raw paths, but the copy-paste removal
+	// command must single-quote each path so the embedded space is safe.
+	wantRm := "rm '" + caPath + "' '" + caKeyPath + "'"
+	for _, want := range []string{"kept local CA files", caPath, caKeyPath, wantRm} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("uninstall output missing %q:\n%s", want, got)
+		}
+	}
+	// Guard against a regression to the unsafe unquoted form.
+	if strings.Contains(got, "rm "+caPath+" ") {
+		t.Fatalf("uninstall printed unsafe unquoted rm command:\n%s", got)
+	}
+}
+
 func TestRunHelpVariantsPrintToStdout(t *testing.T) {
 	for _, args := range [][]string{{"help"}, {"--help"}, {"-h"}} {
 		var stdout, stderr bytes.Buffer

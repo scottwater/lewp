@@ -72,16 +72,25 @@ Example output:
 ```sh
 PORT=42137
 URL=http://feature-1.audit.lewp
+HTTPS_URL=https://feature-1.audit.lewp
 HOST=feature-1.audit.lewp
+STATE=new
+HOST_KIND=instance
 ```
+
+`add` always prints both the HTTP `URL` and the `HTTPS_URL` whenever the lease
+has a host; whether the browser accepts the HTTPS one depends on `lewp setup`
+having trusted the local CA (see [HTTPS](#https)). `STATE` and `HOST_KIND` are
+descriptive; use `--shell` for clean `export` lines (which omit them) when you
+want `eval "$(lewp add --shell)"`.
 
 Start your app yourself on the leased port:
 
 ```sh
-PORT=42137 bin/dev
+PORT=42137 <your dev command>
 ```
 
-Then open:
+Then open either scheme:
 
 ```text
 http://feature-1.audit.lewp
@@ -94,6 +103,105 @@ Check or relocate a route later:
 lewp info                                  # show this directory's route and ports
 lewp move --from ~/projects/audit/feature-1   # bring its route here, same port
 ```
+
+## Identity and configuration
+
+A route's hostname is `<name>.<root>.lewp`. Lewp resolves `root`, `name`, and an
+optional explicit `host` from the first source that provides each, in priority
+order:
+
+1. **Flags** — `lewp add --root audit --name feature-1 --host audit.lewp`
+2. **Environment** — `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
+3. **Config file** — the nearest `.lewp.local.toml` up the directory tree
+4. **Inference** — parent directory → `root`, current directory → `name`
+
+The environment variables are read from the CLI process and forwarded to the
+daemon (the daemon never reads its own environment), so they work per-shell:
+
+```sh
+LEWP_ROOT=audit LEWP_NAME=feature-1 lewp add
+export LEWP_HOST=sso.audit.lewp     # pin an explicit host for this shell
+```
+
+For a stable, path-independent identity, write a `.lewp.local.toml` with
+`lewp init`:
+
+```sh
+lewp init --root audit --name feature-1
+# writes ./.lewp.local.toml and prints a .git/info/exclude line to keep it local
+```
+
+```toml
+root = "audit"
+name = "feature-1"
+host = "audit.lewp"   # optional explicit host
+```
+
+`lewp init` only writes the file; it never contacts the daemon or leases
+anything. The file is meant to stay uncommitted — `init` prints the
+`.git/info/exclude` line that keeps it out of version control. Re-run with
+`--force` to overwrite an existing file (rebuilt from flags and inference, never
+from the file being replaced).
+
+## Worktree walkthrough
+
+Lewp shines with `git worktree`, where each checkout needs its own stable URL
+and ports. Suppose your worktrees live somewhere non-standard — not under a
+tidy `audit/<name>` layout:
+
+```sh
+cd ~/scratch/wt/audit-login-fix          # a worktree checkout
+lewp add
+# inferred root=wt name=audit-login-fix      (note on stderr)
+# PORT=42150
+# URL=http://audit-login-fix.wt.lewp
+# HTTPS_URL=https://audit-login-fix.wt.lewp
+# HOST=audit-login-fix.wt.lewp
+# STATE=new
+# HOST_KIND=instance
+```
+
+If the inferred `root`/`name` are not what you want, pin them explicitly so the
+host is predictable regardless of where the worktree lives:
+
+```sh
+lewp init --root audit --name login-fix     # write .lewp.local.toml
+lewp release --forget                        # drop the inferred wt.lewp route
+lewp add                                      # now -> login-fix.audit.lewp
+```
+
+If two worktrees infer the same host, the second is given a deterministic
+suffix instead of stealing the first owner; pin distinct names (above) to avoid
+the suffix. Start your app on the leased port, then inspect and, after moving the
+worktree, relocate the route so its URL follows it:
+
+```sh
+PORT=42150 <your dev command>                 # Lewp routes; it never starts apps
+lewp info                                      # this directory's route and ports
+
+git worktree move ~/scratch/wt/audit-login-fix ~/projects/audit/login-fix
+cd ~/projects/audit/login-fix
+lewp move --from ~/scratch/wt/audit-login-fix  # same host and port, new directory
+```
+
+## HTTPS
+
+`lewp setup` generates a local development CA and trusts it in the macOS login
+keychain, so every `.lewp` host is reachable over `https://` with a certificate
+the browser accepts. Lewp mints per-host leaf certificates on demand from that
+CA; there is no per-project TLS config.
+
+Browser support in V1:
+
+- **Supported:** Safari and every Chromium-based browser (Chrome, Brave, Arc,
+  Edge, Helium). These trust the macOS system keychain, so they pick up the CA
+  automatically once `lewp setup` runs.
+- **Not supported:** Firefox. Firefox ships its own NSS trust store and ignores
+  the macOS keychain, so it will warn on `.lewp` HTTPS in V1. Use Safari or a
+  Chromium browser for HTTPS, or stay on `http://` in Firefox. NSS/`certutil`
+  trust is planned for a later release.
+
+Run `lewp doctor` to confirm the CA is present and trusted.
 
 ## CLI Reference
 

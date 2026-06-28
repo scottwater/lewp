@@ -64,10 +64,16 @@ func TestProxyClosedTargetShowsDebugPage(t *testing.T) {
 		t.Fatalf("status=%d", rr.Code)
 	}
 	body := rr.Body.String()
-	for _, want := range []string{"feature-1.audit.lewp is registered but not responding", "Target: 127.0.0.1:", "lewp list", "lewp doctor"} {
+	for _, want := range []string{"feature-1.audit.lewp is registered but not responding", "127.0.0.1:", "lewp list", "lewp doctor"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("content-type=%q", ct)
+	}
+	if !strings.Contains(body, "<style>") {
+		t.Fatalf("debug page missing inline stylesheet:\n%s", body)
 	}
 }
 
@@ -83,13 +89,17 @@ func TestProxyClosedTargetPageIncludesStartCommandAndPath(t *testing.T) {
 
 	body := rr.Body.String()
 	for _, want := range []string{
-		"Project: ",
-		"Root/name: audit/feature-1",
-		fmt.Sprintf("Try: PORT=%d bin/dev", port),
+		"<dt>Project</dt>",
+		"audit / feature-1",
+		fmt.Sprintf("PORT=%d &lt;your dev command&gt;", port),
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("debug page missing %q:\n%s", want, body)
 		}
+	}
+	// The start command must stay framework-neutral: no assumed tooling.
+	if strings.Contains(body, "bin/dev") || strings.Contains(body, "npm ") || strings.Contains(body, "rails ") {
+		t.Fatalf("debug page leaks framework-specific start command:\n%s", body)
 	}
 }
 

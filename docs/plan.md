@@ -2,8 +2,10 @@
 
 ## Context
 
-The repo currently holds only a vision (`overview.md`) and a spec (`docs/requirements.md`,
-`docs/technical-appendix.md`) — no code yet. The goal is a macOS-first Go binary that, from
+This plan is now implemented: the single Go binary ships the CLI and daemon roles, the SQLite
+registry, the `.lewp` DNS responder, the HTTP/HTTPS proxy, and the launchd integration. It is
+retained as the design rationale and history behind those decisions; the user-facing contract
+lives in `README.md` and `DOCUMENTATION.md`. The goal is a macOS-first Go binary that, from
 any project-instance directory, leases a stable loopback port, assigns a predictable
 `.lewp` hostname, and reverse-proxies browser traffic to a developer-started process. It must
 make callback URLs / SSO redirects / cookies / multi-worktree dev predictable

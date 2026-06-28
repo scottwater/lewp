@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -196,8 +197,16 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("info code=%d stderr=%q", code, stderr.String())
 	}
 	infoOut := stdout.String()
-	if !strings.Contains(infoOut, "ROUTES\n") || !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "PATH="+srcDir) {
+	if !strings.Contains(infoOut, "ROUTES\n") || !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "DIR="+srcDir) {
 		t.Fatalf("info output missing route fields: %q", infoOut)
+	}
+	// HTTPS_URL accompanies the HTTP URL for a routed host.
+	if !strings.Contains(infoOut, "HTTPS_URL=https://feature-1.audit.lewp") {
+		t.Fatalf("info output missing HTTPS_URL: %q", infoOut)
+	}
+	// The misleading PATH= key (which shadows $PATH) must be gone.
+	if strings.Contains(infoOut, "PATH=") {
+		t.Fatalf("info output should not emit PATH= (use DIR=): %q", infoOut)
 	}
 	if !strings.Contains(infoOut, "PORTS\n") || !strings.Contains(infoOut, "NAME=vite") || !strings.Contains(infoOut, "STATE=down") {
 		t.Fatalf("info output missing bare port fields: %q", infoOut)
@@ -210,8 +219,11 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("move code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") || !strings.Contains(stdout.String(), "PATH="+destDir) {
+	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") || !strings.Contains(stdout.String(), "DIR="+destDir) {
 		t.Fatalf("move output missing moved route: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "PATH=") {
+		t.Fatalf("move output should not emit PATH= (use DIR=): %q", stdout.String())
 	}
 
 	// source still owns its bare port; route moved to destination.
@@ -355,11 +367,17 @@ func TestRunListAlignsColumnsWithMixedHosts(t *testing.T) {
 	if len(lines) != 4 {
 		t.Fatalf("list lines=%d want 4:\n%s", len(lines), got)
 	}
+	nameCol := strings.Index(lines[0], "NAME")
+	kindCol := strings.Index(lines[0], "KIND")
 	portCol := strings.Index(lines[0], "PORT")
 	stateCol := strings.Index(lines[0], "STATE")
 	pathCol := strings.Index(lines[0], "PATH")
-	if portCol < 0 || stateCol < 0 || pathCol < 0 {
+	if nameCol < 0 || kindCol < 0 || portCol < 0 || stateCol < 0 || pathCol < 0 {
 		t.Fatalf("list header missing columns:\n%s", got)
+	}
+	// The human table must surface the lease NAME and KIND.
+	if !strings.Contains(got, "route") || !strings.Contains(got, "port") {
+		t.Fatalf("list output missing KIND values:\n%s", got)
 	}
 	for _, line := range lines[1:] {
 		if !isSpace(line[portCol-1]) || !isSpace(line[stateCol-1]) || !isSpace(line[pathCol-1]) {
@@ -373,4 +391,55 @@ func TestRunListAlignsColumnsWithMixedHosts(t *testing.T) {
 
 func isSpace(b byte) bool {
 	return b == ' '
+}
+
+// TestRunListJSONEmitsEntries proves `lewp list --json` returns a parseable JSON
+// array carrying each entry's host, kind, name, and state.
+func TestRunListJSONEmitsEntries(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"list", "--json"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("list --json code=%d stderr=%q", code, stderr.String())
+	}
+	var entries []control.ListEntry
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("list --json not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if len(entries) != 2 {
+		t.Fatalf("list --json entries=%d want 2:\n%s", len(entries), stdout.String())
+	}
+	var sawRoute, sawPort bool
+	for _, e := range entries {
+		switch e.Kind {
+		case "route":
+			sawRoute = true
+			if e.Host != "app.work.lewp" {
+				t.Fatalf("route entry host=%q", e.Host)
+			}
+		case "port":
+			sawPort = true
+			if e.Name != "vite" {
+				t.Fatalf("port entry name=%q", e.Name)
+			}
+		}
+		if e.State == "" {
+			t.Fatalf("entry missing state: %+v", e)
+		}
+	}
+	if !sawRoute || !sawPort {
+		t.Fatalf("list --json missing route or port kind: %s", stdout.String())
+	}
 }

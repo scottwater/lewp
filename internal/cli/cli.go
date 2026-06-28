@@ -416,12 +416,52 @@ func runSystem(cfg Config) int {
 				}
 				fmt.Fprintf(cfg.Stdout, "removed %s\n", path)
 			}
+			reportRetainedCA(cfg)
 		}
 		return 0
 	default:
 		fmt.Fprintf(cfg.Stderr, "unknown system action: %s\n", cfg.Args[1])
 		return 2
 	}
+}
+
+// reportRetainedCA tells the user that uninstall intentionally leaves the local
+// CA material on disk (so a later `lewp setup` reuses the same already-trusted
+// CA) and prints the exact files plus how to delete them by hand. Keychain
+// trust, the plist, and the resolver file have already been removed by the time
+// this runs; only the on-disk CA cert/key remain.
+func reportRetainedCA(cfg Config) {
+	retained := make([]string, 0, 2)
+	for _, path := range []string{cfg.CAPath, cfg.CAKeyPath} {
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			retained = append(retained, path)
+		}
+	}
+	if len(retained) == 0 {
+		return
+	}
+	fmt.Fprintln(cfg.Stdout, "kept local CA files (a later lewp setup reuses them):")
+	for _, path := range retained {
+		fmt.Fprintf(cfg.Stdout, "  %s\n", path)
+	}
+	quoted := make([]string, len(retained))
+	for i, path := range retained {
+		quoted[i] = shellQuote(path)
+	}
+	// The default CA path lives under "~/Library/Application Support/lewp",
+	// which contains a space, so each path must be single-quoted; an unquoted
+	// `rm a b c` would target the wrong files.
+	fmt.Fprintf(cfg.Stdout, "To remove them manually: rm %s\n", strings.Join(quoted, " "))
+}
+
+// shellQuote wraps s in single quotes so it survives copy-paste into a POSIX
+// shell verbatim, escaping any embedded single quote with the standard
+// '\” sequence. It is used for the safe-removal guidance printed on uninstall.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func runSystemStart(cfg Config) int {

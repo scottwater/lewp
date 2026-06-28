@@ -188,9 +188,13 @@ Flags:
   --json          Emit the lease as a JSON object
   --shell         Emit shell "export" lines for use with eval
 
+--shell emits one "export" line per value, so evaluate it rather than capturing
+it into a single variable. For just the number, prefer --json with jq.
+
 Examples:
   lewp port --name vite
-  PORT=$(lewp port --name vite --shell)
+  eval "$(lewp port --name vite --shell)"
+  VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
 `
 
 	releaseHelp = `lewp release — release the route for the current directory
@@ -206,15 +210,21 @@ Examples:
   lewp release --forget
 `
 
-	listHelp = `lewp list — list routes and their health
+	listHelp = `lewp list — list routes and bare ports with their health
 
-States are derived from TCP checks: up, down, or stale.
+States are derived from TCP checks: up, down, or stale. The human table has
+HOST, NAME, KIND, PORT, STATE, and PATH columns; bare ports show "-" for HOST.
 
 Usage:
-  lewp list [--all]
+  lewp list [--all] [--json]
 
 Flags:
-  --all   Include released and stale history, not just active routes
+  --all    Include released and stale history, not just active entries
+  --json   Emit the entries as a JSON array
+
+Examples:
+  lewp list
+  lewp list --json | jq '.[] | select(.kind == "route")'
 `
 
 	doctorHelp = `lewp doctor — diagnose daemon, DNS, and CA trust

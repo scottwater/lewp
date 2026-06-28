@@ -27,12 +27,13 @@ install.
 ```sh
 lewp setup
 lewp system start|stop|status|restart|uninstall
-lewp add [--root R] [--name N] [--host H] [--json|--shell]
+lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--json|--shell]
+lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--json]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
 lewp release [--forget]
-lewp list [--all]
+lewp list [--all] [--json]
 lewp doctor
 lewp logs [--lines N] [--follow] [--path]
 lewp version
@@ -124,24 +125,40 @@ lewp add --json
 lewp add --shell
 ```
 
-Default output:
+Default (human) output:
 
 ```sh
 PORT=42137
 URL=http://feature-1.audit.lewp
+HTTPS_URL=https://feature-1.audit.lewp
 HOST=feature-1.audit.lewp
+STATE=new
+HOST_KIND=instance
 ```
 
-`--shell` prefixes values with `export`:
+`URL` is always `http://<host>` and `HTTPS_URL` is always `https://<host>`; both
+are emitted whenever the lease has a routable host (the `HTTPS_URL` line is
+printed regardless of CA trust — whether the browser accepts it depends on
+`lewp setup` having trusted the local CA; see [Browser URLs](#browser-urls)).
+`STATE` is `new`, `reused`, or `conflict-renamed`, and `HOST_KIND` is
+`instance`, `apex`, or `custom`. Because `.lewp` names resolve only to loopback,
+the human output also prints a `# <host> is local-only (resolves to 127.0.0.1)`
+note on stderr.
+
+`--shell` prefixes the assignable values with `export` and omits the descriptive
+`STATE`/`HOST_KIND` lines and the stderr note, so `eval "$(lewp add --shell)"`
+sets only the variables you want and nothing else:
 
 ```sh
 export PORT=42137
 export URL=http://feature-1.audit.lewp
+export HTTPS_URL=https://feature-1.audit.lewp
 export HOST=feature-1.audit.lewp
 ```
 
-`--json` prints machine-readable fields including root/name/host metadata,
-path, kind, source fields, warnings, and release state.
+`--json` prints machine-readable fields including `url`, `https_url`,
+root/name/host metadata, path, kind, host_kind, source fields, warnings, lease
+state, and release state.
 
 Host rules:
 
@@ -150,13 +167,20 @@ Host rules:
 - custom `.lewp` override: `lewp add --host sso.audit.lewp`
 - non-`.lewp` hosts are rejected
 
-Discovery order:
+Discovery order (each of `root`, `name`, and `host` is resolved from the first
+source that provides it):
 
 1. flags: `--root`, `--name`, `--host`
-2. nearest `.lewp.local.toml`
-3. path/git worktree inference
+2. environment: `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
+3. nearest `.lewp.local.toml` up the directory tree
+4. path/git worktree inference (parent dir → root, current dir → name)
 
-Example `.lewp.local.toml`:
+The `LEWP_*` variables are read from the CLI process and forwarded to the daemon
+over the control socket; the daemon never honors its own environment. Inferred
+values are reported as `# inferred root=...` / `# inferred name=...` notes on
+stderr so `--shell` and `$(...)` capture stay clean.
+
+Example `.lewp.local.toml` (write one with [`lewp init`](#lewp-init)):
 
 ```toml
 root = "audit"
@@ -164,8 +188,37 @@ name = "feature-1"
 host = "audit.lewp"
 ```
 
-If another folder already owns a host, Lewp keeps the original owner and assigns
-a deterministic suffix to the new folder.
+By default an inferred host that collides with another folder's is given a
+deterministic suffix (the original owner is kept). An explicit `--host` that
+collides fails with the conflicting path and cleanup guidance; pass
+`--auto-suffix` to take a deterministic suffix instead of failing.
+
+## `lewp init`
+
+Generate a `.lewp.local.toml` for the current directory so its identity is
+explicit and stable regardless of how the folder is laid out. `init` only writes
+the file — it never contacts the daemon, allocates a port, or leases a route.
+
+```sh
+lewp init
+lewp init --root audit --name feature-1
+lewp init --host audit.lewp
+lewp init --force
+```
+
+Values come from flags first, then path inference (the same inference `add`
+uses). Flags:
+
+- `--root R` — root segment to record (defaults to the inferred root)
+- `--name N` — instance segment to record (defaults to the inferred name)
+- `--host H` — record an explicit full `.lewp` host (e.g. `audit.lewp`)
+- `--force` — overwrite an existing file; the replacement is rebuilt from flags
+  and inference only, never from the file being replaced
+
+The file is meant to stay uncommitted. `init` prints the `.git/info/exclude`
+line that keeps it out of version control. Without `--force`, `init` refuses to
+clobber an existing `.lewp.local.toml` (even a malformed one) with an
+`already exists` message.
 
 ## `lewp info`
 
@@ -184,16 +237,21 @@ Default output for a directory with one route and one bare port:
 ROUTES
 PORT=42137
 URL=http://feature-1.audit.lewp
+HTTPS_URL=https://feature-1.audit.lewp
 HOST=feature-1.audit.lewp
 STATE=up
-PATH=/Users/scott/projects/audit/feature-1
+DIR=/Users/scott/projects/audit/feature-1
 
 PORTS
 NAME=vite
 PORT=42138
 STATE=down
-PATH=/Users/scott/projects/audit/feature-1
+DIR=/Users/scott/projects/audit/feature-1
 ```
+
+The project directory is reported as `DIR=` (not `PATH=`) so the env-style
+output never shadows the shell's `$PATH`. A routed host also prints a
+`# <host> is local-only (resolves to 127.0.0.1)` note on stderr.
 
 If no route or port is registered for the current directory, `info` exits
 non-zero and points you at the commands that create or relocate one:
@@ -219,7 +277,8 @@ lewp move --from ~/projects/audit/old-feature --json
 `--from` is required and names the directory that currently owns the route. The
 move is atomic: the source directory is left with no route (`lewp info` there
 reports none) and the current directory becomes the owner with the same port and
-host. The port is never reallocated.
+host. The port is never reallocated. The moved route is printed in the same
+env-style block as `info` (`PORT`, `URL`, `HTTPS_URL`, `HOST`, `DIR`).
 
 If the source directory has no active route, or the current directory already
 owns an active route, `move` fails with a clear error and changes nothing.
@@ -234,8 +293,17 @@ lewp port --name vite
 lewp port --name vite --shell
 ```
 
-Use this for internal services that need unique local ports across worktrees,
-such as Vite:
+`port` prints the same env-style output as `add` minus the host fields: the
+default (human) form adds a `STATE=` line, and `--shell` emits a single
+`export PORT=<n>` line. Because `--shell` emits one `export` line per value,
+evaluate it rather than capturing it into a variable:
+
+```sh
+eval "$(lewp port --name vite --shell)"
+```
+
+For just the number, prefer `--json` with `jq` — for internal services that need
+unique local ports across worktrees, such as Vite:
 
 ```sh
 export VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
@@ -255,18 +323,23 @@ the remembered identity/history for the current folder.
 
 ## `lewp list`
 
-List registry entries.
+List registry entries (routes and bare ports).
 
 ```sh
 lewp list
 lewp list --all
+lewp list --json
 ```
 
-Columns:
+Human columns:
 
 ```text
-HOST    PORT    STATE    PATH
+HOST              NAME       KIND   PORT   STATE  PATH
+feature-1.audit.lewp  feature-1  route  42137  up     /Users/scott/projects/audit/feature-1
+-                 vite       port   42138  down   /Users/scott/projects/audit/feature-1
 ```
+
+`KIND` is `route` or `port`; a bare port has no host, so `HOST` shows `-`.
 
 States:
 
@@ -276,6 +349,13 @@ States:
 - `released`: route was explicitly released
 
 Default list hides released routes. `--all` includes registry history.
+
+`--json` emits a JSON array of entries (always an array, never `null`), each
+with `host`, `port`, `state`, `path`, `kind`, `root`, and `name`:
+
+```sh
+lewp list --json | jq '.[] | select(.kind == "route")'
+```
 
 ## `lewp doctor`
 
@@ -385,12 +465,15 @@ stderr (`daemon.err.log`).
 ## `.lewp` error pages
 
 The proxy serves debuggable HTML rather than blank gateway errors for the two
-common failure modes:
+common failure modes. Both pages share a small, framework-neutral inline
+stylesheet (no external assets, no web fonts, no JavaScript) that renders in
+light and dark mode, and present the suggested command in a copyable block:
 
 - **Registered but not responding** — when a host is leased but its target port
   is closed, the proxy returns `502` with the host, loopback target, project
-  path, root/name, last-seen time, release state, a suggested `PORT=<n> bin/dev`
-  start command, and `lewp list` / `lewp doctor` hints.
+  path, root/name, last-seen time (or `never`), release state, a copyable
+  framework-neutral `PORT=<n> <your dev command>` start command, and
+  `lewp list` / `lewp doctor` hints.
 - **Unregistered `.lewp` host** — when a `.lewp` name has no route, the proxy
   returns `404` with the parsed instance/root labels and next steps
   (`lewp add`, `lewp list`, `lewp doctor`). Non-`.lewp` hosts get a plain
@@ -408,6 +491,17 @@ https://<host>
 DNS resolves all `.lewp` names to loopback. The proxy routes by full registered
 host, so `feature-1.audit.lewp` and `audit.lewp` can point to different local
 ports.
+
+HTTPS uses Lewp's local CA, created and trusted by `lewp setup`. Browser support
+in V1:
+
+- **Safari and Chromium browsers** (Chrome, Brave, Arc, Edge, Helium) trust the
+  macOS system keychain, so `https://<host>` works as soon as `lewp setup` has
+  run.
+- **Firefox is not supported in V1.** It uses its own NSS trust store rather than
+  the macOS keychain, so it will warn on `.lewp` HTTPS. Use `http://<host>` in
+  Firefox, or switch to Safari/Chromium for HTTPS. NSS (`certutil`) trust is a
+  planned vNext addition.
 
 ## Troubleshooting
 

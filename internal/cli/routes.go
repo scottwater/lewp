@@ -93,7 +93,7 @@ func runInfo(cfg Config) int {
 		fmt.Fprintln(cfg.Stderr, "Or move an existing route here: lewp move --from <path>")
 		return 1
 	}
-	writeInfo(cfg.Stdout, resp.Entries, *jsonOut)
+	writeInfo(cfg.Stdout, cfg.Stderr, resp.Entries, *jsonOut)
 	return 0
 }
 
@@ -113,7 +113,7 @@ func runMove(cfg Config) int {
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	writeRoutes(cfg.Stdout, resp.Entries, *jsonOut)
+	writeRoutes(cfg.Stdout, cfg.Stderr, resp.Entries, *jsonOut)
 	return 0
 }
 
@@ -153,6 +153,7 @@ func runList(cfg Config) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	all := fs.Bool("all", false, "")
+	jsonOut := fs.Bool("json", false, "")
 	if !parseFlags(cfg, fs, "list") {
 		return 2
 	}
@@ -160,17 +161,36 @@ func runList(cfg Config) int {
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	tw := tabwriter.NewWriter(cfg.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "HOST\tPORT\tSTATE\tPATH")
-	for _, entry := range resp.Entries {
-		host := entry.Host
-		if host == "" {
-			host = "-"
+	if *jsonOut {
+		// Always emit a JSON array (never null) so `lewp list --json | jq` has a
+		// stable shape even when nothing is registered.
+		entries := resp.Entries
+		if entries == nil {
+			entries = []control.ListEntry{}
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", host, entry.Port, entry.State, entry.Path)
+		_ = json.NewEncoder(cfg.Stdout).Encode(entries)
+		return 0
+	}
+	tw := tabwriter.NewWriter(cfg.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "HOST\tNAME\tKIND\tPORT\tSTATE\tPATH")
+	for _, entry := range resp.Entries {
+		host := dashIfEmpty(entry.Host)
+		name := dashIfEmpty(entry.Name)
+		kind := dashIfEmpty(string(entry.Kind))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", host, name, kind, entry.Port, entry.State, entry.Path)
 	}
 	_ = tw.Flush()
 	return 0
+}
+
+// dashIfEmpty renders an empty column value as "-" so tabular output keeps a
+// printable cell in every column (a bare port has no host, an apex route may
+// have no instance name).
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // writeLease prints the lease to stdout as env lines (or JSON). Inference notes
@@ -190,8 +210,25 @@ func writeLease(stdout, stderr io.Writer, lease control.LeaseResponse, jsonOut, 
 	if lease.URL != "" {
 		fmt.Fprintf(stdout, "%sURL=%s\n", prefix, lease.URL)
 	}
+	// HTTPS_URL stays beside the HTTP URL in shell, human, and JSON output so a
+	// script can pick the scheme it wants; it is only present when the lease has
+	// a routable host.
+	if lease.HTTPSURL != "" {
+		fmt.Fprintf(stdout, "%sHTTPS_URL=%s\n", prefix, lease.HTTPSURL)
+	}
 	if lease.Host != "" {
 		fmt.Fprintf(stdout, "%sHOST=%s\n", prefix, lease.Host)
+	}
+	// STATE and HOST_KIND are descriptive, human-facing fields. They are omitted
+	// under --shell so `eval "$(lewp add --shell)"` does not export bookkeeping
+	// variables into the user's environment; JSON already carries them.
+	if !shell {
+		if lease.LeaseState != "" {
+			fmt.Fprintf(stdout, "STATE=%s\n", lease.LeaseState)
+		}
+		if lease.HostKind != "" {
+			fmt.Fprintf(stdout, "HOST_KIND=%s\n", lease.HostKind)
+		}
 	}
 	if lease.RootSource == "inferred" {
 		fmt.Fprintf(stderr, "# inferred root=%s\n", lease.Root)
@@ -202,31 +239,51 @@ func writeLease(stdout, stderr io.Writer, lease control.LeaseResponse, jsonOut, 
 	for _, warning := range lease.Warnings {
 		fmt.Fprintf(stderr, "# %s\n", warning)
 	}
+	if !shell {
+		writeLocalOnlyNote(stderr, lease.Host)
+	}
+}
+
+// writeLocalOnlyNote prints a stderr reminder that a `.lewp` host never leaves
+// the machine. It is emitted only for human (non-shell) output and only to
+// stderr so it never lands in a captured `$(...)` value or an eval'd export.
+func writeLocalOnlyNote(stderr io.Writer, host string) {
+	if isLewpHost(host) {
+		fmt.Fprintf(stderr, "# %s is local-only (resolves to 127.0.0.1)\n", host)
+	}
+}
+
+func isLewpHost(host string) bool {
+	return host != "" && strings.HasSuffix(host, ".lewp")
 }
 
 // writeRoutes prints registry-backed route entries in the same env-style
 // format as writeLease, one block per route.
-func writeRoutes(w io.Writer, entries []control.ListEntry, jsonOut bool) {
+func writeRoutes(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut bool) {
 	if jsonOut {
-		_ = json.NewEncoder(w).Encode(entries)
+		_ = json.NewEncoder(stdout).Encode(entries)
 		return
 	}
+	var host string
 	for i, entry := range entries {
 		if i > 0 {
-			fmt.Fprintln(w)
+			fmt.Fprintln(stdout)
 		}
-		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
+		fmt.Fprintf(stdout, "PORT=%d\n", entry.Port)
 		if entry.Host != "" {
-			fmt.Fprintf(w, "URL=http://%s\n", entry.Host)
-			fmt.Fprintf(w, "HOST=%s\n", entry.Host)
+			host = entry.Host
+			fmt.Fprintf(stdout, "URL=http://%s\n", entry.Host)
+			fmt.Fprintf(stdout, "HTTPS_URL=https://%s\n", entry.Host)
+			fmt.Fprintf(stdout, "HOST=%s\n", entry.Host)
 		}
-		fmt.Fprintf(w, "PATH=%s\n", entry.Path)
+		fmt.Fprintf(stdout, "DIR=%s\n", entry.Path)
 	}
+	writeLocalOnlyNote(stderr, host)
 }
 
-func writeInfo(w io.Writer, entries []control.ListEntry, jsonOut bool) {
+func writeInfo(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut bool) {
 	if jsonOut {
-		_ = json.NewEncoder(w).Encode(entries)
+		_ = json.NewEncoder(stdout).Encode(entries)
 		return
 	}
 	routes := make([]control.ListEntry, 0, len(entries))
@@ -239,32 +296,40 @@ func writeInfo(w io.Writer, entries []control.ListEntry, jsonOut bool) {
 			ports = append(ports, entry)
 		}
 	}
+	var host string
 	if len(routes) > 0 {
-		fmt.Fprintln(w, "ROUTES")
-		writeInfoRoutes(w, routes)
+		fmt.Fprintln(stdout, "ROUTES")
+		host = writeInfoRoutes(stdout, routes)
 	}
 	if len(routes) > 0 && len(ports) > 0 {
-		fmt.Fprintln(w)
+		fmt.Fprintln(stdout)
 	}
 	if len(ports) > 0 {
-		fmt.Fprintln(w, "PORTS")
-		writeInfoPorts(w, ports)
+		fmt.Fprintln(stdout, "PORTS")
+		writeInfoPorts(stdout, ports)
 	}
+	writeLocalOnlyNote(stderr, host)
 }
 
-func writeInfoRoutes(w io.Writer, entries []control.ListEntry) {
+// writeInfoRoutes prints each route block and returns the last route host seen,
+// so the caller can attach a single local-only note.
+func writeInfoRoutes(w io.Writer, entries []control.ListEntry) string {
+	var host string
 	for i, entry := range entries {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
 		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
 		if entry.Host != "" {
+			host = entry.Host
 			fmt.Fprintf(w, "URL=http://%s\n", entry.Host)
+			fmt.Fprintf(w, "HTTPS_URL=https://%s\n", entry.Host)
 			fmt.Fprintf(w, "HOST=%s\n", entry.Host)
 		}
 		fmt.Fprintf(w, "STATE=%s\n", entry.State)
-		fmt.Fprintf(w, "PATH=%s\n", entry.Path)
+		fmt.Fprintf(w, "DIR=%s\n", entry.Path)
 	}
+	return host
 }
 
 func writeInfoPorts(w io.Writer, entries []control.ListEntry) {
@@ -275,6 +340,6 @@ func writeInfoPorts(w io.Writer, entries []control.ListEntry) {
 		fmt.Fprintf(w, "NAME=%s\n", entry.Name)
 		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
 		fmt.Fprintf(w, "STATE=%s\n", entry.State)
-		fmt.Fprintf(w, "PATH=%s\n", entry.Path)
+		fmt.Fprintf(w, "DIR=%s\n", entry.Path)
 	}
 }
