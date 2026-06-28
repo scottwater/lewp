@@ -666,8 +666,29 @@ func TestRunCommandHelpPrintsCommandHelp(t *testing.T) {
 	}
 }
 
-func TestRunVersionPrintsInjectedMetadata(t *testing.T) {
+func TestRunVersionPrintsOnlyVersionByDefault(t *testing.T) {
 	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+		var stdout, stderr bytes.Buffer
+		code := Run(Config{
+			Args:      args,
+			Version:   "1.2.3",
+			Commit:    "abc1234",
+			BuildDate: "2026-06-27T12:00:00Z",
+			Stdout:    &stdout,
+			Stderr:    &stderr,
+		})
+		if code != 0 {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr.String())
+		}
+		got := stdout.String()
+		if got != "lewp version 1.2.3\n" {
+			t.Fatalf("%v version output=%q", args, got)
+		}
+	}
+}
+
+func TestRunVersionDetailedPrintsInjectedMetadata(t *testing.T) {
+	for _, args := range [][]string{{"version", "--detailed"}, {"--version", "--detailed"}, {"-v", "--detailed"}} {
 		var stdout, stderr bytes.Buffer
 		code := Run(Config{
 			Args:      args,

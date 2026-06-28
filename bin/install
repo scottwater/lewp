@@ -33,7 +33,7 @@ if [[ -n "$resolved" ]]; then
   if [[ "$resolved" != "$install_dir/lewp" ]]; then
     echo "warning: 'lewp' resolves to ${resolved}, not the just-installed ${install_dir}/lewp" >&2
   fi
-  echo "verify the installed build with: lewp version" >&2
+  echo "verify the installed build with: lewp version --detailed" >&2
 else
-  echo "verify the installed build with: ${install_dir}/lewp version" >&2
+  echo "verify the installed build with: ${install_dir}/lewp version --detailed" >&2
 fi

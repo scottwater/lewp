@@ -33,7 +33,7 @@ Commands:
   doctor     Diagnose daemon state, DNS, and CA trust
   logs       Show or tail the daemon logs
   completion Print a shell completion script (bash|zsh|fish)
-  version    Print version and build metadata
+  version    Print version
   daemon     Run the daemon in the foreground (normally launchd-managed)
 
 Examples:
@@ -284,12 +284,15 @@ Examples:
   lewp logs --path
 `
 
-	versionHelp = `lewp version — print version and build metadata
+	versionHelp = `lewp version — print version
 
 Usage:
-  lewp version
+  lewp version [--detailed]
 
-Prints the version, git commit, UTC build time, and Go toolchain version.
+Prints only the public version by default.
+
+Flags:
+  --detailed   Include git commit, UTC build time, and Go toolchain version
 `
 
 	completionHelp = `lewp completion — print a shell completion script
@@ -353,10 +356,17 @@ func helpRequested(args []string) bool {
 }
 
 func runVersion(cfg Config) int {
+	fs := flag.NewFlagSet("version", flag.ContinueOnError)
+	detailed := fs.Bool("detailed", false, "")
+	if !parseFlags(cfg, fs, "version") {
+		return 2
+	}
 	fmt.Fprintf(cfg.Stdout, "lewp version %s\n", cfg.Version)
-	fmt.Fprintf(cfg.Stdout, "commit:  %s\n", cfg.Commit)
-	fmt.Fprintf(cfg.Stdout, "built:   %s\n", cfg.BuildDate)
-	fmt.Fprintf(cfg.Stdout, "go:      %s\n", runtime.Version())
+	if *detailed {
+		fmt.Fprintf(cfg.Stdout, "commit:  %s\n", cfg.Commit)
+		fmt.Fprintf(cfg.Stdout, "built:   %s\n", cfg.BuildDate)
+		fmt.Fprintf(cfg.Stdout, "go:      %s\n", runtime.Version())
+	}
 	return 0
 }
 

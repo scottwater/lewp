@@ -497,13 +497,20 @@ A missing or unsupported shell argument exits `2` with guidance.
 
 ## `lewp version`
 
-Print version and build metadata.
+Print the public version. Add `--detailed` for development/build metadata.
 
 ```sh
 lewp version
+lewp version --detailed
 ```
 
 Example:
+
+```text
+lewp version 0.1.0
+```
+
+Detailed example:
 
 ```text
 lewp version 0.1.0
@@ -512,9 +519,9 @@ built:   2026-06-27T23:08:00Z
 go:      go1.25.1
 ```
 
-`version`, `--version`, and `-v` are equivalent. The version, commit, and build
-time are injected at link time by `bin/build`; an un-stamped `go build` reports
-`dev`/`unknown` values.
+`version`, `--version`, and `-v` are equivalent. The version is injected at link
+time by `bin/build`; an un-stamped `go build` reports `dev`. The detailed
+commit/build-time fields are also injected at link time for development builds.
 
 ## `lewp daemon`
 

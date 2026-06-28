@@ -6,7 +6,7 @@ cd "$repo_root"
 
 pkg="github.com/scottwater/lewp/internal/buildinfo"
 
-# Compile time changes on every build so `lewp version` reflects this build.
+# Compile time changes on every build so `lewp version --detailed` reflects this build.
 build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 version="${LEWP_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
 commit="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"

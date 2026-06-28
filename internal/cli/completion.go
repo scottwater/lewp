@@ -21,7 +21,7 @@ var completionCommands = []struct{ name, desc string }{
 	{"list", "List active routes and their health"},
 	{"doctor", "Diagnose daemon state, DNS, and CA trust"},
 	{"logs", "Show or tail the daemon logs"},
-	{"version", "Print version and build metadata"},
+	{"version", "Print version"},
 	{"completion", "Print a shell completion script"},
 	{"help", "Show top-level help"},
 }
