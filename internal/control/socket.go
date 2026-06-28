@@ -146,7 +146,7 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 		entries, err := svc.Move(ctx, req.Move)
 		return Response{Entries: entries}, err
 	case "doctor":
-		return Response{Checks: svc.Doctor()}, nil
+		return Response{Checks: svc.Doctor(ctx)}, nil
 	default:
 		return Response{}, errors.New("unknown command")
 	}

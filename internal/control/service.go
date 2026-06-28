@@ -326,16 +326,22 @@ func absWorkDir(workDir string) (string, error) {
 	return filepath.Abs(workDir)
 }
 
-func (s *Service) Doctor() []string {
+func (s *Service) Doctor(ctx context.Context) []string {
+	checks := []string{
+		"daemon: ok",
+		"control socket: ok",
+	}
+	if _, err := s.store.List(ctx, true); err != nil {
+		checks = append(checks, fmt.Sprintf("registry: unreadable (%v)", err))
+	} else {
+		checks = append(checks, "registry: readable")
+	}
 	https := "https: not configured (run lewp setup)"
 	if _, err := localtls.LoadCA(localtls.DefaultCAPath(), localtls.DefaultCAKeyPath()); err == nil {
 		https = "https: configured (local CA present)"
 	}
-	return []string{
-		"daemon: ok",
-		"control socket: ok",
-		https,
-	}
+	checks = append(checks, https)
+	return checks
 }
 
 func response(resolved identity.Result, port int, state string) LeaseResponse {
