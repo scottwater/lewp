@@ -8,12 +8,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/scottwater/lewp/internal/suffix"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
 const DefaultPort = 15353
 
 func Handle(packet []byte) ([]byte, error) {
+	return HandleWithSuffixes(packet, []string{suffix.BuiltIn})
+}
+
+func HandleWithSuffixes(packet []byte, managed []string) ([]byte, error) {
 	var msg dnsmessage.Message
 	if err := msg.Unpack(packet); err != nil {
 		return nil, err
@@ -27,7 +32,7 @@ func Handle(packet []byte) ([]byte, error) {
 		},
 		Questions: msg.Questions,
 	}
-	if len(msg.Questions) == 0 || !isLewp(msg.Questions[0].Name.String()) {
+	if len(msg.Questions) == 0 || !suffix.HostInManagedSuffix(msg.Questions[0].Name.String(), managed) {
 		reply.Header.RCode = dnsmessage.RCodeNameError
 		return reply.Pack()
 	}
@@ -50,6 +55,10 @@ func Handle(packet []byte) ([]byte, error) {
 }
 
 func Serve(ctx context.Context, addr string) error {
+	return ServeWithSuffixes(ctx, addr, []string{suffix.BuiltIn})
+}
+
+func ServeWithSuffixes(ctx context.Context, addr string, managed []string) error {
 	conn, err := net.ListenPacket("udp", addr)
 	if err != nil {
 		return err
@@ -68,7 +77,7 @@ func Serve(ctx context.Context, addr string) error {
 			}
 			return err
 		}
-		reply, err := Handle(buf[:n])
+		reply, err := HandleWithSuffixes(buf[:n], managed)
 		if err == nil {
 			_, _ = conn.WriteTo(reply, peer)
 		}
@@ -164,11 +173,6 @@ func atoi(s string) (int, bool) {
 		n = n*10 + int(r-'0')
 	}
 	return n, true
-}
-
-func isLewp(host string) bool {
-	host = strings.TrimSuffix(strings.ToLower(host), ".")
-	return host == "lewp" || strings.HasSuffix(host, ".lewp")
 }
 
 func itoa(n int) string {
