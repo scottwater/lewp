@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -37,6 +38,15 @@ type ReleaseRequest struct {
 	Root    string
 	Name    string
 	Forget  bool
+}
+
+type InfoRequest struct {
+	WorkDir string
+}
+
+type MoveRequest struct {
+	WorkDir string
+	From    string
 }
 
 type LeaseResponse struct {
@@ -185,6 +195,78 @@ func (s *Service) List(ctx context.Context, all bool) ([]ListEntry, error) {
 		})
 	}
 	return entries, nil
+}
+
+func (s *Service) Info(ctx context.Context, req InfoRequest) ([]ListEntry, error) {
+	abs, err := absWorkDir(req.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	records, err := s.store.List(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	var entries []ListEntry
+	for _, record := range records {
+		if record.State != registry.StateActive || record.Kind != identity.KindRoute || record.Path != abs {
+			continue
+		}
+		entries = append(entries, ListEntry{
+			Host:  record.Host,
+			Port:  record.Port,
+			State: recordState(record),
+			Path:  record.Path,
+			Kind:  record.Kind,
+			Root:  record.Root,
+			Name:  record.Name,
+		})
+	}
+	return entries, nil
+}
+
+func (s *Service) Move(ctx context.Context, req MoveRequest) ([]ListEntry, error) {
+	dest, err := absWorkDir(req.WorkDir)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(req.From) == "" {
+		return nil, fmt.Errorf("move requires a --from source path")
+	}
+	src, err := filepath.Abs(req.From)
+	if err != nil {
+		return nil, err
+	}
+	records, err := s.store.MovePath(ctx, src, dest, identity.KindRoute)
+	if err != nil {
+		if errors.Is(err, registry.ErrNoRouteForPath) {
+			return nil, fmt.Errorf("no active Lewp route is registered for %s; nothing to move", src)
+		}
+		return nil, err
+	}
+	entries := make([]ListEntry, 0, len(records))
+	for _, record := range records {
+		entries = append(entries, ListEntry{
+			Host:  record.Host,
+			Port:  record.Port,
+			State: registry.StateActive,
+			Path:  record.Path,
+			Kind:  record.Kind,
+			Root:  record.Root,
+			Name:  record.Name,
+		})
+	}
+	return entries, nil
+}
+
+func absWorkDir(workDir string) (string, error) {
+	if workDir == "" {
+		var err error
+		workDir, err = os.Getwd()
+		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.Abs(workDir)
 }
 
 func (s *Service) Doctor() []string {

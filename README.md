@@ -64,7 +64,7 @@ From a project instance directory:
 
 ```sh
 cd ~/projects/audit/feature-1
-lewp lease
+lewp add
 ```
 
 Example output:
@@ -74,6 +74,8 @@ PORT=42137
 URL=http://feature-1.audit.lewp
 HOST=feature-1.audit.lewp
 ```
+
+(`lewp lease` is a backward-compatible alias for `lewp add`.)
 
 Start your app yourself on the leased port:
 
@@ -86,6 +88,13 @@ Then open:
 ```text
 http://feature-1.audit.lewp
 https://feature-1.audit.lewp
+```
+
+Check or relocate a route later:
+
+```sh
+lewp info                                  # show this directory's route
+lewp move --from ~/projects/audit/feature-1   # bring its route here, same port
 ```
 
 ## CLI Reference

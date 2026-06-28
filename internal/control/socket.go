@@ -17,6 +17,8 @@ type Request struct {
 	Lease   LeaseRequest   `json:"lease,omitempty"`
 	Port    PortRequest    `json:"port,omitempty"`
 	Release ReleaseRequest `json:"release,omitempty"`
+	Info    InfoRequest    `json:"info,omitempty"`
+	Move    MoveRequest    `json:"move,omitempty"`
 	All     bool           `json:"all,omitempty"`
 }
 
@@ -134,6 +136,12 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 		return Response{}, svc.Release(ctx, req.Release)
 	case "list":
 		entries, err := svc.List(ctx, req.All)
+		return Response{Entries: entries}, err
+	case "info":
+		entries, err := svc.Info(ctx, req.Info)
+		return Response{Entries: entries}, err
+	case "move":
+		entries, err := svc.Move(ctx, req.Move)
 		return Response{Entries: entries}, err
 	case "doctor":
 		return Response{Checks: svc.Doctor()}, nil

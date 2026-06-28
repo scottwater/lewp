@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -99,12 +97,30 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runDaemon(cfg)
+	case "add":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, addHelp)
+			return 0
+		}
+		return runLease(cfg, "add")
 	case "lease":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, leaseHelp)
 			return 0
 		}
-		return runLease(cfg)
+		return runLease(cfg, "lease")
+	case "info":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, infoHelp)
+			return 0
+		}
+		return runInfo(cfg)
+	case "move":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, moveHelp)
+			return 0
+		}
+		return runMove(cfg)
 	case "port":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, portHelp)
@@ -193,79 +209,6 @@ func runDaemon(cfg Config) int {
 	if err != nil {
 		fmt.Fprintln(cfg.Stderr, err)
 		return 1
-	}
-	return 0
-}
-
-func runLease(cfg Config) int {
-	fs := flag.NewFlagSet("lease", flag.ContinueOnError)
-	fs.SetOutput(cfg.Stderr)
-	root := fs.String("root", "", "")
-	name := fs.String("name", "", "")
-	host := fs.String("host", "", "")
-	jsonOut := fs.Bool("json", false, "")
-	shell := fs.Bool("shell", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
-		return 2
-	}
-	resp, err := call(cfg, control.Request{Command: "lease", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host}})
-	if err != nil {
-		return daemonError(cfg, err)
-	}
-	writeLease(cfg.Stdout, *resp.Lease, *jsonOut, *shell)
-	return 0
-}
-
-func runPort(cfg Config) int {
-	fs := flag.NewFlagSet("port", flag.ContinueOnError)
-	fs.SetOutput(cfg.Stderr)
-	name := fs.String("name", "port", "")
-	jsonOut := fs.Bool("json", false, "")
-	shell := fs.Bool("shell", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
-		return 2
-	}
-	resp, err := call(cfg, control.Request{Command: "port", Port: control.PortRequest{WorkDir: cfg.WorkDir, Name: *name}})
-	if err != nil {
-		return daemonError(cfg, err)
-	}
-	writeLease(cfg.Stdout, *resp.Lease, *jsonOut, *shell)
-	return 0
-}
-
-func runRelease(cfg Config) int {
-	fs := flag.NewFlagSet("release", flag.ContinueOnError)
-	fs.SetOutput(cfg.Stderr)
-	forget := fs.Bool("forget", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
-		return 2
-	}
-	_, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget}})
-	if err != nil {
-		return daemonError(cfg, err)
-	}
-	fmt.Fprintln(cfg.Stdout, "released")
-	return 0
-}
-
-func runList(cfg Config) int {
-	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	fs.SetOutput(cfg.Stderr)
-	all := fs.Bool("all", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
-		return 2
-	}
-	resp, err := call(cfg, control.Request{Command: "list", All: *all})
-	if err != nil {
-		return daemonError(cfg, err)
-	}
-	fmt.Fprintln(cfg.Stdout, "HOST\tPORT\tSTATE\tPATH")
-	for _, entry := range resp.Entries {
-		host := entry.Host
-		if host == "" {
-			host = "-"
-		}
-		fmt.Fprintf(cfg.Stdout, "%s\t%d\t%s\t%s\n", host, entry.Port, entry.State, entry.Path)
 	}
 	return 0
 }
@@ -509,35 +452,6 @@ func daemonError(cfg Config, err error) int {
 	}
 	fmt.Fprintln(cfg.Stderr, err)
 	return 1
-}
-
-func writeLease(w io.Writer, lease control.LeaseResponse, jsonOut, shell bool) {
-	if jsonOut {
-		_ = json.NewEncoder(w).Encode(lease)
-		return
-	}
-	prefix := ""
-	if shell {
-		prefix = "export "
-	}
-	fmt.Fprintf(w, "%sPORT=%d\n", prefix, lease.Port)
-	if lease.URL != "" {
-		fmt.Fprintf(w, "%sURL=%s\n", prefix, lease.URL)
-	}
-	if lease.Host != "" {
-		fmt.Fprintf(w, "%sHOST=%s\n", prefix, lease.Host)
-	}
-	if !jsonOut && !shell {
-		if lease.RootSource == "inferred" {
-			fmt.Fprintf(w, "# inferred root=%s\n", lease.Root)
-		}
-		if lease.NameSource == "inferred" {
-			fmt.Fprintf(w, "# inferred name=%s\n", lease.Name)
-		}
-	}
-	for _, warning := range lease.Warnings {
-		fmt.Fprintf(w, "# %s\n", warning)
-	}
 }
 
 func defaultPlistPath() string {

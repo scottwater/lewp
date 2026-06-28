@@ -22,18 +22,21 @@ Usage:
 Commands:
   setup      Install the .lewp DNS resolver, local CA, and launchd service
   system     Manage the daemon: start|stop|status|restart|uninstall
-  lease      Lease a stable port and .lewp hostname for the current directory
+  add        Register a stable port and .lewp hostname for the current directory
+  info       Show the route registered for the current directory
+  move       Move a route from another directory to the current directory
   port       Lease a bare internal port without a hostname
   release    Release the route for the current directory
   list       List active routes and their health
   doctor     Diagnose daemon state, DNS, and CA trust
   version    Print version and build metadata
   daemon     Run the daemon in the foreground (normally launchd-managed)
+  lease      Alias for add (kept for backward compatibility)
 
 Examples:
   lewp setup && lewp system start
-  cd ~/projects/audit/feature-1 && lewp lease
-  eval "$(lewp lease --shell)" && PORT=$PORT bin/dev
+  cd ~/projects/audit/feature-1 && lewp add
+  eval "$(lewp add --shell)" && PORT=$PORT bin/dev
 
 Run "lewp <command> --help" for command-specific help.
 `
@@ -70,8 +73,30 @@ Examples:
   lewp system status
 `
 
-	leaseHelp = `lewp lease — lease a stable port and .lewp hostname for this directory
+	addHelp = `lewp add — register a stable port and .lewp hostname for this directory
 
+Re-running from the same directory returns the same port and host. Root and name
+are inferred from the directory layout unless overridden.
+
+Usage:
+  lewp add [--root <root>] [--name <name>] [--host <host>] [--json] [--shell]
+
+Flags:
+  --root <root>   Override the inferred root segment of the hostname
+  --name <name>   Override the inferred instance segment of the hostname
+  --host <host>   Register an explicit apex host (e.g. audit.lewp)
+  --json          Emit the route as a JSON object
+  --shell         Emit shell "export" lines for use with eval
+
+Examples:
+  lewp add
+  lewp add --root audit --name feature-1
+  eval "$(lewp add --shell)"
+`
+
+	leaseHelp = `lewp lease — alias for "lewp add" (kept for backward compatibility)
+
+"lease" behaves exactly like "add"; prefer "lewp add" in new scripts and docs.
 Re-running from the same directory returns the same port and host. Root and name
 are inferred from the directory layout unless overridden.
 
@@ -82,13 +107,46 @@ Flags:
   --root <root>   Override the inferred root segment of the hostname
   --name <name>   Override the inferred instance segment of the hostname
   --host <host>   Register an explicit apex host (e.g. audit.lewp)
-  --json          Emit the lease as a JSON object
+  --json          Emit the route as a JSON object
   --shell         Emit shell "export" lines for use with eval
 
 Examples:
   lewp lease
   lewp lease --root audit --name feature-1
   eval "$(lewp lease --shell)"
+`
+
+	infoHelp = `lewp info — show the route registered for the current directory
+
+Reads existing registry data only; it never creates, allocates, or changes a
+route. Exits non-zero if no route is registered for this directory.
+
+Usage:
+  lewp info [--json]
+
+Flags:
+  --json   Emit the route(s) as a JSON array
+
+Examples:
+  lewp info
+  lewp info --json
+`
+
+	moveHelp = `lewp move — move a route from another directory to this one
+
+Reassigns the active route(s) owned by --from to the current directory, keeping
+the same host and port. Use this after moving or renaming a project folder so
+its stable URL follows it. The source directory is left with no route.
+
+Usage:
+  lewp move --from <path> [--json]
+
+Flags:
+  --from <path>   Directory that currently owns the route to move (required)
+  --json          Emit the moved route(s) as a JSON array
+
+Examples:
+  lewp move --from ~/projects/audit/old-feature
 `
 
 	portHelp = `lewp port — lease a bare internal port without a hostname

@@ -27,7 +27,10 @@ install.
 ```sh
 lewp setup
 lewp system start|stop|status|restart|uninstall
-lewp lease [--root R] [--name N] [--host H] [--json|--shell]
+lewp add [--root R] [--name N] [--host H] [--json|--shell]
+lewp lease [--root R] [--name N] [--host H] [--json|--shell]   # alias for add
+lewp info [--json]
+lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
 lewp release [--forget]
 lewp list [--all]
@@ -100,17 +103,18 @@ resolver file.
 lewp daemon is running
 ```
 
-## `lewp lease`
+## `lewp add`
 
-Lease a routed app port and register a `.lewp` hostname for the current
-directory.
+Register a routed app port and a `.lewp` hostname for the current directory.
+This is the primary command for creating a route. `lewp lease` is a backward-
+compatible alias and behaves identically.
 
 ```sh
-lewp lease
-lewp lease --root audit --name feature-1
-lewp lease --host audit.lewp
-lewp lease --json
-lewp lease --shell
+lewp add
+lewp add --root audit --name feature-1
+lewp add --host audit.lewp
+lewp add --json
+lewp add --shell
 ```
 
 Default output:
@@ -135,8 +139,8 @@ path, kind, source fields, warnings, and release state.
 Host rules:
 
 - default host: `<instance>.<root>.lewp`
-- project apex override: `lewp lease --host audit.lewp`
-- custom `.lewp` override: `lewp lease --host sso.audit.lewp`
+- project apex override: `lewp add --host audit.lewp`
+- custom `.lewp` override: `lewp add --host sso.audit.lewp`
 - non-`.lewp` hosts are rejected
 
 Discovery order:
@@ -155,6 +159,53 @@ host = "audit.lewp"
 
 If another folder already owns a host, Lewp keeps the original owner and assigns
 a deterministic suffix to the new folder.
+
+## `lewp info`
+
+Show the route registered for the current directory. `info` reads existing
+registry data only — it never infers, allocates, or mutates a route.
+
+```sh
+lewp info
+lewp info --json
+```
+
+Default output for a registered directory:
+
+```sh
+PORT=42137
+URL=http://feature-1.audit.lewp
+HOST=feature-1.audit.lewp
+PATH=/Users/scott/projects/audit/feature-1
+```
+
+If no route is registered for the current directory, `info` exits non-zero and
+points you at the commands that create or relocate one:
+
+```text
+no Lewp route is registered for this directory
+Run: lewp add
+Or move an existing route here: lewp move --from <path>
+```
+
+## `lewp move`
+
+Move an existing route from another directory to the current directory, keeping
+the same host and port. Use this after relocating or renaming a project folder
+so its stable URL follows it.
+
+```sh
+lewp move --from ~/projects/audit/old-feature
+lewp move --from ~/projects/audit/old-feature --json
+```
+
+`--from` is required and names the directory that currently owns the route. The
+move is atomic: the source directory is left with no route (`lewp info` there
+reports none) and the current directory becomes the owner with the same port and
+host. The port is never reallocated.
+
+If the source directory has no active route, or the current directory already
+owns an active route, `move` fails with a clear error and changes nothing.
 
 ## `lewp port`
 
