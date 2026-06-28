@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/scottwater/lewp/internal/dns"
 	"github.com/scottwater/lewp/internal/launchd"
 	"github.com/scottwater/lewp/internal/registry"
+	"github.com/scottwater/lewp/internal/suffix"
 	localtls "github.com/scottwater/lewp/internal/tls"
 )
 
@@ -33,6 +35,7 @@ type Config struct {
 	CAPath       string
 	CAKeyPath    string
 	ResolverPath string
+	SuffixesPath string
 	PlistPath    string
 	LogDir       string
 	ProgramPath  string
@@ -78,6 +81,9 @@ func Run(cfg Config) int {
 	}
 	if cfg.ResolverPath == "" {
 		cfg.ResolverPath = defaultResolverPath()
+	}
+	if cfg.SuffixesPath == "" {
+		cfg.SuffixesPath = defaultSuffixesPath()
 	}
 	if cfg.PlistPath == "" {
 		cfg.PlistPath = defaultPlistPath()
@@ -231,6 +237,12 @@ func runDaemon(cfg Config) int {
 		return 1
 	}
 	httpsListeners = append(httpsListeners, https6Listeners...)
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "load suffix config: %v\n", err)
+		return 1
+	}
+	managedSuffixes := suffix.Managed(suffixCfg.Suffixes)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errs := make(chan error, 3)
@@ -238,7 +250,7 @@ func runDaemon(cfg Config) int {
 		errs <- control.Serve(ctx, cfg.SocketPath, control.DefaultRegistryPath(), registry.PortRange{Start: 41000, End: 49999})
 	}()
 	go func() {
-		errs <- dns.Serve(ctx, fmt.Sprintf("127.0.0.1:%d", dns.DefaultPort))
+		errs <- dns.ServeWithSuffixes(ctx, fmt.Sprintf("127.0.0.1:%d", dns.DefaultPort), managedSuffixes)
 	}()
 	go func() {
 		errs <- daemon.Serve(ctx, daemon.Config{
@@ -261,9 +273,28 @@ func runSetup(cfg Config) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	start := fs.Bool("start", false, "")
+	var suffixFlags stringListFlag
+	fs.Var(&suffixFlags, "suffix", "")
 	if fs.Parse(cfg.Args[1:]) != nil {
 		return 2
 	}
+
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "load suffix config: %v\n", err)
+		return 1
+	}
+	addedSuffixes := []string(nil)
+	if len(suffixFlags) > 0 {
+		updated, added, err := suffix.Add(suffixCfg, suffixFlags...)
+		if err != nil {
+			fmt.Fprintf(cfg.Stderr, "invalid suffix: %v\n", err)
+			return 1
+		}
+		suffixCfg = updated
+		addedSuffixes = added
+	}
+	resolverPaths := resolverPathsForSuffixes(cfg, suffix.Managed(suffixCfg.Suffixes))
 
 	fmt.Fprintf(cfg.Stdout, "# setup may prompt for your password (sudo) to install %s\n", cfg.ResolverPath)
 	fmt.Fprintln(cfg.Stdout, "# setup may prompt macOS to trust the local development CA in your keychain")
@@ -272,10 +303,12 @@ func runSetup(cfg Config) int {
 		fmt.Fprintf(cfg.Stderr, "Next: inspect %s and remove it if it is not Lewp-owned, then re-run: lewp setup\n", cfg.PlistPath)
 		return 1
 	}
-	if err := ensureLewpOwnedOrMissing(cfg.ResolverPath, dns.ResolverFile(dns.DefaultPort)); err != nil {
-		fmt.Fprintf(cfg.Stderr, "refusing to overwrite resolver file: %v\n", err)
-		fmt.Fprintf(cfg.Stderr, "Next: inspect %s and remove it if it is not Lewp-owned, then re-run: lewp setup\n", cfg.ResolverPath)
-		return 1
+	for _, path := range resolverPaths {
+		if err := ensureLewpOwnedOrMissing(path, dns.ResolverFile(dns.DefaultPort)); err != nil {
+			fmt.Fprintf(cfg.Stderr, "refusing to overwrite resolver file: %v\n", err)
+			fmt.Fprintf(cfg.Stderr, "Next: inspect %s and remove it if it is not Lewp-owned, then re-run: lewp setup\n", path)
+			return 1
+		}
 	}
 	// Create the local CA first. It is local and needs no sudo, so doing it
 	// before the sudo resolver write and the keychain prompt avoids leaving the
@@ -301,17 +334,26 @@ func runSetup(cfg Config) int {
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.PlistPath)
 		return 1
 	}
-	if err := writeResolver(cfg); err != nil {
-		fmt.Fprintf(cfg.Stderr, "write resolver file: %v\n", err)
-		fmt.Fprintln(cfg.Stderr, "Next: confirm you can run sudo (the failing command is shown above), then re-run: lewp setup")
-		return 1
+	if len(suffixFlags) > 0 {
+		if err := suffix.Save(cfg.SuffixesPath, suffixCfg); err != nil {
+			fmt.Fprintf(cfg.Stderr, "write suffix config: %v\n", err)
+			fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.SuffixesPath)
+			return 1
+		}
 	}
-	// Validate the resolver landed correctly: a wrong/garbled port silently
-	// breaks .lewp resolution, so confirm it before claiming setup succeeded.
-	if err := validateResolver(cfg.ResolverPath); err != nil {
-		fmt.Fprintf(cfg.Stderr, "verify resolver file: %v\n", err)
-		fmt.Fprintf(cfg.Stderr, "Next: inspect %s, then re-run: lewp setup\n", cfg.ResolverPath)
-		return 1
+	for _, path := range resolverPaths {
+		if err := writeResolver(cfg, path); err != nil {
+			fmt.Fprintf(cfg.Stderr, "write resolver file: %v\n", err)
+			fmt.Fprintln(cfg.Stderr, "Next: confirm you can run sudo (the failing command is shown above), then re-run: lewp setup")
+			return 1
+		}
+	}
+	for _, path := range resolverPaths {
+		if err := validateResolver(path); err != nil {
+			fmt.Fprintf(cfg.Stderr, "verify resolver file: %v\n", err)
+			fmt.Fprintf(cfg.Stderr, "Next: inspect %s, then re-run: lewp setup\n", path)
+			return 1
+		}
 	}
 	trust := localtls.TrustCommand(cfg.CAPath)
 	if err := cfg.RunCommand(context.Background(), trust); err != nil {
@@ -323,6 +365,9 @@ func runSetup(cfg Config) int {
 	fmt.Fprintln(cfg.Stdout, "HTTPS=enabled")
 	fmt.Fprintf(cfg.Stdout, "LAUNCHD=%s\n", cfg.PlistPath)
 	fmt.Fprintf(cfg.Stdout, "RESOLVER=%s\n", cfg.ResolverPath)
+	for _, s := range addedSuffixes {
+		fmt.Fprintf(cfg.Stdout, "SUFFIX=%s RESOLVER=%s\n", s, resolverPathForSuffix(cfg, s))
+	}
 	fmt.Fprintf(cfg.Stdout, "CA=%s\n", cfg.CAPath)
 	fmt.Fprintf(cfg.Stdout, "LOGS=%s\n", cfg.LogDir)
 	fmt.Fprintln(cfg.Stdout, strings.Join(trust, " "))
@@ -339,6 +384,35 @@ func runSetup(cfg Config) int {
 	}
 	fmt.Fprintln(cfg.Stdout, "Next: lewp system start && lewp doctor")
 	return 0
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string {
+	if f == nil {
+		return ""
+	}
+	return strings.Join(*f, ",")
+}
+
+func (f *stringListFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
+func resolverPathsForSuffixes(cfg Config, managed []string) []string {
+	paths := make([]string, 0, len(managed))
+	for _, s := range managed {
+		paths = append(paths, resolverPathForSuffix(cfg, s))
+	}
+	return paths
+}
+
+func resolverPathForSuffix(cfg Config, managedSuffix string) string {
+	if managedSuffix == suffix.BuiltIn {
+		return cfg.ResolverPath
+	}
+	return filepath.Join(filepath.Dir(cfg.ResolverPath), managedSuffix)
 }
 
 // validateResolver re-reads the resolver file written during setup and confirms
@@ -493,7 +567,7 @@ func reportRetainedCA(cfg Config) {
 
 // shellQuote wraps s in single quotes so it survives copy-paste into a POSIX
 // shell verbatim, escaping any embedded single quote with the standard
-// '\'' sequence. It is used for the safe-removal guidance printed on uninstall.
+// '\” sequence. It is used for the safe-removal guidance printed on uninstall.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -555,8 +629,8 @@ func isAlreadyLoadedLaunchdError(err error) bool {
 		strings.Contains(strings.ToLower(text), "service already loaded")
 }
 
-func writeResolver(cfg Config) error {
-	if cfg.ResolverPath == defaultResolverPath() && os.Geteuid() != 0 {
+func writeResolver(cfg Config, path string) error {
+	if filepath.Dir(path) == "/etc/resolver" && os.Geteuid() != 0 {
 		tmp, err := os.CreateTemp("", "lewp-resolver-*")
 		if err != nil {
 			return err
@@ -573,9 +647,9 @@ func writeResolver(cfg Config) error {
 		if err := cfg.RunCommand(context.Background(), []string{"sudo", "mkdir", "-p", "/etc/resolver"}); err != nil {
 			return err
 		}
-		return cfg.RunCommand(context.Background(), []string{"sudo", "install", "-m", "0644", tmpPath, cfg.ResolverPath})
+		return cfg.RunCommand(context.Background(), []string{"sudo", "install", "-m", "0644", tmpPath, path})
 	}
-	return dns.WriteResolverFile(cfg.ResolverPath, dns.DefaultPort)
+	return dns.WriteResolverFile(path, dns.DefaultPort)
 }
 
 func removePath(cfg Config, path string) error {
@@ -707,4 +781,12 @@ func defaultCAKeyPath() string {
 
 func defaultResolverPath() string {
 	return "/etc/resolver/lewp"
+}
+
+func defaultSuffixesPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "suffixes.toml"
+	}
+	return home + "/Library/Application Support/lewp/suffixes.toml"
 }

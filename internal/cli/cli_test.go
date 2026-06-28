@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/scottwater/lewp/internal/launchd"
+	"github.com/scottwater/lewp/internal/suffix"
 )
 
 func TestRunAddReportsDaemonNotRunning(t *testing.T) {
@@ -416,6 +418,119 @@ func TestRunSetupStatesHTTPSEnabled(t *testing.T) {
 	} else if !strings.Contains(string(got), "<string>/usr/local/bin/lewp</string>") ||
 		!strings.Contains(string(got), "<string>"+dir+"/Logs/lewp/daemon.err.log</string>") {
 		t.Fatalf("plist missing program path:\n%s", string(got))
+	}
+}
+
+func TestRunSetupAddsCustomSuffixResolver(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "local.todoordie.com"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	assertResolverPort(t, dir+"/resolver/lewp")
+	assertResolverPort(t, dir+"/resolver/local.todoordie.com")
+	cfg, err := suffix.Load(dir + "/config/suffixes.toml")
+	if err != nil {
+		t.Fatalf("Load suffix config: %v", err)
+	}
+	if want := []string{"local.todoordie.com"}; !reflect.DeepEqual(cfg.Suffixes, want) {
+		t.Fatalf("suffixes=%v want %v", cfg.Suffixes, want)
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "SUFFIX=local.todoordie.com") || !strings.Contains(got, "RESOLVER="+dir+"/resolver/local.todoordie.com") {
+		t.Fatalf("setup output missing suffix info:\n%s", got)
+	}
+}
+
+func TestRunSetupRejectsApexSuffix(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "todoordie.com"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "must be below registrable domain") {
+		t.Fatalf("stderr missing apex validation: %q", stderr.String())
+	}
+	if _, err := os.Stat(dir + "/config/suffixes.toml"); !os.IsNotExist(err) {
+		t.Fatalf("suffix config should not be written: %v", err)
+	}
+	if _, err := os.Stat(dir + "/resolver/local.todoordie.com"); !os.IsNotExist(err) {
+		t.Fatalf("custom resolver should not be written: %v", err)
+	}
+}
+
+func TestRunSetupAdditiveSuffixConfig(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	suffixesPath := dir + "/config/suffixes.toml"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.old.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "local.new.com"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: suffixesPath,
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	cfg, err := suffix.Load(suffixesPath)
+	if err != nil {
+		t.Fatalf("Load suffix config: %v", err)
+	}
+	if want := []string{"local.new.com", "local.old.com"}; !reflect.DeepEqual(cfg.Suffixes, want) {
+		t.Fatalf("suffixes=%v want %v", cfg.Suffixes, want)
+	}
+	assertResolverPort(t, dir+"/resolver/lewp")
+	assertResolverPort(t, dir+"/resolver/local.new.com")
+	assertResolverPort(t, dir+"/resolver/local.old.com")
+}
+
+func assertResolverPort(t *testing.T, path string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read resolver %s: %v", path, err)
+	}
+	if !strings.Contains(string(body), "port 15353") {
+		t.Fatalf("%s has wrong resolver content:\n%s", path, string(body))
 	}
 }
 
