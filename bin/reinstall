@@ -4,4 +4,21 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 "$repo_root/bin/build" >/dev/null
-"$repo_root/bin/install"
+installed_path="$("$repo_root/bin/install")"
+echo "$installed_path"
+
+if "$installed_path" system status >/dev/null 2>&1; then
+  "$installed_path" system restart
+  echo "waiting for lewp daemon..."
+  for _ in $(seq 1 50); do
+    if "$installed_path" system status >/dev/null 2>&1; then
+      echo "lewp daemon is running"
+      exit 0
+    fi
+    sleep 0.1
+  done
+  echo "lewp daemon did not become ready after restart; run: lewp logs --lines 80" >&2
+  exit 1
+else
+  echo "lewp daemon is not running; installed binary will be used on next start" >&2
+fi
