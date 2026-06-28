@@ -169,29 +169,39 @@ a deterministic suffix to the new folder.
 
 ## `lewp info`
 
-Show the route registered for the current directory. `info` reads existing
-registry data only — it never infers, allocates, or mutates a route.
+Show routes and bare ports registered for the current directory. `info` reads
+existing registry data only — it never infers, allocates, or mutates a route or
+port.
 
 ```sh
 lewp info
 lewp info --json
 ```
 
-Default output for a registered directory:
+Default output for a directory with one route and one bare port:
 
 ```sh
+ROUTES
 PORT=42137
 URL=http://feature-1.audit.lewp
 HOST=feature-1.audit.lewp
+STATE=up
+PATH=/Users/scott/projects/audit/feature-1
+
+PORTS
+NAME=vite
+PORT=42138
+STATE=down
 PATH=/Users/scott/projects/audit/feature-1
 ```
 
-If no route is registered for the current directory, `info` exits non-zero and
-points you at the commands that create or relocate one:
+If no route or port is registered for the current directory, `info` exits
+non-zero and points you at the commands that create or relocate one:
 
 ```text
-no Lewp route is registered for this directory
+no Lewp route or port is registered for this directory
 Run: lewp add
+Or lease a bare port: lewp port --name <name>
 Or move an existing route here: lewp move --from <path>
 ```
 

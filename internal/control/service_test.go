@@ -185,8 +185,40 @@ func TestServiceInfoReturnsActiveRouteForDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A bare port at the same dir must not appear in info.
-	if _, err := svc.Port(ctx, PortRequest{WorkDir: dir, Name: "vite"}); err != nil {
+	port, err := svc.Port(ctx, PortRequest{WorkDir: dir, Name: "vite"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := svc.Info(ctx, InfoRequest{WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("info entries=%d want 2: %+v", len(entries), entries)
+	}
+	var sawRoute, sawPort bool
+	for _, entry := range entries {
+		switch entry.Kind {
+		case "route":
+			sawRoute = entry.Host == lease.Host && entry.Port == lease.Port
+		case "port":
+			sawPort = entry.Host == "" && entry.Name == "vite" && entry.Port == port.Port
+		}
+	}
+	if !sawRoute || !sawPort {
+		t.Fatalf("info mismatch: entries=%+v route=%+v port=%+v", entries, lease, port)
+	}
+}
+
+func TestServiceInfoReturnsBarePortForDir(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	port, err := svc.Port(ctx, PortRequest{WorkDir: dir, Name: "vite"})
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,8 +229,8 @@ func TestServiceInfoReturnsActiveRouteForDir(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("info entries=%d want 1: %+v", len(entries), entries)
 	}
-	if entries[0].Host != lease.Host || entries[0].Port != lease.Port || entries[0].Kind != "route" {
-		t.Fatalf("info mismatch: %+v vs lease %+v", entries[0], lease)
+	if entries[0].Kind != "port" || entries[0].Name != "vite" || entries[0].Port != port.Port || entries[0].Host != "" {
+		t.Fatalf("info missing bare port: entries=%+v port=%+v", entries, port)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/scottwater/lewp/internal/control"
+	"github.com/scottwater/lewp/internal/identity"
 )
 
 func runAdd(cfg Config) int {
@@ -58,12 +59,13 @@ func runInfo(cfg Config) int {
 		return daemonError(cfg, err)
 	}
 	if len(resp.Entries) == 0 {
-		fmt.Fprintln(cfg.Stderr, "no Lewp route is registered for this directory")
+		fmt.Fprintln(cfg.Stderr, "no Lewp route or port is registered for this directory")
 		fmt.Fprintln(cfg.Stderr, "Run: lewp add")
+		fmt.Fprintln(cfg.Stderr, "Or lease a bare port: lewp port --name <name>")
 		fmt.Fprintln(cfg.Stderr, "Or move an existing route here: lewp move --from <path>")
 		return 1
 	}
-	writeRoutes(cfg.Stdout, resp.Entries, *jsonOut)
+	writeInfo(cfg.Stdout, resp.Entries, *jsonOut)
 	return 0
 }
 
@@ -153,8 +155,8 @@ func writeLease(w io.Writer, lease control.LeaseResponse, jsonOut, shell bool) {
 	}
 }
 
-// writeRoutes prints registry-backed route entries (used by info and move) in
-// the same env-style format as writeLease, one block per route.
+// writeRoutes prints registry-backed route entries in the same env-style
+// format as writeLease, one block per route.
 func writeRoutes(w io.Writer, entries []control.ListEntry, jsonOut bool) {
 	if jsonOut {
 		_ = json.NewEncoder(w).Encode(entries)
@@ -169,6 +171,61 @@ func writeRoutes(w io.Writer, entries []control.ListEntry, jsonOut bool) {
 			fmt.Fprintf(w, "URL=http://%s\n", entry.Host)
 			fmt.Fprintf(w, "HOST=%s\n", entry.Host)
 		}
+		fmt.Fprintf(w, "PATH=%s\n", entry.Path)
+	}
+}
+
+func writeInfo(w io.Writer, entries []control.ListEntry, jsonOut bool) {
+	if jsonOut {
+		_ = json.NewEncoder(w).Encode(entries)
+		return
+	}
+	routes := make([]control.ListEntry, 0, len(entries))
+	ports := make([]control.ListEntry, 0, len(entries))
+	for _, entry := range entries {
+		switch entry.Kind {
+		case identity.KindRoute:
+			routes = append(routes, entry)
+		case identity.KindPort:
+			ports = append(ports, entry)
+		}
+	}
+	if len(routes) > 0 {
+		fmt.Fprintln(w, "ROUTES")
+		writeInfoRoutes(w, routes)
+	}
+	if len(routes) > 0 && len(ports) > 0 {
+		fmt.Fprintln(w)
+	}
+	if len(ports) > 0 {
+		fmt.Fprintln(w, "PORTS")
+		writeInfoPorts(w, ports)
+	}
+}
+
+func writeInfoRoutes(w io.Writer, entries []control.ListEntry) {
+	for i, entry := range entries {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
+		if entry.Host != "" {
+			fmt.Fprintf(w, "URL=http://%s\n", entry.Host)
+			fmt.Fprintf(w, "HOST=%s\n", entry.Host)
+		}
+		fmt.Fprintf(w, "STATE=%s\n", entry.State)
+		fmt.Fprintf(w, "PATH=%s\n", entry.Path)
+	}
+}
+
+func writeInfoPorts(w io.Writer, entries []control.ListEntry) {
+	for i, entry := range entries {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		fmt.Fprintf(w, "NAME=%s\n", entry.Name)
+		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
+		fmt.Fprintf(w, "STATE=%s\n", entry.State)
 		fmt.Fprintf(w, "PATH=%s\n", entry.Path)
 	}
 }

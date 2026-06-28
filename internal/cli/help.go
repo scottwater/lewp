@@ -23,7 +23,7 @@ Commands:
   setup      Install the .lewp DNS resolver, local CA, and launchd service
   system     Manage the daemon: start|stop|status|restart|uninstall
   add        Register a stable port and .lewp hostname for the current directory
-  info       Show the route registered for the current directory
+  info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory
   port       Lease a bare internal port without a hostname
   release    Release the route for the current directory
@@ -94,16 +94,17 @@ Examples:
   eval "$(lewp add --shell)"
 `
 
-	infoHelp = `lewp info — show the route registered for the current directory
+	infoHelp = `lewp info — show routes and bare ports for the current directory
 
 Reads existing registry data only; it never creates, allocates, or changes a
-route. Exits non-zero if no route is registered for this directory.
+route or port. Exits non-zero if no route or port is registered for this
+directory.
 
 Usage:
   lewp info [--json]
 
 Flags:
-  --json   Emit the route(s) as a JSON array
+  --json   Emit the registered entries as a JSON array
 
 Examples:
   lewp info

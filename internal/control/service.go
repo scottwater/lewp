@@ -208,7 +208,7 @@ func (s *Service) Info(ctx context.Context, req InfoRequest) ([]ListEntry, error
 	}
 	var entries []ListEntry
 	for _, record := range records {
-		if record.State != registry.StateActive || record.Kind != identity.KindRoute || record.Path != abs {
+		if record.State != registry.StateActive || record.Path != abs {
 			continue
 		}
 		entries = append(entries, ListEntry{

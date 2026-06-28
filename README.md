@@ -91,7 +91,7 @@ https://feature-1.audit.lewp
 Check or relocate a route later:
 
 ```sh
-lewp info                                  # show this directory's route
+lewp info                                  # show this directory's route and ports
 lewp move --from ~/projects/audit/feature-1   # bring its route here, same port
 ```
 

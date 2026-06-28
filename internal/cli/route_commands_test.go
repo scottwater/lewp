@@ -134,7 +134,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("info on empty dir code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "no Lewp route is registered") || !strings.Contains(stderr.String(), "lewp add") || !strings.Contains(stderr.String(), "lewp move") {
+	if !strings.Contains(stderr.String(), "no Lewp route or port is registered") || !strings.Contains(stderr.String(), "lewp add") || !strings.Contains(stderr.String(), "lewp port") || !strings.Contains(stderr.String(), "lewp move") {
 		t.Fatalf("info empty message missing guidance: %q", stderr.String())
 	}
 
@@ -150,7 +150,18 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("add output missing host: %q", addOut)
 	}
 
-	// info now reports the route for that directory.
+	// port registers a bare port for the same directory.
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String(), "HOST=") || !strings.Contains(stdout.String(), "PORT=") {
+		t.Fatalf("port output should be bare: %q", stdout.String())
+	}
+
+	// info now reports the route and bare port for that directory.
 	stdout.Reset()
 	stderr.Reset()
 	code = Run(Config{Args: []string{"info"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
@@ -158,8 +169,11 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("info code=%d stderr=%q", code, stderr.String())
 	}
 	infoOut := stdout.String()
-	if !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "PATH="+srcDir) {
+	if !strings.Contains(infoOut, "ROUTES\n") || !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "PATH="+srcDir) {
 		t.Fatalf("info output missing route fields: %q", infoOut)
+	}
+	if !strings.Contains(infoOut, "PORTS\n") || !strings.Contains(infoOut, "NAME=vite") || !strings.Contains(infoOut, "STATE=down") {
+		t.Fatalf("info output missing bare port fields: %q", infoOut)
 	}
 
 	// move it to the destination directory, preserving host and port.
@@ -173,11 +187,14 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("move output missing moved route: %q", stdout.String())
 	}
 
-	// source no longer owns a route; destination does.
+	// source still owns its bare port; route moved to destination.
 	stdout.Reset()
 	stderr.Reset()
-	if code = Run(Config{Args: []string{"info"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 1 {
-		t.Fatalf("source info after move code=%d stdout=%q", code, stdout.String())
+	if code = Run(Config{Args: []string{"info"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("source info after move code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "PORTS\n") || !strings.Contains(stdout.String(), "NAME=vite") || strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") {
+		t.Fatalf("source info after move should only show port: %q", stdout.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
