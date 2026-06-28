@@ -131,9 +131,8 @@ Host rules:
 Discovery order:
 
 1. flags: `--root`, `--name`, `--host`
-2. env: `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
-3. nearest `.lewp.local.toml`
-4. path/git worktree inference
+2. nearest `.lewp.local.toml`
+3. path/git worktree inference
 
 Example `.lewp.local.toml`:
 

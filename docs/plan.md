@@ -108,10 +108,9 @@ allow non-`.lewp` domains in V1.
 
 ## Identity, normalization, worktrees
 
-`internal/identity` discovery order (per spec, extended for host overrides): CLI flags
-(`--root`/`--name`/`--host`) → env (`LEWP_ROOT`/`LEWP_NAME`/`LEWP_HOST`) → nearest
-`.lewp.local.toml` (`root`, `name`, optional `host`) → inference. Inference must be *announced*
-in human output.
+`internal/identity` discovery order (per current CLI/daemon request shape, extended for host
+overrides): CLI flags (`--root`/`--name`/`--host`) → nearest `.lewp.local.toml` (`root`, `name`,
+optional `host`) → inference. Inference must be *announced* in human output.
 
 - **Default inference:** parent dir → `root`, basename → `instance`.
 - **Default host:** `<normalized_instance>.<normalized_root>.lewp`.

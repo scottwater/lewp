@@ -23,7 +23,7 @@ your `PATH`. Override with `LEWP_INSTALL_DIR=/some/bin bin/install`.
 Requirements:
 
 - macOS
-- Go 1.24+
+- Go 1.25+
 - permission to install a LaunchAgent and trust a local development CA
 
 ## Setup
@@ -74,7 +74,7 @@ https://feature-1.audit.lewp
 
 ## CLI Reference
 
-Full command documentation lives in [DOCUMENATION.md](DOCUMENATION.md).
+Full command documentation lives in [DOCUMENTATION.md](DOCUMENTATION.md).
 
 ## Development
 

@@ -114,9 +114,8 @@ inside `.lewp` in V1; non-`.lewp` domains are out of scope.
 Root, instance, and explicit host discovery order:
 
 1. CLI flags: `--root`, `--name`, `--host`
-2. environment variables: `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
-3. nearest `.lewp.local.toml`
-4. path inference
+2. nearest `.lewp.local.toml`
+3. path inference
 
 Path inference rule:
 
