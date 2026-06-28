@@ -205,3 +205,56 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("dest info after move missing route: %q", stdout.String())
 	}
 }
+
+func TestRunListAlignsColumnsWithMixedHosts(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+	otherDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"port"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"add", "--host", "todoordie.lewp"}, WorkDir: otherDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add other code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"list"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("list code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	if strings.Contains(got, "\t") {
+		t.Fatalf("list output should use spaces, not raw tabs:\n%s", got)
+	}
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 4 {
+		t.Fatalf("list lines=%d want 4:\n%s", len(lines), got)
+	}
+	portCol := strings.Index(lines[0], "PORT")
+	stateCol := strings.Index(lines[0], "STATE")
+	pathCol := strings.Index(lines[0], "PATH")
+	if portCol < 0 || stateCol < 0 || pathCol < 0 {
+		t.Fatalf("list header missing columns:\n%s", got)
+	}
+	for _, line := range lines[1:] {
+		if !isSpace(line[portCol-1]) || !isSpace(line[stateCol-1]) || !isSpace(line[pathCol-1]) {
+			t.Fatalf("list row not aligned to header columns:\n%s", got)
+		}
+		if line[portCol] == ' ' || line[stateCol] == ' ' || line[pathCol] == ' ' {
+			t.Fatalf("list row missing value at aligned column:\n%s", got)
+		}
+	}
+}
+
+func isSpace(b byte) bool {
+	return b == ' '
+}

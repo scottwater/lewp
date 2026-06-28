@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/scottwater/lewp/internal/control"
 	"github.com/scottwater/lewp/internal/identity"
@@ -115,14 +116,16 @@ func runList(cfg Config) int {
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	fmt.Fprintln(cfg.Stdout, "HOST\tPORT\tSTATE\tPATH")
+	tw := tabwriter.NewWriter(cfg.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "HOST\tPORT\tSTATE\tPATH")
 	for _, entry := range resp.Entries {
 		host := entry.Host
 		if host == "" {
 			host = "-"
 		}
-		fmt.Fprintf(cfg.Stdout, "%s\t%d\t%s\t%s\n", host, entry.Port, entry.State, entry.Path)
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", host, entry.Port, entry.State, entry.Path)
 	}
+	_ = tw.Flush()
 	return 0
 }
 
