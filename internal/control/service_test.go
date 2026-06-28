@@ -87,6 +87,25 @@ func TestServiceForwardedEnvResolvesIdentity(t *testing.T) {
 	}
 }
 
+func TestServiceLeaseAllowsConfiguredCustomSuffix(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	svc.SetManagedSuffixes([]string{"lewp", "local.todoordie.com"})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	lease, err := svc.Lease(ctx, LeaseRequest{
+		WorkDir: dir,
+		Host:    "feature-1.local.todoordie.com",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Host != "feature-1.local.todoordie.com" {
+		t.Fatalf("host=%q", lease.Host)
+	}
+}
+
 func TestServiceIgnoresDaemonProcessEnv(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})

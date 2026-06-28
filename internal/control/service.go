@@ -13,12 +13,14 @@ import (
 
 	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/registry"
+	"github.com/scottwater/lewp/internal/suffix"
 	localtls "github.com/scottwater/lewp/internal/tls"
 )
 
 type Service struct {
-	store     *registry.Store
-	portRange registry.PortRange
+	store           *registry.Store
+	portRange       registry.PortRange
+	managedSuffixes []string
 }
 
 type LeaseRequest struct {
@@ -122,7 +124,11 @@ type ListEntry struct {
 }
 
 func NewService(store *registry.Store, portRange registry.PortRange) *Service {
-	return &Service{store: store, portRange: portRange}
+	return &Service{store: store, portRange: portRange, managedSuffixes: []string{suffix.BuiltIn}}
+}
+
+func (s *Service) SetManagedSuffixes(managed []string) {
+	s.managedSuffixes = suffix.Managed(managed)
 }
 
 // requestEnv normalizes a request's forwarded environment to a non-nil map.
@@ -138,12 +144,13 @@ func requestEnv(env map[string]string) map[string]string {
 
 func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, error) {
 	resolved, err := identity.Resolve(identity.Options{
-		WorkDir: req.WorkDir,
-		Root:    req.Root,
-		Name:    req.Name,
-		Host:    req.Host,
-		Env:     requestEnv(req.Env),
-		Kind:    identity.KindRoute,
+		WorkDir:         req.WorkDir,
+		Root:            req.Root,
+		Name:            req.Name,
+		Host:            req.Host,
+		Env:             requestEnv(req.Env),
+		Kind:            identity.KindRoute,
+		ManagedSuffixes: s.managedSuffixes,
 	})
 	if err != nil {
 		return LeaseResponse{}, err

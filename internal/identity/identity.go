@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/scottwater/lewp/internal/suffix"
 )
 
 // ConfigFileName is the per-directory local config file Lewp reads for root,
@@ -49,6 +50,9 @@ type Options struct {
 	Env     map[string]string
 	Git     *GitInfo
 	Kind    Kind
+	// ManagedSuffixes is the set of suffixes Lewp owns for explicit hosts.
+	// Empty means the built-in .lewp suffix only.
+	ManagedSuffixes []string
 	// IgnoreConfig skips reading any .lewp.local.toml up the tree. `lewp init`
 	// uses it so a regenerated file is built purely from flags, env, and
 	// inference and is never influenced (or blocked) by an existing — possibly
@@ -157,7 +161,11 @@ func Resolve(opts Options) (Result, error) {
 		hostSource = SourceInferred
 	}
 	host = normalizeHost(host)
-	if err := ValidateHost(host); err != nil {
+	managedSuffixes := opts.ManagedSuffixes
+	if len(managedSuffixes) == 0 {
+		managedSuffixes = []string{suffix.BuiltIn}
+	}
+	if err := ValidateHostForSuffixes(host, managedSuffixes); err != nil {
 		return Result{}, err
 	}
 
@@ -206,15 +214,21 @@ func NormalizeLabel(input string) (string, []string, error) {
 }
 
 func ValidateHost(host string) error {
+	return ValidateHostForSuffixes(host, []string{suffix.BuiltIn})
+}
+
+func ValidateHostForSuffixes(host string, managed []string) error {
 	host = normalizeHost(host)
-	if !strings.HasSuffix(host, ".lewp") {
-		return fmt.Errorf("host %q must be inside .lewp", host)
+	if len(managed) == 0 {
+		managed = []string{suffix.BuiltIn}
 	}
-	trimmed := strings.TrimSuffix(host, ".lewp")
-	if trimmed == "" || strings.HasSuffix(trimmed, ".") {
-		return fmt.Errorf("host %q must include at least one label before .lewp", host)
+	if !suffix.HostInManagedSuffix(host, managed) {
+		return fmt.Errorf("host %q must be inside a configured Lewp suffix", host)
 	}
-	for _, label := range strings.Split(trimmed, ".") {
+	if !hasLabelBeforeManagedSuffix(host, managed) {
+		return fmt.Errorf("host %q must include at least one label before its managed suffix", host)
+	}
+	for _, label := range strings.Split(host, ".") {
 		if label == "" || len(label) > 63 {
 			return fmt.Errorf("host %q contains an invalid DNS label", host)
 		}
@@ -224,6 +238,26 @@ func ValidateHost(host string) error {
 		}
 	}
 	return nil
+}
+
+func hasLabelBeforeManagedSuffix(host string, managed []string) bool {
+	normalized := make([]string, 0, len(managed))
+	for _, raw := range managed {
+		s, err := suffix.Normalize(raw)
+		if err != nil {
+			continue
+		}
+		normalized = append(normalized, s)
+		if host == s {
+			return false
+		}
+	}
+	for _, s := range normalized {
+		if strings.HasSuffix(host, "."+s) {
+			return strings.TrimSuffix(host, "."+s) != ""
+		}
+	}
+	return false
 }
 
 func normalizeHost(host string) string {

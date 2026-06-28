@@ -200,3 +200,23 @@ func TestResolvePortIdentityIgnoresRouteHostConfig(t *testing.T) {
 		t.Fatalf("port identity should not carry host metadata: %+v", got)
 	}
 }
+
+func TestValidateHostAllowsConfiguredSuffix(t *testing.T) {
+	managed := []string{"lewp", "local.todoordie.com"}
+	if err := ValidateHostForSuffixes("feature.local.todoordie.com", managed); err != nil {
+		t.Fatalf("configured suffix host rejected: %v", err)
+	}
+	if err := ValidateHostForSuffixes("feature.todoordie.com", managed); err == nil {
+		t.Fatal("unconfigured suffix host accepted")
+	}
+}
+
+func TestValidateHostRejectsBareManagedSuffix(t *testing.T) {
+	managed := []string{"lewp", "local.todoordie.com", "deep.local.todoordie.com"}
+	if err := ValidateHostForSuffixes("deep.local.todoordie.com", managed); err == nil {
+		t.Fatal("bare nested managed suffix accepted as a host")
+	}
+	if err := ValidateHostForSuffixes("feature.deep.local.todoordie.com", managed); err != nil {
+		t.Fatalf("host below nested managed suffix rejected: %v", err)
+	}
+}
