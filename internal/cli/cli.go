@@ -389,6 +389,9 @@ func runSetup(cfg Config) int {
 		fmt.Fprintln(cfg.Stdout, "Next: lewp doctor")
 		return 0
 	}
+	if len(suffixFlags) > 0 {
+		fmt.Fprintln(cfg.Stdout, "# suffix changes load when the daemon starts or kickstarts")
+	}
 	fmt.Fprintln(cfg.Stdout, "Next: lewp system start && lewp doctor")
 	return 0
 }

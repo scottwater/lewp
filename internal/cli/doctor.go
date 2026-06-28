@@ -77,7 +77,7 @@ func collectDoctorChecks(cfg Config) []doctorCheck {
 	if daemonUp {
 		checks = append(checks, daemonReportedChecks(resp.Checks)...)
 		checks = append(checks, proxyBindCheck(cfg))
-		checks = append(checks, dnsResolutionCheck(cfg))
+		checks = append(checks, dnsResolutionChecks(cfg)...)
 	}
 
 	checks = append(checks, inferenceCheck(cfg))
@@ -296,15 +296,28 @@ func proxyBindCheck(cfg Config) doctorCheck {
 	return c
 }
 
-// dnsResolutionCheck queries the .lewp responder directly and confirms it
-// answers with loopback. It targets the daemon's responder port, not the system
-// resolver, so it works before /etc/resolver caches settle.
-func dnsResolutionCheck(cfg Config) doctorCheck {
-	c := doctorCheck{Name: ".lewp resolution"}
+// dnsResolutionChecks query the responder directly and confirm managed suffixes
+// answer with loopback. They target the daemon's responder port, not the system
+// resolver, so they work before /etc/resolver caches settle.
+func dnsResolutionChecks(cfg Config) []doctorCheck {
+	checks := []doctorCheck{dnsResolutionCheck(".lewp resolution", "doctor.lewp", "doctor.lewp", cfg)}
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		return append(checks, doctorCheck{Name: "custom suffix DNS", Status: statusFail, Detail: err.Error()})
+	}
+	for _, s := range suffixCfg.Suffixes {
+		host := "doctor." + s
+		checks = append(checks, dnsResolutionCheck("DNS "+s, host, host, cfg))
+	}
+	return checks
+}
+
+func dnsResolutionCheck(name, host, label string, cfg Config) doctorCheck {
+	c := doctorCheck{Name: name}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	server := fmt.Sprintf("127.0.0.1:%d", dns.DefaultPort)
-	ip, err := cfg.LookupLewp(ctx, server, "doctor.lewp")
+	ip, err := cfg.LookupLewp(ctx, server, host)
 	if err != nil {
 		c.Status = statusWarn
 		c.Detail = fmt.Sprintf("responder at %s did not answer (%v)", server, err)
@@ -313,12 +326,12 @@ func dnsResolutionCheck(cfg Config) doctorCheck {
 	}
 	if !ip.IsLoopback() {
 		c.Status = statusFail
-		c.Detail = fmt.Sprintf("doctor.lewp resolved to %s, expected loopback", ip)
+		c.Detail = fmt.Sprintf("%s resolved to %s, expected loopback", label, ip)
 		c.Run = "lewp system restart"
 		return c
 	}
 	c.Status = statusOK
-	c.Detail = fmt.Sprintf("doctor.lewp -> %s via %s", ip, server)
+	c.Detail = fmt.Sprintf("%s -> %s via %s", label, ip, server)
 	return c
 }
 

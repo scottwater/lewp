@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"reflect"
 	"strings"
@@ -274,6 +275,28 @@ func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {
 	}
 }
 
+func TestDoctorChecksCustomSuffixDNS(t *testing.T) {
+	dir := t.TempDir()
+	suffixesPath := dir + "/suffixes.toml"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	var lookedUp []string
+	checks := dnsResolutionChecks(Config{
+		SuffixesPath: suffixesPath,
+		LookupLewp: func(_ context.Context, _ string, host string) (net.IP, error) {
+			lookedUp = append(lookedUp, host)
+			return net.ParseIP("127.0.0.1"), nil
+		},
+	})
+	if findCheck(t, checks, "DNS local.todoordie.com").Status != statusOK {
+		t.Fatalf("custom suffix DNS check missing or not ok: %+v", checks)
+	}
+	if got := strings.Join(lookedUp, ","); got != "doctor.lewp,doctor.local.todoordie.com" {
+		t.Fatalf("lookups=%q", got)
+	}
+}
+
 func TestRunDoctorPrintsInstalledChecksWhenDaemonDown(t *testing.T) {
 	dir := t.TempDir()
 	installed := dir + "/lewp"
@@ -476,6 +499,9 @@ func TestRunSetupAddsCustomSuffixResolver(t *testing.T) {
 	got := stdout.String()
 	if !strings.Contains(got, "SUFFIX=local.todoordie.com") || !strings.Contains(got, "RESOLVER="+dir+"/resolver/local.todoordie.com") {
 		t.Fatalf("setup output missing suffix info:\n%s", got)
+	}
+	if !strings.Contains(got, "suffix changes load when the daemon starts or kickstarts") {
+		t.Fatalf("setup output missing suffix reload note:\n%s", got)
 	}
 }
 

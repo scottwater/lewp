@@ -156,7 +156,9 @@ lewp add --host feature-1.local.todoordie.com
 Lewp installs a resolver only for `local.todoordie.com`, so `todoordie.com` and
 `www.todoordie.com` continue to use normal DNS. Custom suffixes must be below a
 registrable domain; apex domains such as `todoordie.com` and `todoordie.co.uk`
-are rejected.
+are rejected. After adding a suffix, run `lewp system start` (or
+`lewp setup --suffix local.todoordie.com --start`) so the daemon kickstarts and
+loads the updated suffix list.
 
 ## Worktree walkthrough
 

@@ -72,7 +72,9 @@ Custom suffixes must be below a registrable domain. `local.todoordie.com` and
 `local.todoordie.co.uk` are accepted; apex domains such as `todoordie.com` and
 `todoordie.co.uk`, `www.*`, and reserved suffixes are rejected. Setup is
 additive: re-running with another `--suffix` keeps previously configured
-suffixes.
+suffixes. After adding a suffix, run `lewp system start` (or pass `--start` to
+setup) so launchd starts or kickstarts the daemon and it loads the updated suffix
+list.
 
 Output:
 
