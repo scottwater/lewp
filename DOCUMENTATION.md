@@ -32,7 +32,8 @@ lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--json]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
-lewp release [--forget]
+lewp port release [--name N] [--forget]
+lewp release [--all] [--forget]
 lewp list [--all] [--json]
 lewp doctor
 lewp logs [--lines N] [--follow] [--path]
@@ -309,17 +310,44 @@ unique local ports across worktrees, such as Vite:
 export VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
 ```
 
+With no `--name`, `port` leases under the default name `port`, so repeated
+`lewp port` calls from the same directory return the same number.
+
+### `lewp port release`
+
+Release a single bare port lease for the current directory.
+
+```sh
+lewp port release             # release the default-named ("port") lease
+lewp port release --name vite # release the bare port named "vite"
+lewp port release --name vite --forget
+```
+
+`--name` selects which bare port to release (default `port`); `--forget` also
+drops its remembered identity. Releasing a name with no active port is reported
+(`no active port named "vite" for this directory`) and exits `0` — release is
+idempotent. This frees one named port; to drop the route and every bare port at
+once use [`lewp release --all`](#lewp-release).
+
 ## `lewp release`
 
-Release the current folder route.
+Release the current folder route, and optionally its bare ports.
 
 ```sh
 lewp release
+lewp release --all
 lewp release --forget
 ```
 
-Without `--forget`, history stays in the registry. With `--forget`, Lewp removes
-the remembered identity/history for the current folder.
+By default `release` frees only the route. `--all` additionally releases every
+bare port leased for this directory (equivalent to running `lewp port release`
+for each one). Without `--forget`, history stays in the registry; with
+`--forget`, Lewp removes the remembered identity/history for the current folder.
+
+Release is idempotent: when nothing is active it reports `no active route for
+this directory` (or, with `--all`, `no active route or port for this directory`)
+and exits `0`. To release a single named bare port instead of all of them, use
+[`lewp port release --name <name>`](#lewp-port-release).
 
 ## `lewp list`
 
@@ -393,6 +421,12 @@ The V1 doctor contract also tracks resolver file state, `.lewp` lookup, proxy
 port binding, registry readability, current-folder identity inference, current
 target port state, and hostname conflicts.
 
+`doctor` also prints an informational `browser trust` line restating the V1
+HTTPS browser boundary: Safari and Chromium browsers trust the macOS keychain,
+while Firefox uses its own NSS store and is not supported in V1 (use `http://`
+in Firefox). It is informational only and never fails. See
+[Browser URLs](#browser-urls).
+
 If setup has not created local CA material:
 
 ```text
@@ -416,11 +450,18 @@ plist). The daemon's stdout carries one request line per proxied request
 failures land on stderr.
 
 ```sh
-lewp logs              # last 50 lines of each log, with a header per file
-lewp logs --lines 200  # last 200 lines of each log
-lewp logs --follow     # stream new output until Ctrl-C (alias: -f)
-lewp logs --path       # print the two log file paths and exit
+lewp logs                  # last 200 lines of each log, with a header per file
+lewp logs --lines 500      # last 500 lines of each log
+lewp logs --grep error     # only lines containing "error" (case-insensitive)
+lewp logs --grep 502 --lines 50  # last 50 matching lines
+lewp logs --follow         # stream new output until Ctrl-C (alias: -f)
+lewp logs --path           # print the two log file paths and exit
 ```
+
+`--grep TEXT` keeps only lines containing `TEXT` (case-insensitive); `--lines`
+then bounds the matching lines, so `--grep TEXT --lines N` behaves like
+`grep TEXT | tail -n N`. When a log has no matching lines, `logs` prints
+`(no lines matching "TEXT")` for that file.
 
 `lewp logs` only reads files; it never starts the daemon. When no logs exist
 yet, it prints where they will appear after `lewp setup && lewp system start`.

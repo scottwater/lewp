@@ -68,6 +68,7 @@ func collectDoctorChecks(cfg Config) []doctorCheck {
 	resolver := resolverCheck(cfg)
 	checks = append(checks, resolver)
 	checks = append(checks, setupArtifactChecks(cfg)...)
+	checks = append(checks, browserTrustCheck())
 
 	resp, daemonUp := daemonResponse(cfg)
 	checks = append(checks, daemonCheck(cfg, daemonUp))
@@ -160,6 +161,19 @@ func setupArtifactChecks(cfg Config) []doctorCheck {
 	checks = append(checks, keychain)
 
 	return checks
+}
+
+// browserTrustCheck is an informational note about which browsers trust the
+// local CA in V1. Keychain trust covers the macOS system store (Safari and
+// Chromium browsers); Firefox ships its own NSS store and is out of scope for
+// V1, so doctor states that explicitly to match README/DOCUMENTATION rather than
+// leaving a Firefox HTTPS warning unexplained. It never fails.
+func browserTrustCheck() doctorCheck {
+	return doctorCheck{
+		Name:   "browser trust",
+		Status: statusOK,
+		Detail: "Safari and Chromium browsers use the macOS keychain; Firefox/NSS is not supported in V1 (use http:// in Firefox)",
+	}
 }
 
 // daemonResponse calls the control socket once so multiple checks can reuse the

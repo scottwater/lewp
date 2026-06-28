@@ -182,31 +182,50 @@ port but no .lewp host.
 
 Usage:
   lewp port [--name <name>] [--json] [--shell]
+  lewp port release [--name <name>] [--forget]
 
 Flags:
   --name <name>   Logical name for the port within this directory (default "port")
   --json          Emit the lease as a JSON object
   --shell         Emit shell "export" lines for use with eval
 
+With no --name a bare port is leased under the default name "port", so repeated
+"lewp port" calls from the same directory return the same number.
+
 --shell emits one "export" line per value, so evaluate it rather than capturing
 it into a single variable. For just the number, prefer --json with jq.
+
+Subcommand:
+  lewp port release [--name <name>] [--forget]
+      Release a single bare port lease for this directory (default name "port").
+      Add --forget to also drop its remembered identity. Releasing nothing is
+      reported, not an error. Use "lewp release --all" to drop the route and
+      every bare port at once.
 
 Examples:
   lewp port --name vite
   eval "$(lewp port --name vite --shell)"
   VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
+  lewp port release --name vite
 `
 
-	releaseHelp = `lewp release — release the route for the current directory
+	releaseHelp = `lewp release — release the route (and optionally bare ports) for this directory
 
 Usage:
-  lewp release [--forget]
+  lewp release [--all] [--forget]
 
 Flags:
+  --all      Also release every bare port leased for this directory, not just
+             the route
   --forget   Also remove remembered identity and history for this directory
+
+Release is idempotent: releasing when nothing is active is reported, never an
+error. To release a single named bare port instead of all of them, use
+"lewp port release --name <name>".
 
 Examples:
   lewp release
+  lewp release --all
   lewp release --forget
 `
 
@@ -245,17 +264,21 @@ routing details, startup errors). It only reads files; it never starts the
 daemon.
 
 Usage:
-  lewp logs [--lines N] [--follow] [--path]
+  lewp logs [--lines N] [--grep TEXT] [--follow] [--path]
 
 Flags:
-  --lines N   Number of trailing lines to show per log (default 50)
-  --follow    Print new log output as it is appended (Ctrl-C to stop)
-  -f          Alias for --follow
-  --path      Print the log file paths only and exit
+  --lines N    Number of trailing lines to show per log (default 200)
+  --grep TEXT  Show only lines containing TEXT (case-insensitive); --lines then
+               bounds the matching lines, like "grep TEXT | tail -n N"
+  --follow     Print new log output as it is appended (Ctrl-C to stop)
+  -f           Alias for --follow
+  --path       Print the log file paths only and exit
 
 Examples:
   lewp logs
-  lewp logs --lines 200
+  lewp logs --lines 500
+  lewp logs --grep error
+  lewp logs --grep 502 --lines 50
   lewp logs --follow
   lewp logs --path
 `

@@ -28,10 +28,11 @@ func daemonLogFiles(cfg Config) []logFile {
 func runLogs(cfg Config) int {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
-	lines := fs.Int("lines", 50, "")
+	lines := fs.Int("lines", 200, "")
 	follow := fs.Bool("follow", false, "")
 	fs.BoolVar(follow, "f", false, "")
 	pathsOnly := fs.Bool("path", false, "")
+	grep := fs.String("grep", "", "")
 	if fs.Parse(cfg.Args[1:]) != nil {
 		return 2
 	}
@@ -51,14 +52,18 @@ func runLogs(cfg Config) int {
 			fmt.Fprintln(cfg.Stdout)
 		}
 		fmt.Fprintf(cfg.Stdout, "==> %s (%s) <==\n", f.path, f.label)
-		body, err := tailLines(f.path, *lines)
+		body, err := tailLines(f.path, *lines, *grep)
 		if err != nil {
 			missing++
 			fmt.Fprintf(cfg.Stdout, "(no log yet: %v)\n", err)
 			continue
 		}
 		if strings.TrimSpace(body) == "" {
-			fmt.Fprintln(cfg.Stdout, "(empty)")
+			if *grep != "" {
+				fmt.Fprintf(cfg.Stdout, "(no lines matching %q)\n", *grep)
+			} else {
+				fmt.Fprintln(cfg.Stdout, "(empty)")
+			}
 			continue
 		}
 		fmt.Fprint(cfg.Stdout, body)
@@ -78,22 +83,41 @@ func runLogs(cfg Config) int {
 	return 0
 }
 
-// tailLines returns the last n lines of the file at path. Daemon logs are small
-// in practice, so it reads the whole file rather than seeking from the end.
-func tailLines(path string, n int) (string, error) {
+// tailLines returns the last n lines of the file at path, optionally keeping
+// only lines that contain grep (case-insensitive substring). When grep is set,
+// filtering happens before the tail so n bounds the matching lines, mirroring
+// `grep ... | tail -n`. Daemon logs are small in practice, so it reads the whole
+// file rather than seeking from the end.
+func tailLines(path string, n int, grep string) (string, error) {
 	if n <= 0 {
-		n = 50
+		n = 200
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
 	}
-	text := string(data)
-	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
-	if len(lines) <= n {
-		return strings.Join(lines, "\n") + "\n", nil
+	text := strings.TrimRight(string(data), "\n")
+	if text == "" {
+		return "", nil
 	}
-	return strings.Join(lines[len(lines)-n:], "\n") + "\n", nil
+	lines := strings.Split(text, "\n")
+	if grep != "" {
+		needle := strings.ToLower(grep)
+		matched := lines[:0:0]
+		for _, line := range lines {
+			if strings.Contains(strings.ToLower(line), needle) {
+				matched = append(matched, line)
+			}
+		}
+		lines = matched
+	}
+	if len(lines) == 0 {
+		return "", nil
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 // followLogs tails appended content from each log file until interrupted. It is

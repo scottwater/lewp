@@ -11,4 +11,29 @@ fi
 install_dir="${LEWP_INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$install_dir"
 install -m 0755 "$repo_root/lewp" "$install_dir/lewp"
+# Line 1 of stdout is the installed path; bin/reinstall captures it. All
+# self-check guidance below goes to stderr so that contract stays intact.
 echo "$install_dir/lewp"
+
+# Self-check: a freshly installed binary is only useful if `lewp` resolves to it
+# on PATH. Warn (without failing) when the install dir is not on PATH, and show
+# what `lewp` currently resolves to so a stale copy earlier on PATH is obvious.
+case ":${PATH}:" in
+  *":${install_dir}:"*)
+    ;;
+  *)
+    echo "warning: ${install_dir} is not on your PATH; add it so 'lewp' is runnable by name:" >&2
+    echo "  export PATH=\"${install_dir}:\$PATH\"" >&2
+    ;;
+esac
+
+resolved="$(command -v lewp || true)"
+if [[ -n "$resolved" ]]; then
+  echo "command -v lewp -> ${resolved}" >&2
+  if [[ "$resolved" != "$install_dir/lewp" ]]; then
+    echo "warning: 'lewp' resolves to ${resolved}, not the just-installed ${install_dir}/lewp" >&2
+  fi
+  echo "verify the installed build with: lewp version" >&2
+else
+  echo "verify the installed build with: ${install_dir}/lewp version" >&2
+fi

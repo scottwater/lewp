@@ -299,6 +299,41 @@ func TestRunDoctorPrintsInstalledChecksWhenDaemonDown(t *testing.T) {
 	}
 }
 
+// TestDoctorSurfacesBrowserTrustScope proves doctor explicitly states the V1
+// browser-trust boundary (Safari/Chromium supported, Firefox/NSS not), so a
+// Firefox HTTPS warning is explained rather than mysterious.
+func TestDoctorSurfacesBrowserTrustScope(t *testing.T) {
+	c := browserTrustCheck()
+	if c.Status != statusOK {
+		t.Fatalf("browser trust check should be informational, got %+v", c)
+	}
+	for _, want := range []string{"Firefox", "V1", "Chromium"} {
+		if !strings.Contains(c.Detail, want) {
+			t.Fatalf("browser trust detail missing %q: %q", want, c.Detail)
+		}
+	}
+
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	Run(Config{
+		Args:         []string{"doctor"},
+		WorkDir:      dir,
+		SocketPath:   dir + "/missing.sock",
+		ProgramPath:  dir + "/lewp",
+		PlistPath:    dir + "/nope.plist",
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		LogDir:       dir + "/Logs",
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand:   func(context.Context, []string) error { return errors.New("not trusted") },
+	})
+	if !strings.Contains(stdout.String(), "browser trust") || !strings.Contains(stdout.String(), "Firefox") {
+		t.Fatalf("doctor output missing browser trust scope:\n%s", stdout.String())
+	}
+}
+
 func TestRunDoctorJSONEmitsCheckArray(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer

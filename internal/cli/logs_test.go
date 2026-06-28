@@ -36,6 +36,38 @@ func TestRunLogsShowsTailOfBothLogs(t *testing.T) {
 	}
 }
 
+func TestRunLogsGrepFiltersLines(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/daemon.out.log", []byte("GET / 200\nGET /x 502 boom\nGET /y 200\nERROR boom\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/daemon.err.log", []byte("startup ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:   []string{"logs", "--grep", "boom"},
+		LogDir: dir,
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	// Case-insensitive: "ERROR boom" matches, plus the 502 line.
+	if !strings.Contains(got, "502 boom") || !strings.Contains(got, "ERROR boom") {
+		t.Fatalf("grep dropped matching lines:\n%s", got)
+	}
+	if strings.Contains(got, "GET / 200") || strings.Contains(got, "GET /y 200") {
+		t.Fatalf("grep kept non-matching lines:\n%s", got)
+	}
+	// The err log has no match; logs reports that per-file instead of "(empty)".
+	if !strings.Contains(got, `(no lines matching "boom")`) {
+		t.Fatalf("grep missing no-match note:\n%s", got)
+	}
+}
+
 func TestRunLogsPathOnly(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
