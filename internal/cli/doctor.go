@@ -13,6 +13,7 @@ import (
 	"github.com/scottwater/lewp/internal/dns"
 	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/launchd"
+	"github.com/scottwater/lewp/internal/suffix"
 	localtls "github.com/scottwater/lewp/internal/tls"
 )
 
@@ -67,6 +68,7 @@ func collectDoctorChecks(cfg Config) []doctorCheck {
 
 	resolver := resolverCheck(cfg)
 	checks = append(checks, resolver)
+	checks = append(checks, suffixResolverChecks(cfg)...)
 	checks = append(checks, setupArtifactChecks(cfg)...)
 	checks = append(checks, browserTrustCheck())
 
@@ -118,6 +120,31 @@ func resolverCheck(cfg Config) doctorCheck {
 	c.Status = statusOK
 	c.Detail = fmt.Sprintf("%s (port %d)", cfg.ResolverPath, port)
 	return c
+}
+
+func suffixResolverChecks(cfg Config) []doctorCheck {
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		return []doctorCheck{{Name: "custom suffixes", Status: statusFail, Detail: err.Error()}}
+	}
+	checks := make([]doctorCheck, 0, len(suffixCfg.Suffixes))
+	for _, s := range suffixCfg.Suffixes {
+		path := resolverPathForSuffix(cfg, s)
+		c := doctorCheck{Name: "resolver " + s, Inspect: path}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			c.Status = statusFail
+			c.Detail = err.Error()
+		} else if port, ok := dns.ResolverPort(string(body)); !ok || port != dns.DefaultPort {
+			c.Status = statusFail
+			c.Detail = "resolver does not point at Lewp DNS port"
+		} else {
+			c.Status = statusOK
+			c.Detail = fmt.Sprintf("%s -> port %d", path, port)
+		}
+		checks = append(checks, c)
+	}
+	return checks
 }
 
 // setupArtifactChecks reports on the launchd plist, the local CA, and keychain

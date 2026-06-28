@@ -571,17 +571,18 @@ func runSystem(cfg Config) int {
 				return 1
 			}
 			fmt.Fprintln(cfg.Stdout, strings.Join(untrust, " "))
-			for _, path := range []string{cfg.PlistPath, cfg.ResolverPath} {
-				if err := ensureLewpOwnedOrMissing(path, ownedMarker(path, cfg)); err != nil {
-					fmt.Fprintf(cfg.Stderr, "refusing to remove %s: %v\n", path, err)
+			for _, item := range uninstallRemovalItems(cfg) {
+				if err := ensureLewpOwnedOrMissing(item.path, item.marker); err != nil {
+					fmt.Fprintf(cfg.Stderr, "refusing to remove %s: %v\n", item.path, err)
 					return 1
 				}
-				if err := removePath(cfg, path); err != nil && !os.IsNotExist(err) {
-					fmt.Fprintf(cfg.Stderr, "remove %s: %v\n", path, err)
+				if err := removePath(cfg, item.path); err != nil && !os.IsNotExist(err) {
+					fmt.Fprintf(cfg.Stderr, "remove %s: %v\n", item.path, err)
 					return 1
 				}
-				fmt.Fprintf(cfg.Stdout, "removed %s\n", path)
+				fmt.Fprintf(cfg.Stdout, "removed %s\n", item.path)
 			}
+			_ = os.Remove(cfg.SuffixesPath)
 			reportRetainedCA(cfg)
 		}
 		return 0
@@ -589,6 +590,29 @@ func runSystem(cfg Config) int {
 		fmt.Fprintf(cfg.Stderr, "unknown system action: %s\n", cfg.Args[1])
 		return 2
 	}
+}
+
+type uninstallRemovalItem struct {
+	path   string
+	marker string
+}
+
+func uninstallRemovalItems(cfg Config) []uninstallRemovalItem {
+	items := []uninstallRemovalItem{
+		{path: cfg.PlistPath, marker: launchd.DefaultLabel},
+		{path: cfg.ResolverPath, marker: dns.ResolverFile(dns.DefaultPort)},
+	}
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		return items
+	}
+	for _, s := range suffixCfg.Suffixes {
+		items = append(items, uninstallRemovalItem{
+			path:   resolverPathForSuffix(cfg, s),
+			marker: dns.ResolverFile(dns.DefaultPort),
+		})
+	}
+	return items
 }
 
 // reportUninstallPlan prints the affected-file/scope summary before uninstall
@@ -602,6 +626,14 @@ func reportUninstallPlan(cfg Config) {
 	fmt.Fprintf(cfg.Stdout, "  launchd: bootout %s and remove %s\n", launchd.DefaultLabel, cfg.PlistPath)
 	fmt.Fprintln(cfg.Stdout, "  keychain: remove trust for \"Lewp Local Development CA\"")
 	fmt.Fprintf(cfg.Stdout, "  resolver: remove %s (may prompt for sudo)\n", cfg.ResolverPath)
+	if suffixCfg, err := suffix.Load(cfg.SuffixesPath); err == nil {
+		for _, s := range suffixCfg.Suffixes {
+			fmt.Fprintf(cfg.Stdout, "  resolver: remove %s (custom suffix %s; may prompt for sudo)\n", resolverPathForSuffix(cfg, s), s)
+		}
+		if len(suffixCfg.Suffixes) > 0 {
+			fmt.Fprintf(cfg.Stdout, "  suffix config: remove %s\n", cfg.SuffixesPath)
+		}
+	}
 	for _, path := range []string{cfg.CAPath, cfg.CAKeyPath} {
 		if path == "" {
 			continue
@@ -757,13 +789,6 @@ func ensureLewpOwnedOrMissing(path, marker string) error {
 		return fmt.Errorf("%s is not Lewp-owned", path)
 	}
 	return nil
-}
-
-func ownedMarker(path string, cfg Config) string {
-	if path == cfg.ResolverPath {
-		return dns.ResolverFile(dns.DefaultPort)
-	}
-	return launchd.DefaultLabel
 }
 
 func runCommand(ctx context.Context, argv []string) error {

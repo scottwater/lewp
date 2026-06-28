@@ -252,6 +252,28 @@ func TestDoctorKeychainCheckReflectsTrust(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {
+	dir := t.TempDir()
+	suffixesPath := dir + "/suffixes.toml"
+	resolverPath := dir + "/resolver/lewp"
+	customResolverPath := dir + "/resolver/local.todoordie.com"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dns.WriteResolverFile(customResolverPath, dns.DefaultPort); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := suffixResolverChecks(Config{
+		ResolverPath: resolverPath,
+		SuffixesPath: suffixesPath,
+	})
+	got := findCheck(t, checks, "resolver local.todoordie.com")
+	if got.Status != statusOK || !strings.Contains(got.Detail, customResolverPath) {
+		t.Fatalf("custom suffix resolver check=%+v", got)
+	}
+}
+
 func TestRunDoctorPrintsInstalledChecksWhenDaemonDown(t *testing.T) {
 	dir := t.TempDir()
 	installed := dir + "/lewp"
@@ -647,6 +669,43 @@ func TestRunSystemUninstallPrintsKeychainCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(resolverPath); !os.IsNotExist(err) {
 		t.Fatalf("resolver not removed: %v", err)
+	}
+}
+
+func TestSystemUninstallRemovesCustomSuffixResolvers(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{dir + "/resolver/lewp", dir + "/resolver/local.todoordie.com"} {
+		if err := os.WriteFile(path, []byte("nameserver 127.0.0.1\nport 15353\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := suffix.Save(dir+"/suffixes.toml", suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:         []string{"system", "uninstall", "--yes"},
+		WorkDir:      dir,
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand:   func(context.Context, []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(dir + "/resolver/local.todoordie.com"); !os.IsNotExist(err) {
+		t.Fatalf("custom resolver still exists or stat failed: %v", err)
+	}
+	if _, err := os.Stat(dir + "/suffixes.toml"); !os.IsNotExist(err) {
+		t.Fatalf("suffix config still exists or stat failed: %v", err)
 	}
 }
 
