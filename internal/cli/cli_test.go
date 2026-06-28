@@ -179,6 +179,159 @@ func TestRunSystemUninstallPrintsKeychainCleanup(t *testing.T) {
 	}
 }
 
+func TestRunHelpVariantsPrintToStdout(t *testing.T) {
+	for _, args := range [][]string{{"help"}, {"--help"}, {"-h"}} {
+		var stdout, stderr bytes.Buffer
+		code := Run(Config{Args: args, Stdout: &stdout, Stderr: &stderr})
+		if code != 0 {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr.String())
+		}
+		got := stdout.String()
+		for _, want := range []string{"Usage:", "lease", "setup", "version", "command-specific help"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v help missing %q:\n%s", args, want, got)
+			}
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("%v wrote to stderr: %q", args, stderr.String())
+		}
+	}
+}
+
+func TestRunNoArgsPrintsHelpToStderr(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: nil, Stdout: &stdout, Stderr: &stderr})
+	if code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "Usage:") {
+		t.Fatalf("stderr missing help: %q", stderr.String())
+	}
+}
+
+func TestRunUnknownCommandReturns2WithHelp(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"bogus"}, Stdout: &stdout, Stderr: &stderr})
+	if code != 2 {
+		t.Fatalf("code=%d", code)
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "unknown command \"bogus\"") || !strings.Contains(got, "Usage:") {
+		t.Fatalf("stderr missing unknown-command help: %q", got)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+}
+
+func TestRunCommandHelpPrintsCommandHelp(t *testing.T) {
+	cases := map[string]string{
+		"lease":   "--shell",
+		"port":    "--name",
+		"release": "--forget",
+		"list":    "--all",
+		"setup":   "sudo",
+		"system":  "uninstall",
+		"doctor":  "CA trust",
+		"daemon":  "launchd",
+	}
+	for cmd, want := range cases {
+		var stdout, stderr bytes.Buffer
+		code := Run(Config{Args: []string{cmd, "--help"}, Stdout: &stdout, Stderr: &stderr})
+		if code != 0 {
+			t.Fatalf("%s --help: code=%d stderr=%q", cmd, code, stderr.String())
+		}
+		got := stdout.String()
+		if !strings.Contains(got, "lewp "+cmd) || !strings.Contains(got, want) {
+			t.Fatalf("%s --help missing %q:\n%s", cmd, want, got)
+		}
+	}
+}
+
+func TestRunVersionPrintsInjectedMetadata(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}} {
+		var stdout, stderr bytes.Buffer
+		code := Run(Config{
+			Args:      args,
+			Version:   "1.2.3",
+			Commit:    "abc1234",
+			BuildDate: "2026-06-27T12:00:00Z",
+			Stdout:    &stdout,
+			Stderr:    &stderr,
+		})
+		if code != 0 {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr.String())
+		}
+		got := stdout.String()
+		for _, want := range []string{"lewp version 1.2.3", "abc1234", "2026-06-27T12:00:00Z", "go:"} {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%v version missing %q:\n%s", args, want, got)
+			}
+		}
+	}
+}
+
+func TestRunSetupPrintsSudoAndKeychainNotes(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	code := Run(Config{
+		Args:         []string{"setup"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "sudo") || !strings.Contains(got, "install "+dir+"/resolver/lewp") {
+		t.Fatalf("setup output missing sudo install note: %q", got)
+	}
+	if !strings.Contains(got, "trust the local development CA in your keychain") {
+		t.Fatalf("setup output missing keychain trust note: %q", got)
+	}
+}
+
+func TestRunSetupTrustFailureShowsExactCommandAndNextStep(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	code := Run(Config{
+		Args:         []string{"setup"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand: func(_ context.Context, argv []string) error {
+			if len(argv) > 0 && strings.Contains(strings.Join(argv, " "), "add-trusted-cert") {
+				return errors.New("user canceled")
+			}
+			return nil
+		},
+	})
+	if code != 1 {
+		t.Fatalf("code=%d", code)
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "trust CA:") || !strings.Contains(got, "Next: trust the CA manually") || !strings.Contains(got, "security add-trusted-cert") {
+		t.Fatalf("trust failure missing exact command/next step: %q", got)
+	}
+}
+
 func TestKeychainTrustLineChecksSecurity(t *testing.T) {
 	var ran []string
 	got := keychainTrustLine(context.Background(), "/tmp/lewp-ca.pem", func(_ context.Context, argv []string) error {

@@ -33,6 +33,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
+		if strings.HasSuffix(host, ".lewp") {
+			writeUnknownRoutePage(w, host)
+			return
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -79,6 +83,56 @@ func writeDebugPage(w http.ResponseWriter, r *http.Request, route registry.Recor
 	fmt.Fprintf(w, "<p>Release state: %s</p>", html.EscapeString(route.State))
 	fmt.Fprintf(w, "<p>Try: PORT=%d bin/dev</p>", route.Port)
 	fmt.Fprint(w, "<p>Hints: lewp list; lewp doctor</p>")
+}
+
+// writeUnknownRoutePage renders a Lewp-branded 404 for a `.lewp` hostname that
+// has no registered route. It explains the situation and gives concrete next
+// steps, tailored to the host's labels where possible. It must not depend on the
+// daemon or control socket — only on the parsed host.
+func writeUnknownRoutePage(w http.ResponseWriter, host string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+
+	esc := html.EscapeString(host)
+	root, name := parseLewpHost(host)
+
+	fmt.Fprintf(w, "<!doctype html><meta charset=\"utf-8\"><title>No Lewp route for %s</title>", esc)
+	fmt.Fprint(w, "<h1>Lewp: no route registered</h1>")
+	fmt.Fprintf(w, "<p>Nothing is registered for <code>%s</code>.</p>", esc)
+
+	if name != "" && root != "" {
+		fmt.Fprintf(w, "<p>This host looks like instance <code>%s</code> in root <code>%s</code>.</p>",
+			html.EscapeString(name), html.EscapeString(root))
+	} else if root != "" {
+		fmt.Fprintf(w, "<p>This host looks like root <code>%s</code>.</p>", html.EscapeString(root))
+	}
+
+	fmt.Fprint(w, "<h2>Next steps</h2><ol>")
+	fmt.Fprint(w, "<li>From the project folder you want this host to point at, run <code>lewp lease</code> to claim a port and hostname.</li>")
+	fmt.Fprint(w, "<li>See what is currently registered: <code>lewp list</code>.</li>")
+	fmt.Fprint(w, "<li>Check daemon, DNS, and TLS health: <code>lewp doctor</code>.</li>")
+	fmt.Fprint(w, "</ol>")
+	fmt.Fprint(w, "<p>Lewp routes traffic to developer-started processes; it does not start them for you.</p>")
+}
+
+// parseLewpHost splits a `<instance>.<root>.lewp` (or `<root>.lewp`) hostname
+// into its root and instance labels. Either return value may be empty when the
+// host does not match the expected shape.
+func parseLewpHost(host string) (root, name string) {
+	trimmed := strings.TrimSuffix(host, ".lewp")
+	if trimmed == "" || trimmed == host {
+		return "", ""
+	}
+	labels := strings.Split(trimmed, ".")
+	switch len(labels) {
+	case 1:
+		return labels[0], ""
+	default:
+		// Last label before .lewp is the root; the rest is the instance.
+		root = labels[len(labels)-1]
+		name = strings.Join(labels[:len(labels)-1], ".")
+		return root, name
+	}
 }
 
 func hostOnly(host string) string {

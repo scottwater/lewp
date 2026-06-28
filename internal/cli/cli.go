@@ -30,6 +30,9 @@ type Config struct {
 	PlistPath    string
 	LogDir       string
 	ProgramPath  string
+	Version      string
+	Commit       string
+	BuildDate    string
 	RunCommand   func(context.Context, []string) error
 }
 
@@ -67,29 +70,80 @@ func Run(cfg Config) int {
 	if cfg.RunCommand == nil {
 		cfg.RunCommand = runCommand
 	}
+	if cfg.Version == "" {
+		cfg.Version = defaultVersion()
+	}
+	if cfg.Commit == "" {
+		cfg.Commit = defaultCommit()
+	}
+	if cfg.BuildDate == "" {
+		cfg.BuildDate = defaultBuildDate()
+	}
 	if len(cfg.Args) == 0 {
-		usage(cfg.Stderr)
+		printMainHelp(cfg.Stderr)
 		return 2
 	}
 	switch cfg.Args[0] {
+	case "help", "--help", "-h":
+		printMainHelp(cfg.Stdout)
+		return 0
+	case "version", "--version", "-v":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, versionHelp)
+			return 0
+		}
+		return runVersion(cfg)
 	case "daemon":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, daemonHelp)
+			return 0
+		}
 		return runDaemon(cfg)
 	case "lease":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, leaseHelp)
+			return 0
+		}
 		return runLease(cfg)
 	case "port":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, portHelp)
+			return 0
+		}
 		return runPort(cfg)
 	case "release":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, releaseHelp)
+			return 0
+		}
 		return runRelease(cfg)
 	case "list":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, listHelp)
+			return 0
+		}
 		return runList(cfg)
 	case "doctor":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, doctorHelp)
+			return 0
+		}
 		return runDoctor(cfg)
 	case "system":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, systemHelp)
+			return 0
+		}
 		return runSystem(cfg)
 	case "setup":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, setupHelp)
+			return 0
+		}
 		return runSetup(cfg)
 	default:
-		usage(cfg.Stderr)
+		fmt.Fprintf(cfg.Stderr, "lewp: unknown command %q\n\n", cfg.Args[0])
+		printMainHelp(cfg.Stderr)
 		return 2
 	}
 }
@@ -236,16 +290,21 @@ func keychainTrustLine(ctx context.Context, certPath string, run func(context.Co
 }
 
 func runSetup(cfg Config) int {
+	fmt.Fprintf(cfg.Stdout, "# setup may prompt for your password (sudo) to install %s\n", cfg.ResolverPath)
+	fmt.Fprintln(cfg.Stdout, "# setup may prompt macOS to trust the local development CA in your keychain")
 	if err := ensureLewpOwnedOrMissing(cfg.PlistPath, launchd.DefaultLabel); err != nil {
 		fmt.Fprintf(cfg.Stderr, "refusing to overwrite launchd plist: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: inspect %s and remove it if it is not Lewp-owned, then re-run: lewp setup\n", cfg.PlistPath)
 		return 1
 	}
 	if err := ensureLewpOwnedOrMissing(cfg.ResolverPath, dns.ResolverFile(dns.DefaultPort)); err != nil {
 		fmt.Fprintf(cfg.Stderr, "refusing to overwrite resolver file: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: inspect %s and remove it if it is not Lewp-owned, then re-run: lewp setup\n", cfg.ResolverPath)
 		return 1
 	}
 	if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
 		fmt.Fprintf(cfg.Stderr, "create log dir: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.LogDir)
 		return 1
 	}
 	if err := launchd.WritePlist(cfg.PlistPath, launchd.Config{
@@ -255,19 +314,23 @@ func runSetup(cfg Config) int {
 		StderrPath: cfg.LogDir + "/daemon.err.log",
 	}); err != nil {
 		fmt.Fprintf(cfg.Stderr, "write launchd plist: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.PlistPath)
 		return 1
 	}
 	if err := writeResolver(cfg); err != nil {
 		fmt.Fprintf(cfg.Stderr, "write resolver file: %v\n", err)
+		fmt.Fprintln(cfg.Stderr, "Next: confirm you can run sudo (the failing command is shown above), then re-run: lewp setup")
 		return 1
 	}
 	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, "Lewp Local Development CA"); err != nil {
 		fmt.Fprintf(cfg.Stderr, "create CA: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.CAPath)
 		return 1
 	}
 	trust := localtls.TrustCommand(cfg.CAPath)
 	if err := cfg.RunCommand(context.Background(), trust); err != nil {
 		fmt.Fprintf(cfg.Stderr, "trust CA: %v\n", err)
+		fmt.Fprintf(cfg.Stderr, "Next: trust the CA manually by running:\n  %s\n", strings.Join(trust, " "))
 		return 1
 	}
 	fmt.Fprintln(cfg.Stdout, "DNS=resolver-file")
@@ -475,10 +538,6 @@ func writeLease(w io.Writer, lease control.LeaseResponse, jsonOut, shell bool) {
 	for _, warning := range lease.Warnings {
 		fmt.Fprintf(w, "# %s\n", warning)
 	}
-}
-
-func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: lewp setup|system|lease|port|release|list|doctor|daemon")
 }
 
 func defaultPlistPath() string {

@@ -94,16 +94,68 @@ func TestProxyPassesSSE(t *testing.T) {
 	}
 }
 
-func TestProxyUnknownHostReturns404(t *testing.T) {
+func TestProxyUnknownLewpHostShowsHelpfulPage(t *testing.T) {
 	store := openProxyStore(t)
 	handler := New(store)
 
-	req := httptest.NewRequest(http.MethodGet, "http://unregistered.audit.lewp/", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://feature-2.audit.lewp/dashboard", nil)
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if ct := rr.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Fatalf("content-type=%q", ct)
+	}
+	body := rr.Body.String()
+	for _, want := range []string{
+		"no route registered",
+		"feature-2.audit.lewp",
+		"instance <code>feature-2</code>",
+		"root <code>audit</code>",
+		"lewp lease",
+		"lewp list",
+		"lewp doctor",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestProxyUnknownLewpHostEscapesHost(t *testing.T) {
+	store := openProxyStore(t)
+	handler := New(store)
+
+	req := httptest.NewRequest(http.MethodGet, "http://x/", nil)
+	req.Host = "<script>.audit.lewp"
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	body := rr.Body.String()
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("unescaped host in body:\n%s", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Fatalf("expected escaped host in body:\n%s", body)
+	}
+}
+
+func TestProxyUnknownNonLewpHostReturnsGeneric404(t *testing.T) {
+	store := openProxyStore(t)
+	handler := New(store)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	body := rr.Body.String()
+	if strings.Contains(body, "no route registered") || strings.Contains(body, "lewp doctor") {
+		t.Fatalf("non-.lewp host should get generic 404, got:\n%s", body)
 	}
 }
 

@@ -35,12 +35,28 @@ lewp setup
 lewp system start
 ```
 
-`setup` writes `/etc/resolver/lewp` (prompting through `sudo` when needed),
-creates Lewp's local CA files under `~/Library/Application Support/lewp/`,
-writes the LaunchAgent plist, and trusts the CA with macOS `security`.
-`system start` runs the launchd bootstrap command. If the LaunchAgent is already
-loaded, it falls back to `launchctl kickstart -k`. Daemon logs are written under
-`~/Library/Logs/lewp/`.
+`setup` writes `/etc/resolver/lewp`, creates Lewp's local CA files under
+`~/Library/Application Support/lewp/`, writes the LaunchAgent plist, and trusts
+the CA with macOS `security`.
+
+Expect two prompts during `setup`:
+
+- **sudo**: installing `/etc/resolver/lewp` needs root, so `setup` runs `sudo`
+  and macOS may prompt for your password.
+- **keychain trust**: trusting the local CA may pop a macOS dialog asking you to
+  allow the change to your keychain.
+
+If a step fails, `setup` prints the exact failing command and a `Next:` line with
+how to recover (for example, the precise `security add-trusted-cert` command to
+run by hand). `system start` runs the launchd bootstrap command; if the
+LaunchAgent is already loaded, it falls back to `launchctl kickstart -k`. Daemon
+logs are written under `~/Library/Logs/lewp/`.
+
+Check the installed build with:
+
+```sh
+lewp version
+```
 
 ## Quick Start
 

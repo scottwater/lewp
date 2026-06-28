@@ -32,14 +32,25 @@ lewp port [--name N] [--json|--shell]
 lewp release [--forget]
 lewp list [--all]
 lewp doctor
+lewp version
 lewp daemon
 ```
+
+Every command accepts `--help` (alias `-h`) for command-specific usage, flags,
+and examples. `lewp`, `lewp help`, and `lewp --help` print the top-level help.
+An unknown command prints the top-level help to stderr and exits `2`.
 
 ## `lewp setup`
 
 Creates Lewp local TLS CA material and trusts it in the macOS login keychain.
 Installing `/etc/resolver/lewp` uses `sudo` when the command is not already
-running as root.
+running as root, so macOS may prompt for your password. Trusting the local CA
+may also pop a macOS keychain dialog. `setup` prints both possibilities as
+leading `#` notes before doing the work.
+
+When a step fails, `setup` prints the exact failing command (from the wrapped
+error) plus a `Next:` line describing how to recover — for example the precise
+`security add-trusted-cert ...` command to run by hand if keychain trust fails.
 
 Output:
 
@@ -223,6 +234,27 @@ If setup has not created local CA material:
 https: not configured (run lewp setup)
 keychain: not trusted (run lewp setup)
 ```
+
+## `lewp version`
+
+Print version and build metadata.
+
+```sh
+lewp version
+```
+
+Example:
+
+```text
+lewp version 0.1.0
+commit:  0a778ce
+built:   2026-06-27T23:08:00Z
+go:      go1.25.1
+```
+
+`version`, `--version`, and `-v` are equivalent. The version, commit, and build
+time are injected at link time by `bin/build`; an un-stamped `go build` reports
+`dev`/`unknown` values.
 
 ## `lewp daemon`
 
