@@ -25,7 +25,7 @@ install.
 ## Commands
 
 ```sh
-lewp setup
+lewp setup [--suffix S]
 lewp system start|stop|status|restart|uninstall
 lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--json|--shell]
 lewp init [--root R] [--name N] [--host H] [--force]
@@ -35,6 +35,8 @@ lewp port [--name N] [--json|--shell]
 lewp port release [--name N] [--forget]
 lewp release [--all] [--forget]
 lewp list [--all] [--json]
+lewp suffix list
+lewp suffix remove S
 lewp doctor
 lewp logs [--lines N] [--grep TEXT] [--follow] [--path]
 lewp completion bash|zsh|fish
@@ -58,6 +60,20 @@ When a step fails, `setup` prints the exact failing command (from the wrapped
 error) plus a `Next:` line describing how to recover — for example the precise
 `security add-trusted-cert ...` command to run by hand if keychain trust fails.
 
+`.lewp` is built in and is always installed. `--suffix S` additively installs a
+resolver for an owned public-domain subtree, useful when an OAuth provider
+rejects private TLDs:
+
+```sh
+lewp setup --suffix local.todoordie.com
+```
+
+Custom suffixes must be below a registrable domain. `local.todoordie.com` and
+`local.todoordie.co.uk` are accepted; apex domains such as `todoordie.com` and
+`todoordie.co.uk`, `www.*`, and reserved suffixes are rejected. Setup is
+additive: re-running with another `--suffix` keeps previously configured
+suffixes.
+
 Output:
 
 ```sh
@@ -65,6 +81,7 @@ DNS=resolver-file
 HTTPS=enabled
 LAUNCHD=/Users/scott/Library/LaunchAgents/dev.lewp.daemon.plist
 RESOLVER=/etc/resolver/lewp
+SUFFIX=local.todoordie.com RESOLVER=/etc/resolver/local.todoordie.com
 CA=/Users/scott/Library/Application Support/lewp/ca.pem
 LOGS=/Users/scott/Library/Logs/lewp
 security add-trusted-cert -r trustRoot -p ssl -k login.keychain ...
@@ -78,6 +95,7 @@ Current setup state:
 - Daemon logs: `~/Library/Logs/lewp/daemon.out.log` and
   `~/Library/Logs/lewp/daemon.err.log`
 - resolver file: `/etc/resolver/lewp`
+- custom suffix config: `~/Library/Application Support/lewp/suffixes.toml`
 - Registry: `~/Library/Application Support/lewp/registry.sqlite`
 - Control socket: `~/Library/Application Support/lewp/control.sock`
 - DNS responder default port: `15353`
@@ -98,7 +116,8 @@ lewp system uninstall
 and print it. If `start` sees launchd bootstrap status 5 because the job is
 already loaded, it falls back to `launchctl kickstart -k`. `uninstall` also
 removes the Lewp CA trust from the login keychain, LaunchAgent plist, and
-resolver file.
+resolver files, including custom suffix resolver files configured with
+`lewp setup --suffix`.
 
 Because `uninstall` is destructive, it first prints an affected-file summary —
 the launchd job to boot out, the keychain trust to remove, the resolver file to
@@ -110,6 +129,8 @@ uninstall will affect:
   launchd: bootout dev.lewp.daemon and remove ~/Library/LaunchAgents/dev.lewp.daemon.plist
   keychain: remove trust for "Lewp Local Development CA"
   resolver: remove /etc/resolver/lewp (may prompt for sudo)
+  resolver: remove /etc/resolver/local.todoordie.com (custom suffix local.todoordie.com; may prompt for sudo)
+  suffix config: remove ~/Library/Application Support/lewp/suffixes.toml
   kept: ~/Library/Application Support/lewp/ca.pem (CA material; a later lewp setup reuses it)
 ```
 
@@ -125,6 +146,27 @@ socket-activation entries `HTTP`, `HTTP6`, `HTTPS`, and `HTTPS6` (loopback ports
 
 ```text
 lewp daemon is running
+```
+
+## `lewp suffix`
+
+List and remove custom managed suffixes.
+
+```sh
+lewp suffix list
+lewp suffix remove local.todoordie.com
+```
+
+`.lewp` is built in and cannot be removed. Custom suffixes are added with
+`lewp setup --suffix S`; `suffix remove S` removes the suffix from Lewp config
+and deletes its resolver file after confirming the resolver is Lewp-owned.
+
+Example:
+
+```sh
+lewp setup --suffix local.todoordie.com
+lewp suffix list
+lewp suffix remove local.todoordie.com
 ```
 
 ## `lewp add`
@@ -180,7 +222,9 @@ Host rules:
 - default host: `<instance>.<root>.lewp`
 - project apex override: `lewp add --host atlas.lewp`
 - custom `.lewp` override: `lewp add --host sso.atlas.lewp`
-- non-`.lewp` hosts are rejected
+- configured public suffix override:
+  `lewp add --host feature-1.local.todoordie.com`
+- hosts outside `.lewp` or the configured suffix list are rejected
 
 Discovery order (each of `root`, `name`, and `host` is resolved from the first
 source that provides it):

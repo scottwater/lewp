@@ -143,6 +143,21 @@ anything. The file is meant to stay uncommitted — `init` prints the
 `--force` to overwrite an existing file (rebuilt from flags and inference, never
 from the file being replaced).
 
+### Custom public dev suffixes
+
+`.lewp` remains the default. For OAuth providers that reject private TLDs, use
+an owned public-domain subtree:
+
+```sh
+lewp setup --suffix local.todoordie.com
+lewp add --host feature-1.local.todoordie.com
+```
+
+Lewp installs a resolver only for `local.todoordie.com`, so `todoordie.com` and
+`www.todoordie.com` continue to use normal DNS. Custom suffixes must be below a
+registrable domain; apex domains such as `todoordie.com` and `todoordie.co.uk`
+are rejected.
+
 ## Worktree walkthrough
 
 Lewp shines with `git worktree`, where each checkout needs its own stable URL
