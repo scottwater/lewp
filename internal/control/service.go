@@ -26,6 +26,26 @@ type LeaseRequest struct {
 	Root    string
 	Name    string
 	Host    string
+	// AutoSuffix opts an explicit --host into the deterministic-suffix conflict
+	// behavior instead of failing when the host is already taken.
+	AutoSuffix bool
+}
+
+// HostConflictError is returned when an explicitly requested host (--host, env,
+// or config) is already assigned to a different directory. It carries the
+// conflicting path and prints concrete cleanup/override guidance so the user is
+// never left guessing why the lease failed.
+type HostConflictError struct {
+	Host      string
+	OwnerPath string
+}
+
+func (e *HostConflictError) Error() string {
+	return fmt.Sprintf("host %s is already assigned to %s\n"+
+		"Free it:        cd %s && lewp release --forget\n"+
+		"Use another:    lewp add --host <name>.lewp\n"+
+		"Suffix anyway:  lewp add --host %s --auto-suffix",
+		e.Host, e.OwnerPath, e.OwnerPath, e.Host)
 }
 
 type PortRequest struct {
@@ -131,6 +151,14 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 	if owner, ok, err := s.store.FindByHost(ctx, resolved.Host); err != nil {
 		return LeaseResponse{}, err
 	} else if ok && owner.Path != resolved.Path {
+		// An explicit host (CLI/env/config) must not silently change out from
+		// under the user: fail with the conflicting path and cleanup guidance
+		// unless they opt into suffixing. Inferred hosts keep the deterministic
+		// suffix so repeat leases stay stable without intervention.
+		explicit := resolved.HostSource != "" && resolved.HostSource != identity.SourceInferred
+		if explicit && !req.AutoSuffix {
+			return LeaseResponse{}, &HostConflictError{Host: resolved.Host, OwnerPath: owner.Path}
+		}
 		original := resolved.Host
 		resolved.Host = suffixedHost(resolved.Host, resolved.Path)
 		resolved.HostKind = identity.HostKindCustom

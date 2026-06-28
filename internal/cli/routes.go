@@ -20,14 +20,15 @@ func runAdd(cfg Config) int {
 	host := fs.String("host", "", "")
 	jsonOut := fs.Bool("json", false, "")
 	shell := fs.Bool("shell", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
+	autoSuffix := fs.Bool("auto-suffix", false, "")
+	if !parseFlags(cfg, fs, "add") {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host}})
+	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	writeLease(cfg.Stdout, *resp.Lease, *jsonOut, *shell)
+	writeLease(cfg.Stdout, cfg.Stderr, *resp.Lease, *jsonOut, *shell)
 	return 0
 }
 
@@ -40,14 +41,14 @@ func runPort(cfg Config) int {
 	name := fs.String("name", "port", "")
 	jsonOut := fs.Bool("json", false, "")
 	shell := fs.Bool("shell", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
+	if !parseFlags(cfg, fs, "port") {
 		return 2
 	}
 	resp, err := call(cfg, control.Request{Command: "port", Port: control.PortRequest{WorkDir: cfg.WorkDir, Name: *name}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	writeLease(cfg.Stdout, *resp.Lease, *jsonOut, *shell)
+	writeLease(cfg.Stdout, cfg.Stderr, *resp.Lease, *jsonOut, *shell)
 	return 0
 }
 
@@ -78,7 +79,7 @@ func runInfo(cfg Config) int {
 	fs := flag.NewFlagSet("info", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	jsonOut := fs.Bool("json", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
+	if !parseFlags(cfg, fs, "info") {
 		return 2
 	}
 	resp, err := call(cfg, control.Request{Command: "info", Info: control.InfoRequest{WorkDir: cfg.WorkDir}})
@@ -101,7 +102,7 @@ func runMove(cfg Config) int {
 	fs.SetOutput(cfg.Stderr)
 	from := fs.String("from", "", "")
 	jsonOut := fs.Bool("json", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
+	if !parseFlags(cfg, fs, "move") {
 		return 2
 	}
 	if strings.TrimSpace(*from) == "" {
@@ -121,7 +122,7 @@ func runRelease(cfg Config) int {
 	fs.SetOutput(cfg.Stderr)
 	all := fs.Bool("all", false, "")
 	forget := fs.Bool("forget", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
+	if !parseFlags(cfg, fs, "release") {
 		return 2
 	}
 	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget, All: *all}})
@@ -152,7 +153,7 @@ func runList(cfg Config) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	all := fs.Bool("all", false, "")
-	if fs.Parse(cfg.Args[1:]) != nil {
+	if !parseFlags(cfg, fs, "list") {
 		return 2
 	}
 	resp, err := call(cfg, control.Request{Command: "list", All: *all})
@@ -172,32 +173,34 @@ func runList(cfg Config) int {
 	return 0
 }
 
-func writeLease(w io.Writer, lease control.LeaseResponse, jsonOut, shell bool) {
+// writeLease prints the lease to stdout as env lines (or JSON). Inference notes
+// and warnings go to stderr so that `eval "$(lewp add --shell)"` and any
+// `PORT=$(...)` capture only see clean assignable output, never `#` comments or
+// conflict warnings.
+func writeLease(stdout, stderr io.Writer, lease control.LeaseResponse, jsonOut, shell bool) {
 	if jsonOut {
-		_ = json.NewEncoder(w).Encode(lease)
+		_ = json.NewEncoder(stdout).Encode(lease)
 		return
 	}
 	prefix := ""
 	if shell {
 		prefix = "export "
 	}
-	fmt.Fprintf(w, "%sPORT=%d\n", prefix, lease.Port)
+	fmt.Fprintf(stdout, "%sPORT=%d\n", prefix, lease.Port)
 	if lease.URL != "" {
-		fmt.Fprintf(w, "%sURL=%s\n", prefix, lease.URL)
+		fmt.Fprintf(stdout, "%sURL=%s\n", prefix, lease.URL)
 	}
 	if lease.Host != "" {
-		fmt.Fprintf(w, "%sHOST=%s\n", prefix, lease.Host)
+		fmt.Fprintf(stdout, "%sHOST=%s\n", prefix, lease.Host)
 	}
-	if !jsonOut && !shell {
-		if lease.RootSource == "inferred" {
-			fmt.Fprintf(w, "# inferred root=%s\n", lease.Root)
-		}
-		if lease.NameSource == "inferred" {
-			fmt.Fprintf(w, "# inferred name=%s\n", lease.Name)
-		}
+	if lease.RootSource == "inferred" {
+		fmt.Fprintf(stderr, "# inferred root=%s\n", lease.Root)
+	}
+	if lease.NameSource == "inferred" {
+		fmt.Fprintf(stderr, "# inferred name=%s\n", lease.Name)
 	}
 	for _, warning := range lease.Warnings {
-		fmt.Fprintf(w, "# %s\n", warning)
+		fmt.Fprintf(stderr, "# %s\n", warning)
 	}
 }
 

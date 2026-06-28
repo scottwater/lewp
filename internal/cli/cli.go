@@ -127,6 +127,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runAdd(cfg)
+	case "init":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, initHelp)
+			return 0
+		}
+		return runInit(cfg)
 	case "info":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, infoHelp)

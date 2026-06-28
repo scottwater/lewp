@@ -3,6 +3,7 @@ package identity
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -110,6 +111,54 @@ func TestResolveInfersGitWorktree(t *testing.T) {
 		t.Fatalf("unexpected git inference: root=%q name=%q", got.Root, got.Name)
 	}
 	if got.Host != "jira-123-add-sso-callback.audit.lewp" {
+		t.Fatalf("host=%q", got.Host)
+	}
+}
+
+func TestResolveRejectsUnknownConfigKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("root = \"audit\"\nnaem = \"typo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Resolve(Options{WorkDir: dir})
+	if err == nil {
+		t.Fatal("Resolve accepted unknown config key")
+	}
+	if !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "naem") {
+		t.Fatalf("error should name the unknown key: %v", err)
+	}
+}
+
+func TestResolveReportsTOMLSyntaxError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("root = \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Resolve(Options{WorkDir: dir})
+	if err == nil {
+		t.Fatal("Resolve accepted malformed TOML")
+	}
+	if !strings.Contains(err.Error(), ConfigFileName) {
+		t.Fatalf("error should reference the config file path: %v", err)
+	}
+}
+
+func TestResolveReadsValidTOMLConfig(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("root = \"audit\"\nname = \"feature-1\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve(Options{WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Root != "audit" || got.Name != "feature-1" {
+		t.Fatalf("config not applied: %+v", got)
+	}
+	if got.RootSource != SourceConfig || got.NameSource != SourceConfig {
+		t.Fatalf("sources root=%s name=%s want config", got.RootSource, got.NameSource)
+	}
+	if got.Host != "feature-1.audit.lewp" {
 		t.Fatalf("host=%q", got.Host)
 	}
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"runtime"
@@ -23,6 +24,7 @@ Commands:
   setup      Install the .lewp DNS resolver, local CA, and launchd service
   system     Manage the daemon: start|stop|status|restart|uninstall
   add        Register a stable port and .lewp hostname for the current directory
+  init       Generate a .lewp.local.toml identity file for the current directory
   info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory
   port       Lease a bare internal port without a hostname
@@ -37,6 +39,15 @@ Examples:
   lewp setup && lewp system start
   cd ~/projects/audit/feature-1 && lewp add
   eval "$(lewp add --shell)" && PORT=$PORT bin/dev
+
+Configuration (highest priority first):
+  flags             --root, --name, --host on lewp add
+  environment       LEWP_ROOT, LEWP_NAME, LEWP_HOST
+  .lewp.local.toml  nearest file up the tree; keys: root, name, host
+  inference         parent dir -> root, current dir -> name
+
+The .lewp.local.toml file is meant to stay local/uncommitted. Run "lewp init"
+to generate one and to print a .git/info/exclude line that keeps it out of git.
 
 Run "lewp <command> --help" for command-specific help.
 `
@@ -78,20 +89,56 @@ Examples:
 Re-running from the same directory returns the same port and host. Root and name
 are inferred from the directory layout unless overridden.
 
+Identity is discovered in this order: CLI flags, then LEWP_ROOT / LEWP_NAME /
+LEWP_HOST environment variables, then the nearest .lewp.local.toml, then path
+inference. Inferred values and warnings are printed to stderr so --shell and
+$(...) capture only the clean env lines.
+
 Usage:
-  lewp add [--root <root>] [--name <name>] [--host <host>] [--json] [--shell]
+  lewp add [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--json] [--shell]
 
 Flags:
   --root <root>   Override the inferred root segment of the hostname
   --name <name>   Override the inferred instance segment of the hostname
-  --host <host>   Register an explicit apex host (e.g. audit.lewp)
+  --host <host>   Register an explicit host inside .lewp (e.g. audit.lewp)
+  --auto-suffix   On an explicit --host conflict, append a deterministic suffix
+                  instead of failing
   --json          Emit the route as a JSON object
   --shell         Emit shell "export" lines for use with eval
+
+An explicit --host that is already assigned to another directory fails by
+default with the conflicting path and cleanup guidance. An inferred host that
+conflicts is given a stable deterministic suffix automatically.
 
 Examples:
   lewp add
   lewp add --root audit --name feature-1
   eval "$(lewp add --shell)"
+`
+
+	initHelp = `lewp init — generate a .lewp.local.toml for this directory
+
+Writes a local config file with root, name, and (optionally) host so this
+directory's identity is explicit and stable regardless of how it is laid out.
+Values come from flags first, then path inference. It only writes the file; it
+does not contact the daemon or lease anything.
+
+Usage:
+  lewp init [--root <root>] [--name <name>] [--host <host>] [--force]
+
+Flags:
+  --root <root>   Root segment to record (defaults to the inferred root)
+  --name <name>   Instance segment to record (defaults to the inferred name)
+  --host <host>   Record an explicit full host inside .lewp (e.g. audit.lewp)
+  --force         Overwrite an existing .lewp.local.toml
+
+The file is meant to stay uncommitted. init prints the .git/info/exclude line to
+keep it out of version control.
+
+Examples:
+  lewp init
+  lewp init --root audit --name feature-1
+  lewp init --host audit.lewp
 `
 
 	infoHelp = `lewp info — show routes and bare ports for the current directory
@@ -223,6 +270,21 @@ HTTP/HTTPS proxy, and local control socket.
 
 func printMainHelp(w io.Writer) {
 	fmt.Fprint(w, mainHelp)
+}
+
+// parseFlags parses a subcommand's flags and, on error, prints a concise
+// message plus a pointer to the command's --help instead of letting the flag
+// package dump a generated usage block built from our intentionally terse flag
+// descriptions. Returns false when the caller should exit with code 2.
+func parseFlags(cfg Config, fs *flag.FlagSet, name string) bool {
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {}
+	if err := fs.Parse(cfg.Args[1:]); err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp %s: %v\n", name, err)
+		fmt.Fprintf(cfg.Stderr, "Run: lewp %s --help\n", name)
+		return false
+	}
+	return true
 }
 
 // helpRequested reports whether -h/--help appears before a "--" terminator.

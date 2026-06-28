@@ -98,11 +98,14 @@ func TestRunAddBadFlagNamesAdd(t *testing.T) {
 		t.Fatalf("code=%d want 2", code)
 	}
 	got := stderr.String()
-	if !strings.Contains(got, "flag provided but not defined: -badflag") || strings.Contains(got, "Usage of lease") {
+	if !strings.Contains(got, "flag provided but not defined: -badflag") || strings.Contains(got, "lease") {
 		t.Fatalf("bad flag output used wrong command name: %q", got)
 	}
-	if !strings.Contains(got, "Usage of add") {
-		t.Fatalf("bad flag output missing add usage: %q", got)
+	if !strings.Contains(got, "lewp add:") || !strings.Contains(got, "Run: lewp add --help") {
+		t.Fatalf("bad flag output missing concise usage pointer: %q", got)
+	}
+	if strings.Contains(got, "Usage of") {
+		t.Fatalf("bad flag output should not dump generated flag usage: %q", got)
 	}
 }
 
@@ -203,6 +206,34 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") {
 		t.Fatalf("dest info after move missing route: %q", stdout.String())
+	}
+}
+
+func TestRunInitWritesConfigAndExcludeGuidance(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"init", "--root", "audit", "--name", "feature-1"}, WorkDir: dir, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("init code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), ".git/info/exclude") {
+		t.Fatalf("init missing exclude guidance: %q", stdout.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".lewp.local.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, `root = "audit"`) || !strings.Contains(body, `name = "feature-1"`) {
+		t.Fatalf("config file missing keys:\n%s", body)
+	}
+
+	// A second init without --force refuses to clobber the file.
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(Config{Args: []string{"init"}, WorkDir: dir, Stdout: &stdout, Stderr: &stderr})
+	if code != 1 || !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("second init should refuse: code=%d stderr=%q", code, stderr.String())
 	}
 }
 

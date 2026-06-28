@@ -1,15 +1,21 @@
 package identity
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
+
+// ConfigFileName is the per-directory local config file Lewp reads for root,
+// name, and host overrides. It is intended to be local/uncommitted.
+const ConfigFileName = ".lewp.local.toml"
 
 type Source string
 
@@ -67,9 +73,9 @@ type Result struct {
 }
 
 type config struct {
-	root string
-	name string
-	host string
+	Root string `toml:"root"`
+	Name string `toml:"name"`
+	Host string `toml:"host"`
 }
 
 var unsafeLabel = regexp.MustCompile(`[^a-z0-9]+`)
@@ -88,14 +94,17 @@ func Resolve(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	cfg, _ := findConfig(abs)
+	cfg, err := findConfig(abs)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Result{}, err
+	}
 	git := opts.Git
 	if git == nil {
 		git = detectGit(abs)
 	}
 
-	root, rootSource := pick(opts.Root, env(opts.Env, "LEWP_ROOT"), cfg.root)
-	name, nameSource := pick(opts.Name, env(opts.Env, "LEWP_NAME"), cfg.name)
+	root, rootSource := pick(opts.Root, env(opts.Env, "LEWP_ROOT"), cfg.Root)
+	name, nameSource := pick(opts.Name, env(opts.Env, "LEWP_NAME"), cfg.Name)
 	if root == "" || name == "" {
 		infRoot, infName := infer(abs, git)
 		if root == "" {
@@ -133,7 +142,7 @@ func Resolve(opts Options) (Result, error) {
 		}, nil
 	}
 
-	host, hostSource := pick(opts.Host, env(opts.Env, "LEWP_HOST"), cfg.host)
+	host, hostSource := pick(opts.Host, env(opts.Env, "LEWP_HOST"), cfg.Host)
 	if host == "" {
 		host = normName + "." + normRoot + ".lewp"
 		hostSource = SourceInferred
@@ -258,12 +267,20 @@ func infer(workDir string, git *GitInfo) (string, string) {
 	return filepath.Base(filepath.Dir(workDir)), filepath.Base(workDir)
 }
 
+// findConfig walks up from start to the filesystem root looking for the nearest
+// ConfigFileName. The first one found is parsed; a parse or validation error in
+// that file is returned (rather than silently skipped) so the user sees a clear
+// message instead of surprising inference. os.ErrNotExist means no config file
+// exists anywhere up the tree.
 func findConfig(start string) (config, error) {
 	for dir := start; ; dir = filepath.Dir(dir) {
-		path := filepath.Join(dir, ".lewp.local.toml")
-		if f, err := os.Open(path); err == nil {
-			defer f.Close()
-			return parseConfig(f), nil
+		path := filepath.Join(dir, ConfigFileName)
+		data, err := os.ReadFile(path)
+		if err == nil {
+			return parseConfig(path, data)
+		}
+		if !os.IsNotExist(err) {
+			return config{}, fmt.Errorf("%s: %w", path, err)
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
@@ -272,27 +289,25 @@ func findConfig(start string) (config, error) {
 	}
 }
 
-func parseConfig(file *os.File) config {
+// parseConfig decodes a .lewp.local.toml file. It surfaces real TOML syntax
+// errors (with line numbers from the decoder) and rejects unknown keys so typos
+// like "naem" fail loudly instead of being silently ignored.
+func parseConfig(path string, data []byte) (config, error) {
 	var cfg config
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(strings.SplitN(scanner.Text(), "#", 2)[0])
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		value := strings.Trim(strings.TrimSpace(parts[1]), `"`)
-		switch key {
-		case "root":
-			cfg.root = value
-		case "name":
-			cfg.name = value
-		case "host":
-			cfg.host = value
-		}
+	meta, err := toml.Decode(string(data), &cfg)
+	if err != nil {
+		return config{}, fmt.Errorf("%s: %w", path, err)
 	}
-	return cfg
+	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
+		keys := make([]string, 0, len(undecoded))
+		for _, k := range undecoded {
+			keys = append(keys, k.String())
+		}
+		sort.Strings(keys)
+		return config{}, fmt.Errorf("%s: unknown key(s): %s (allowed keys: host, name, root)",
+			path, strings.Join(keys, ", "))
+	}
+	return cfg, nil
 }
 
 func detectGit(workDir string) *GitInfo {

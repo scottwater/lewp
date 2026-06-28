@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -89,6 +90,43 @@ func TestServiceDeterministicConflictSuffix(t *testing.T) {
 	}
 	if again.Host != second.Host {
 		t.Fatalf("conflict suffix not stable: %s -> %s", second.Host, again.Host)
+	}
+}
+
+func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: firstDir, Host: "audit.lewp"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.Lease(ctx, LeaseRequest{WorkDir: secondDir, Host: "audit.lewp"})
+	if err == nil {
+		t.Fatal("explicit host conflict should fail by default")
+	}
+	var conflict *HostConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("want HostConflictError, got %T: %v", err, err)
+	}
+	if conflict.OwnerPath != firstDir {
+		t.Fatalf("conflict owner path=%q want %q", conflict.OwnerPath, firstDir)
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, firstDir) || !strings.Contains(msg, "lewp release --forget") || !strings.Contains(msg, "--auto-suffix") {
+		t.Fatalf("conflict message missing cleanup guidance: %q", msg)
+	}
+
+	// Opting into --auto-suffix keeps the deterministic-suffix behavior.
+	suffixed, err := svc.Lease(ctx, LeaseRequest{WorkDir: secondDir, Host: "audit.lewp", AutoSuffix: true})
+	if err != nil {
+		t.Fatalf("auto-suffix lease failed: %v", err)
+	}
+	if suffixed.Host == "audit.lewp" || !strings.HasSuffix(suffixed.Host, ".lewp") {
+		t.Fatalf("auto-suffix did not change host: %q", suffixed.Host)
 	}
 }
 
