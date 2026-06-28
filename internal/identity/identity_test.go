@@ -163,6 +163,25 @@ func TestResolveReadsValidTOMLConfig(t *testing.T) {
 	}
 }
 
+func TestResolveIgnoreConfigSkipsLocalFile(t *testing.T) {
+	dir := t.TempDir()
+	// Both a value-bearing and a malformed config must be ignored entirely when
+	// IgnoreConfig is set: no influence on values, no parse error.
+	if err := os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("root = \"old-root\"\nnaem = \"typo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Resolve(Options{WorkDir: dir, IgnoreConfig: true})
+	if err != nil {
+		t.Fatalf("IgnoreConfig should not read (or fail on) the config: %v", err)
+	}
+	if got.Root == "old-root" || got.RootSource == SourceConfig {
+		t.Fatalf("config value leaked despite IgnoreConfig: %+v", got)
+	}
+	if got.RootSource != SourceInferred {
+		t.Fatalf("root source=%s want inferred", got.RootSource)
+	}
+}
+
 func TestResolvePortIdentityIgnoresRouteHostConfig(t *testing.T) {
 	dir := t.TempDir()
 

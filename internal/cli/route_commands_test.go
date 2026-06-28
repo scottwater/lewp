@@ -126,6 +126,30 @@ func TestRunInfoReportsDaemonNotRunning(t *testing.T) {
 	}
 }
 
+// TestRunAddForwardsClientEnv proves the CLI forwards LEWP_* identity overrides
+// to the daemon (which ignores its own environment). Without forwarding, the env
+// help would advertise a feature that silently did nothing over the socket.
+func TestRunAddForwardsClientEnv(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:       []string{"add"},
+		WorkDir:    dir,
+		SocketPath: socketPath,
+		Env:        map[string]string{"LEWP_ROOT": "audit", "LEWP_NAME": "feature-1"},
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	})
+	if code != 0 {
+		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") {
+		t.Fatalf("forwarded env not honored by daemon: %q", stdout.String())
+	}
+}
+
 func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	socketPath := startTestDaemon(t)
 	srcDir := t.TempDir()
@@ -234,6 +258,67 @@ func TestRunInitWritesConfigAndExcludeGuidance(t *testing.T) {
 	code = Run(Config{Args: []string{"init"}, WorkDir: dir, Stdout: &stdout, Stderr: &stderr})
 	if code != 1 || !strings.Contains(stderr.String(), "already exists") {
 		t.Fatalf("second init should refuse: code=%d stderr=%q", code, stderr.String())
+	}
+}
+
+// TestRunInitForceOverwritesMalformedConfig guards the regression where a
+// malformed existing config made `lewp init --force` fail: --force resolves with
+// the existing file ignored, so it can replace even an unparseable one.
+func TestRunInitForceOverwritesMalformedConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".lewp.local.toml")
+	if err := os.WriteFile(path, []byte("root = \nnaem = \"typo\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without --force, a malformed file should still produce the clean "already
+	// exists" refusal rather than a TOML parse error (overwrite is decided before
+	// the file is ever parsed).
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"init"}, WorkDir: dir, Stdout: &stdout, Stderr: &stderr})
+	if code != 1 || !strings.Contains(stderr.String(), "already exists") {
+		t.Fatalf("init over malformed config should refuse cleanly: code=%d stderr=%q", code, stderr.String())
+	}
+
+	// With --force it overwrites despite the malformed file.
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(Config{Args: []string{"init", "--force", "--root", "audit", "--name", "feature-1"}, WorkDir: dir, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("init --force over malformed config failed: code=%d stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if !strings.Contains(body, `root = "audit"`) || !strings.Contains(body, `name = "feature-1"`) {
+		t.Fatalf("force did not regenerate config:\n%s", body)
+	}
+}
+
+// TestRunInitForceIgnoresExistingConfigValues guards the regression where an
+// existing config influenced the regenerated values: --force must rebuild from
+// flags and inference only, never from the file it is replacing.
+func TestRunInitForceIgnoresExistingConfigValues(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".lewp.local.toml")
+	if err := os.WriteFile(path, []byte("root = \"old-root\"\nname = \"old-name\"\nhost = \"old.lewp\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"init", "--force"}, WorkDir: dir, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("init --force failed: code=%d stderr=%q", code, stderr.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(data)
+	if strings.Contains(body, "old-root") || strings.Contains(body, "old-name") || strings.Contains(body, "old.lewp") {
+		t.Fatalf("regenerated config leaked old values:\n%s", body)
 	}
 }
 

@@ -31,22 +31,31 @@ func runInit(cfg Config) int {
 		}
 	}
 
-	resolved, err := identity.Resolve(identity.Options{
-		WorkDir: workDir,
-		Root:    *root,
-		Name:    *name,
-		Host:    *host,
-		Env:     map[string]string{},
-		Kind:    identity.KindRoute,
-	})
-	if err != nil {
-		fmt.Fprintf(cfg.Stderr, "lewp init: %v\n", err)
-		return 1
-	}
-
+	// Decide overwrite *before* resolving identity. The file we are about to
+	// write is itself a config that Resolve would otherwise read: a malformed
+	// existing file must not block --force, and an existing file's values must
+	// not influence what we regenerate. Checking existence first keeps the
+	// "already exists" message clean even when that file is unparseable.
 	path := filepath.Join(workDir, identity.ConfigFileName)
 	if _, err := os.Stat(path); err == nil && !*force {
 		fmt.Fprintf(cfg.Stderr, "lewp init: %s already exists; pass --force to overwrite\n", path)
+		return 1
+	}
+
+	// IgnoreConfig: generate purely from flags and inference so the existing
+	// (and possibly malformed) file we are replacing never feeds back into the
+	// values we write.
+	resolved, err := identity.Resolve(identity.Options{
+		WorkDir:      workDir,
+		Root:         *root,
+		Name:         *name,
+		Host:         *host,
+		Env:          map[string]string{},
+		Kind:         identity.KindRoute,
+		IgnoreConfig: true,
+	})
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp init: %v\n", err)
 		return 1
 	}
 

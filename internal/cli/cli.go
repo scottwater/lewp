@@ -20,8 +20,13 @@ import (
 )
 
 type Config struct {
-	Args         []string
-	WorkDir      string
+	Args    []string
+	WorkDir string
+	// Env carries the identity environment overrides (LEWP_ROOT/LEWP_NAME/
+	// LEWP_HOST) read from the user's process. The CLI forwards these to the
+	// daemon, which ignores its own environment; Run populates it from the OS
+	// when nil. Tests inject it directly.
+	Env          map[string]string
 	SocketPath   string
 	Stdout       io.Writer
 	Stderr       io.Writer
@@ -58,6 +63,9 @@ func Run(cfg Config) int {
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir, _ = os.Getwd()
+	}
+	if cfg.Env == nil {
+		cfg.Env = clientEnv()
 	}
 	if cfg.SocketPath == "" {
 		cfg.SocketPath = control.DefaultSocketPath()
@@ -560,6 +568,21 @@ func runCommandOutput(ctx context.Context, argv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// clientEnv collects the identity environment variables Lewp honors from the
+// user's process so the CLI can forward them to the daemon, which never reads
+// its own environment. Only LEWP_ROOT/LEWP_NAME/LEWP_HOST are propagated, and a
+// variable absent from the environment is omitted (rather than sent as empty) so
+// it does not shadow a config or inference value.
+func clientEnv() map[string]string {
+	env := map[string]string{}
+	for _, key := range []string{"LEWP_ROOT", "LEWP_NAME", "LEWP_HOST"} {
+		if v, ok := os.LookupEnv(key); ok {
+			env[key] = v
+		}
+	}
+	return env
 }
 
 func call(cfg Config, req control.Request) (control.Response, error) {

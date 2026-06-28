@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/registry"
 )
 
@@ -56,6 +57,67 @@ func TestServiceLeasePortReleaseAndList(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Kind != "port" {
 		t.Fatalf("released route should be hidden from default list: %+v", entries)
+	}
+}
+
+func TestServiceForwardedEnvResolvesIdentity(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// The daemon must honor identity env values the *client* forwarded, not its
+	// own process environment. Set a misleading value in the daemon process to
+	// prove it is ignored even when the client forwards different ones.
+	t.Setenv("LEWP_ROOT", "daemon-root")
+	t.Setenv("LEWP_NAME", "daemon-name")
+
+	lease, err := svc.Lease(ctx, LeaseRequest{
+		WorkDir: dir,
+		Env:     map[string]string{"LEWP_ROOT": "audit", "LEWP_NAME": "feature-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Host != "feature-1.audit.lewp" {
+		t.Fatalf("forwarded env not applied: host=%q", lease.Host)
+	}
+	if lease.RootSource != identity.SourceEnv || lease.NameSource != identity.SourceEnv {
+		t.Fatalf("sources root=%s name=%s want env", lease.RootSource, lease.NameSource)
+	}
+}
+
+func TestServiceIgnoresDaemonProcessEnv(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// With no forwarded env, identity must come from inference — never the
+	// daemon's own LEWP_* variables. An empty (or nil) request env must keep the
+	// daemon process environment from leaking into resolution.
+	t.Setenv("LEWP_ROOT", "daemon-root")
+	t.Setenv("LEWP_NAME", "daemon-name")
+	t.Setenv("LEWP_HOST", "daemon.lewp")
+
+	lease, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Env: map[string]string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Root == "daemon-root" || lease.Name == "daemon-name" || lease.Host == "daemon.lewp" {
+		t.Fatalf("daemon process env leaked into lease: %+v", lease)
+	}
+	if lease.RootSource != identity.SourceInferred || lease.NameSource != identity.SourceInferred {
+		t.Fatalf("sources root=%s name=%s want inferred", lease.RootSource, lease.NameSource)
+	}
+
+	// A nil request env must behave identically: still no daemon-env leakage.
+	nilEnv, err := svc.Port(ctx, PortRequest{WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nilEnv.Root == "daemon-root" || nilEnv.Name == "daemon-name" {
+		t.Fatalf("daemon process env leaked into port lease: %+v", nilEnv)
 	}
 }
 

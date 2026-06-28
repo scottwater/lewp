@@ -24,7 +24,7 @@ func runAdd(cfg Config) int {
 	if !parseFlags(cfg, fs, "add") {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix}})
+	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
@@ -44,7 +44,7 @@ func runPort(cfg Config) int {
 	if !parseFlags(cfg, fs, "port") {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "port", Port: control.PortRequest{WorkDir: cfg.WorkDir, Name: *name}})
+	resp, err := call(cfg, control.Request{Command: "port", Port: control.PortRequest{WorkDir: cfg.WorkDir, Name: *name, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
@@ -63,7 +63,7 @@ func runPortRelease(cfg Config) int {
 	if fs.Parse(cfg.Args[2:]) != nil {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Name: *name, Kind: identity.KindPort, Forget: *forget}})
+	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Name: *name, Kind: identity.KindPort, Forget: *forget, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
@@ -125,7 +125,7 @@ func runRelease(cfg Config) int {
 	if !parseFlags(cfg, fs, "release") {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget, All: *all}})
+	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget, All: *all, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}

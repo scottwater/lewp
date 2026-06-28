@@ -26,6 +26,11 @@ type LeaseRequest struct {
 	Root    string
 	Name    string
 	Host    string
+	// Env carries the identity environment values (LEWP_ROOT/LEWP_NAME/
+	// LEWP_HOST) collected from the *client* process. The daemon never reads its
+	// own process environment, so the CLI must forward these explicitly for
+	// env-based identity overrides to take effect.
+	Env map[string]string
 	// AutoSuffix opts an explicit --host into the deterministic-suffix conflict
 	// behavior instead of failing when the host is already taken.
 	AutoSuffix bool
@@ -51,6 +56,8 @@ func (e *HostConflictError) Error() string {
 type PortRequest struct {
 	WorkDir string
 	Name    string
+	// Env carries client-process identity environment values; see LeaseRequest.
+	Env map[string]string
 }
 
 type ReleaseRequest struct {
@@ -58,6 +65,8 @@ type ReleaseRequest struct {
 	Root    string
 	Name    string
 	Forget  bool
+	// Env carries client-process identity environment values; see LeaseRequest.
+	Env map[string]string
 	// Kind selects what to release; empty means route. KindPort releases a bare
 	// port lease (by Name, defaulting to "port") for the current directory.
 	Kind identity.Kind
@@ -116,13 +125,24 @@ func NewService(store *registry.Store, portRange registry.PortRange) *Service {
 	return &Service{store: store, portRange: portRange}
 }
 
+// requestEnv normalizes a request's forwarded environment to a non-nil map.
+// identity.Resolve falls back to the *daemon* process environment when handed a
+// nil map; passing an empty (non-nil) map instead guarantees the daemon never
+// honors its own LEWP_* variables — only values the client explicitly forwarded.
+func requestEnv(env map[string]string) map[string]string {
+	if env == nil {
+		return map[string]string{}
+	}
+	return env
+}
+
 func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, error) {
 	resolved, err := identity.Resolve(identity.Options{
 		WorkDir: req.WorkDir,
 		Root:    req.Root,
 		Name:    req.Name,
 		Host:    req.Host,
-		Env:     map[string]string{},
+		Env:     requestEnv(req.Env),
 		Kind:    identity.KindRoute,
 	})
 	if err != nil {
@@ -177,7 +197,7 @@ func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, err
 	resolved, err := identity.Resolve(identity.Options{
 		WorkDir: req.WorkDir,
 		Name:    req.Name,
-		Env:     map[string]string{},
+		Env:     requestEnv(req.Env),
 		Kind:    identity.KindPort,
 	})
 	if err != nil {
@@ -204,7 +224,7 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 		resolved, err := identity.Resolve(identity.Options{
 			WorkDir: req.WorkDir,
 			Name:    name,
-			Env:     map[string]string{},
+			Env:     requestEnv(req.Env),
 			Kind:    identity.KindPort,
 		})
 		if err != nil {
@@ -219,7 +239,7 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 			WorkDir: req.WorkDir,
 			Root:    req.Root,
 			Name:    req.Name,
-			Env:     map[string]string{},
+			Env:     requestEnv(req.Env),
 			Kind:    identity.KindRoute,
 		})
 		if err != nil {

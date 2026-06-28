@@ -49,6 +49,11 @@ type Options struct {
 	Env     map[string]string
 	Git     *GitInfo
 	Kind    Kind
+	// IgnoreConfig skips reading any .lewp.local.toml up the tree. `lewp init`
+	// uses it so a regenerated file is built purely from flags, env, and
+	// inference and is never influenced (or blocked) by an existing — possibly
+	// malformed — config it is about to overwrite.
+	IgnoreConfig bool
 }
 
 type GitInfo struct {
@@ -94,9 +99,13 @@ func Resolve(opts Options) (Result, error) {
 		return Result{}, err
 	}
 
-	cfg, err := findConfig(abs)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return Result{}, err
+	var cfg config
+	if !opts.IgnoreConfig {
+		found, err := findConfig(abs)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return Result{}, err
+		}
+		cfg = found
 	}
 	git := opts.Git
 	if git == nil {
