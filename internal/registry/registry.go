@@ -23,6 +23,11 @@ const (
 
 type Store struct {
 	db *sql.DB
+	// allocMu serializes lease allocation so concurrent Lease calls cannot
+	// SELECT the same free port before either inserts and then collide on the
+	// leases_port_active_uq unique index (busy_timeout does not retry
+	// constraint violations).
+	allocMu sync.Mutex
 }
 
 var migrateMu sync.Mutex
@@ -133,6 +138,8 @@ func (s *Store) Lease(ctx context.Context, ident identity.Result, portRange Port
 	if portRange.Start <= 0 || portRange.End < portRange.Start {
 		return Lease{}, errors.New("invalid port range")
 	}
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -346,6 +353,10 @@ func (s *Store) ReleasePath(ctx context.Context, path string, kind identity.Kind
 		}
 		ids = append(ids, id)
 	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
@@ -456,6 +467,9 @@ func (s *Store) nextPort(ctx context.Context, tx *sql.Tx, portRange PortRange) (
 			return 0, err
 		}
 		used[port] = true
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
 	}
 	for port := portRange.Start; port <= portRange.End; port++ {
 		if used[port] || !isPortFree(port) {

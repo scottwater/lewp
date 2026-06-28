@@ -94,6 +94,19 @@ func TestProxyPassesSSE(t *testing.T) {
 	}
 }
 
+func TestProxyUnknownHostReturns404(t *testing.T) {
+	store := openProxyStore(t)
+	handler := New(store)
+
+	req := httptest.NewRequest(http.MethodGet, "http://unregistered.audit.lewp/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+}
+
 func openProxyStore(t *testing.T) *registry.Store {
 	t.Helper()
 	store, err := registry.Open(t.TempDir() + "/registry.sqlite")

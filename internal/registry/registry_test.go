@@ -167,6 +167,87 @@ func TestLeaseRejectsActiveHostOwnedByAnotherIdentity(t *testing.T) {
 	}
 }
 
+func TestConcurrentLeasesAllocateUniquePorts(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	const n = 12
+	portRange := PortRange{Start: 41200, End: 41299}
+
+	var wg sync.WaitGroup
+	ports := make([]int, n)
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ident := identity.Result{
+				Root:           "audit",
+				Name:           "svc-" + strconv.Itoa(i),
+				NormalizedRoot: "audit",
+				NormalizedName: "svc-" + strconv.Itoa(i),
+				Path:           t.TempDir(),
+				Kind:           identity.KindPort,
+				HostSource:     identity.SourceCLI,
+			}
+			lease, err := store.Lease(ctx, ident, portRange)
+			errs[i] = err
+			ports[i] = lease.Port
+		}(i)
+	}
+	wg.Wait()
+
+	seen := map[int]int{}
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("lease %d failed: %v", i, errs[i])
+		}
+		if prev, dup := seen[ports[i]]; dup {
+			t.Fatalf("port %d allocated to both lease %d and lease %d", ports[i], prev, i)
+		}
+		seen[ports[i]] = i
+	}
+}
+
+func TestLeasePersistsAcrossCloseAndReopen(t *testing.T) {
+	path := t.TempDir() + "/registry.sqlite"
+	ctx := context.Background()
+	ident := testIdentity(t, "feature.audit.lewp", identity.KindRoute)
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.Lease(ctx, ident, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+
+	route, ok, err := reopened.RouteByHost(ctx, "feature.audit.lewp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("lease did not persist across reopen")
+	}
+	if route.Port != lease.Port {
+		t.Fatalf("persisted port changed: %d -> %d", lease.Port, route.Port)
+	}
+	if route.State != StateActive {
+		t.Fatalf("persisted state = %q, want %q", route.State, StateActive)
+	}
+}
+
 func openTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	store := openTestStore(t)

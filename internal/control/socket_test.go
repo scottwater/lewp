@@ -2,7 +2,9 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +12,35 @@ import (
 
 	"github.com/scottwater/lewp/internal/registry"
 )
+
+func TestServeConnRecoversFromHandlerPanic(t *testing.T) {
+	client, server := net.Pipe()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConn(server, func(context.Context, Request) (Response, error) {
+			panic("crafted request blew up the handler")
+		})
+	}()
+
+	go func() { _ = json.NewEncoder(client).Encode(Request{Command: "lease"}) }()
+
+	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var resp Response
+	if err := json.NewDecoder(client).Decode(&resp); err != nil {
+		t.Fatalf("expected error response after panic, got decode error: %v", err)
+	}
+	if resp.Error == "" {
+		t.Fatalf("expected error response after panic, got: %+v", resp)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveConn did not return after recovering panic")
+	}
+}
 
 func TestSocketCallLeaseUsesTempSocketAndRegistry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

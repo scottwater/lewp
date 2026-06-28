@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 
@@ -93,13 +94,28 @@ func Call(ctx context.Context, socketPath string, req Request) (Response, error)
 }
 
 func handle(conn net.Conn, svc *Service) {
+	serveConn(conn, func(ctx context.Context, req Request) (Response, error) {
+		return dispatch(ctx, svc, req)
+	})
+}
+
+// serveConn reads one request, dispatches it, and writes one response. A panic
+// from a malformed or crafted request is recovered and returned as an error
+// response so a single bad connection cannot crash the daemon (which also owns
+// the proxy and DNS responder).
+func serveConn(conn net.Conn, dispatch func(context.Context, Request) (Response, error)) {
 	defer conn.Close()
+	defer func() {
+		if rec := recover(); rec != nil {
+			_ = json.NewEncoder(conn).Encode(Response{Error: fmt.Sprintf("internal error: %v", rec)})
+		}
+	}()
 	var req Request
 	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
 		_ = json.NewEncoder(conn).Encode(Response{Error: err.Error()})
 		return
 	}
-	resp, err := dispatch(connContext(), svc, req)
+	resp, err := dispatch(connContext(), req)
 	if err != nil {
 		resp.Error = err.Error()
 	}
