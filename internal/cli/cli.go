@@ -459,7 +459,7 @@ func reportRetainedCA(cfg Config) {
 
 // shellQuote wraps s in single quotes so it survives copy-paste into a POSIX
 // shell verbatim, escaping any embedded single quote with the standard
-// '\” sequence. It is used for the safe-removal guidance printed on uninstall.
+// '\'' sequence. It is used for the safe-removal guidance printed on uninstall.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
