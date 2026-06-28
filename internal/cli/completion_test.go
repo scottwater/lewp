@@ -8,9 +8,9 @@ import (
 
 func TestRunCompletionEmitsShellScripts(t *testing.T) {
 	cases := map[string][]string{
-		"bash": {"complete -F _lewp lewp", "_lewp()", "setup"},
-		"zsh":  {"#compdef lewp", "compdef _lewp lewp", "doctor"},
-		"fish": {"complete -c lewp", "__fish_use_subcommand", "release"},
+		"bash": {"complete -F _lewp lewp", "_lewp()", "setup", "--shell --forget"},
+		"zsh":  {"#compdef lewp", "compdef _lewp lewp", "doctor", "port subcommand/options"},
+		"fish": {"complete -c lewp", "__fish_use_subcommand", "Release a bare port lease", "-l name"},
 	}
 	for shell, wants := range cases {
 		var stdout, stderr bytes.Buffer
