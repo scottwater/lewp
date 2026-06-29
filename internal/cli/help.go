@@ -23,7 +23,7 @@ Usage:
 Commands:
   setup      Install the .lewp DNS resolver, local CA, and launchd service
   system     Manage the daemon: start|stop|status|restart|uninstall
-  add        Register a stable port and .lewp hostname for the current directory
+  add        Register a stable port and managed hostname for the current directory
   init       Generate a .lewp.local.toml identity file for the current directory
   info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory

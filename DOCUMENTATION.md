@@ -199,7 +199,7 @@ lewp suffix remove local.todoordie.com
 
 ## `lewp add`
 
-Register a routed app port and a `.lewp` hostname for the current directory.
+Register a routed app port and a Lewp-managed host for the current directory.
 This is the command for creating a route.
 
 ```sh
