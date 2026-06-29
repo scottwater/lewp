@@ -11,46 +11,57 @@ import (
 func TestValidateCustomPSLCases(t *testing.T) {
 	tests := []struct {
 		name    string
+		mode    Mode
 		input   string
 		want    string
 		wantErr bool
 	}{
-		{name: "allows com subdomain", input: "local.todoordie.com", want: "local.todoordie.com"},
-		{name: "allows co uk subdomain", input: "local.todoordie.co.uk", want: "local.todoordie.co.uk"},
-		{name: "normalizes case and trailing dot", input: "Local.TodoOrDie.Com.", want: "local.todoordie.com"},
-		{name: "rejects registrable com", input: "todoordie.com", wantErr: true},
-		{name: "rejects registrable co uk", input: "todoordie.co.uk", wantErr: true},
-		{name: "rejects leftmost www", input: "www.todoordie.com", wantErr: true},
-		{name: "rejects local", input: "local", wantErr: true},
-		{name: "rejects local rightmost label", input: "foo.local", wantErr: true},
-		{name: "rejects nested local rightmost label", input: "bar.foo.local", wantErr: true},
-		{name: "rejects test", input: "test", wantErr: true},
-		{name: "rejects public suffix jp", input: "jp", wantErr: true},
-		{name: "rejects public suffix com", input: "com", wantErr: true},
-		{name: "rejects empty label", input: "local..todoordie.com", wantErr: true},
+		{name: "safe allows com subdomain", mode: ModeSafeSubtree, input: "local.todoordie.com", want: "local.todoordie.com"},
+		{name: "safe allows co uk subdomain", mode: ModeSafeSubtree, input: "local.todoordie.co.uk", want: "local.todoordie.co.uk"},
+		{name: "safe normalizes case and trailing dot", mode: ModeSafeSubtree, input: "Local.TodoOrDie.Com.", want: "local.todoordie.com"},
+		{name: "safe rejects registrable com", mode: ModeSafeSubtree, input: "todoordie.com", wantErr: true},
+		{name: "safe rejects registrable co uk", mode: ModeSafeSubtree, input: "todoordie.co.uk", wantErr: true},
+		{name: "safe rejects leftmost www", mode: ModeSafeSubtree, input: "www.todoordie.com", wantErr: true},
+		{name: "mirror allows registrable com", mode: ModeDomainMirror, input: "todoordie.com", want: "todoordie.com"},
+		{name: "mirror allows registrable co uk", mode: ModeDomainMirror, input: "todoordie.co.uk", want: "todoordie.co.uk"},
+		{name: "mirror allows leftmost www", mode: ModeDomainMirror, input: "www.todoordie.com", want: "www.todoordie.com"},
+		{name: "mirror allows normal subtree", mode: ModeDomainMirror, input: "local.todoordie.com", want: "local.todoordie.com"},
+		{name: "mirror rejects local", mode: ModeDomainMirror, input: "local", wantErr: true},
+		{name: "mirror rejects local rightmost label", mode: ModeDomainMirror, input: "foo.local", wantErr: true},
+		{name: "mirror rejects nested local rightmost label", mode: ModeDomainMirror, input: "bar.foo.local", wantErr: true},
+		{name: "mirror rejects test", mode: ModeDomainMirror, input: "test", wantErr: true},
+		{name: "mirror rejects public suffix jp", mode: ModeDomainMirror, input: "jp", wantErr: true},
+		{name: "mirror rejects public suffix com", mode: ModeDomainMirror, input: "com", wantErr: true},
+		{name: "mirror rejects empty label", mode: ModeDomainMirror, input: "local..todoordie.com", wantErr: true},
+		{name: "mirror rejects built in", mode: ModeDomainMirror, input: "lewp", wantErr: true},
+		{name: "safe rejects built in", mode: ModeSafeSubtree, input: "lewp", wantErr: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ValidateCustom(tt.input)
+			got, err := ValidateCustom(tt.input, tt.mode)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("ValidateCustom(%q) accepted invalid suffix", tt.input)
+					t.Fatalf("ValidateCustom(%q, %q) accepted invalid suffix", tt.input, tt.mode)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("ValidateCustom(%q) error: %v", tt.input, err)
+				t.Fatalf("ValidateCustom(%q, %q) error: %v", tt.input, tt.mode, err)
 			}
 			if got != tt.want {
-				t.Fatalf("ValidateCustom(%q)=%q want %q", tt.input, got, tt.want)
+				t.Fatalf("ValidateCustom(%q, %q)=%q want %q", tt.input, tt.mode, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestManagedIncludesBuiltInAndSortsCustomSuffixes(t *testing.T) {
-	got := Managed([]string{"Z.TodoOrDie.Com.", "a.todoordie.com", "z.todoordie.com", "lewp"})
+	got := Managed([]Entry{
+		{Name: "Z.TodoOrDie.Com.", Mode: ModeSafeSubtree},
+		{Name: "a.todoordie.com", Mode: ModeSafeSubtree},
+		{Name: "z.todoordie.com", Mode: ModeDomainMirror},
+	})
 	want := []string{"lewp", "a.todoordie.com", "z.todoordie.com"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Managed()=%v want %v", got, want)
@@ -58,7 +69,7 @@ func TestManagedIncludesBuiltInAndSortsCustomSuffixes(t *testing.T) {
 }
 
 func TestHostInManagedSuffix(t *testing.T) {
-	managed := Managed([]string{"local.todoordie.com"})
+	managed := Managed([]Entry{{Name: "local.todoordie.com", Mode: ModeSafeSubtree}})
 	tests := []struct {
 		host string
 		want bool
@@ -89,14 +100,27 @@ func TestLoadSaveAddRemoveRoundTrip(t *testing.T) {
 		t.Fatalf("Load missing file=%v want empty config", cfg.Suffixes)
 	}
 
-	cfg, added, err := Add(cfg, "B.TodoOrDie.Com.", "a.todoordie.com", "b.todoordie.com")
+	cfg, added, err := Add(cfg, ModeSafeSubtree, "B.TodoOrDie.Com.", "a.todoordie.com", "b.todoordie.com")
 	if err != nil {
-		t.Fatalf("Add error: %v", err)
+		t.Fatalf("Add safe error: %v", err)
 	}
 	if want := []string{"b.todoordie.com", "a.todoordie.com"}; !reflect.DeepEqual(added, want) {
 		t.Fatalf("added=%v want %v", added, want)
 	}
-	if want := []string{"a.todoordie.com", "b.todoordie.com"}; !reflect.DeepEqual(cfg.Suffixes, want) {
+
+	cfg, added, err = Add(cfg, ModeDomainMirror, "todoordie.com", "www.todoordie.com")
+	if err != nil {
+		t.Fatalf("Add mirror error: %v", err)
+	}
+	if want := []string{"todoordie.com", "www.todoordie.com"}; !reflect.DeepEqual(added, want) {
+		t.Fatalf("mirror added=%v want %v", added, want)
+	}
+	if want := []Entry{
+		{Name: "a.todoordie.com", Mode: ModeSafeSubtree},
+		{Name: "b.todoordie.com", Mode: ModeSafeSubtree},
+		{Name: "todoordie.com", Mode: ModeDomainMirror},
+		{Name: "www.todoordie.com", Mode: ModeDomainMirror},
+	}; !reflect.DeepEqual(cfg.Suffixes, want) {
 		t.Fatalf("cfg.Suffixes=%v want %v", cfg.Suffixes, want)
 	}
 
@@ -107,8 +131,17 @@ func TestLoadSaveAddRemoveRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(contents), "suffixes = [") {
-		t.Fatalf("Save did not write suffixes array: %s", contents)
+	text := string(contents)
+	for _, want := range []string{
+		"[[suffixes]]",
+		`name = "todoordie.com"`,
+		`mode = "domain-mirror"`,
+		`name = "a.todoordie.com"`,
+		`mode = "safe-subtree"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Save missing %q:\n%s", want, text)
+		}
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -133,8 +166,8 @@ func TestLoadSaveAddRemoveRoundTrip(t *testing.T) {
 	if !ok || removed != "b.todoordie.com" {
 		t.Fatalf("Remove removed=%q ok=%v", removed, ok)
 	}
-	if want := []string{"a.todoordie.com"}; !reflect.DeepEqual(loaded.Suffixes, want) {
-		t.Fatalf("after Remove=%v want %v", loaded.Suffixes, want)
+	if Names(loaded.Suffixes)[0] != "a.todoordie.com" {
+		t.Fatalf("after Remove=%v want first suffix a.todoordie.com", loaded.Suffixes)
 	}
 }
 
@@ -153,9 +186,24 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsOldStringArrayConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "suffixes.toml")
+	if err := os.WriteFile(path, []byte("suffixes = [\"local.todoordie.com\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted old suffixes array format")
+	}
+	if !strings.Contains(err.Error(), "old suffix config format is no longer supported") {
+		t.Fatalf("error should explain old format cleanup: %v", err)
+	}
+}
+
 func TestSaveEmptyConfigAndTightensExistingMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "suffixes.toml")
-	if err := os.WriteFile(path, []byte("suffixes = [\"local.todoordie.com\"]\n"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("# old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,8 +214,8 @@ func TestSaveEmptyConfigAndTightensExistingMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(contents), "suffixes = [") {
-		t.Fatalf("Save empty config did not write suffixes array: %s", contents)
+	if strings.Contains(string(contents), "suffixes = [") {
+		t.Fatalf("Save empty config used old array format: %s", contents)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
