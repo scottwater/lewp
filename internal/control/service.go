@@ -128,7 +128,7 @@ func NewService(store *registry.Store, portRange registry.PortRange) *Service {
 }
 
 func (s *Service) SetManagedSuffixes(managed []string) {
-	s.managedSuffixes = suffix.Managed(managed)
+	s.managedSuffixes = append([]string(nil), managed...)
 }
 
 // requestEnv normalizes a request's forwarded environment to a non-nil map.

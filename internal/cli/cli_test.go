@@ -258,7 +258,7 @@ func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {
 	suffixesPath := dir + "/suffixes.toml"
 	resolverPath := dir + "/resolver/lewp"
 	customResolverPath := dir + "/resolver/local.todoordie.com"
-	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := dns.WriteResolverFile(customResolverPath, dns.DefaultPort); err != nil {
@@ -270,7 +270,7 @@ func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {
 		SuffixesPath: suffixesPath,
 	})
 	got := findCheck(t, checks, "resolver local.todoordie.com")
-	if got.Status != statusOK || !strings.Contains(got.Detail, customResolverPath) {
+	if got.Status != statusOK || !strings.Contains(got.Detail, customResolverPath) || !strings.Contains(got.Detail, string(suffix.ModeSafeSubtree)) {
 		t.Fatalf("custom suffix resolver check=%+v", got)
 	}
 }
@@ -278,7 +278,7 @@ func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {
 func TestDoctorChecksCustomSuffixDNS(t *testing.T) {
 	dir := t.TempDir()
 	suffixesPath := dir + "/suffixes.toml"
-	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
 		t.Fatal(err)
 	}
 	var lookedUp []string
@@ -493,7 +493,7 @@ func TestRunSetupAddsCustomSuffixResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load suffix config: %v", err)
 	}
-	if want := []string{"local.todoordie.com"}; !reflect.DeepEqual(cfg.Suffixes, want) {
+	if want := []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}; !reflect.DeepEqual(cfg.Suffixes, want) {
 		t.Fatalf("suffixes=%v want %v", cfg.Suffixes, want)
 	}
 	got := stdout.String()
@@ -502,6 +502,108 @@ func TestRunSetupAddsCustomSuffixResolver(t *testing.T) {
 	}
 	if !strings.Contains(got, "suffix changes load when the daemon starts or kickstarts") {
 		t.Fatalf("setup output missing suffix reload note:\n%s", got)
+	}
+}
+
+func TestRunSetupAllowsDomainMirrorSuffix(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "localkickofflabs.com", "--allow-domain-mirror"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	assertResolverPort(t, dir+"/resolver/localkickofflabs.com")
+	cfg, err := suffix.Load(dir + "/config/suffixes.toml")
+	if err != nil {
+		t.Fatalf("Load suffix config: %v", err)
+	}
+	if want := []suffix.Entry{{Name: "localkickofflabs.com", Mode: suffix.ModeDomainMirror}}; !reflect.DeepEqual(cfg.Suffixes, want) {
+		t.Fatalf("suffixes=%v want %v", cfg.Suffixes, want)
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"SUFFIX=localkickofflabs.com RESOLVER=" + dir + "/resolver/localkickofflabs.com",
+		"# warning: domain mirror localkickofflabs.com shadows public DNS for this suffix and its subdomains on this Mac",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("setup output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunSetupAllowsWWWDomainMirrorSuffix(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "www.localkickofflabs.com", "--allow-domain-mirror"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	assertResolverPort(t, dir+"/resolver/www.localkickofflabs.com")
+	cfg, err := suffix.Load(dir + "/config/suffixes.toml")
+	if err != nil {
+		t.Fatalf("Load suffix config: %v", err)
+	}
+	if want := []suffix.Entry{{Name: "www.localkickofflabs.com", Mode: suffix.ModeDomainMirror}}; !reflect.DeepEqual(cfg.Suffixes, want) {
+		t.Fatalf("suffixes=%v want %v", cfg.Suffixes, want)
+	}
+}
+
+func TestRunSetupRejectsOldSuffixConfigFormat(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	suffixesPath := dir + "/config/suffixes.toml"
+	if err := os.MkdirAll(dir+"/config", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(suffixesPath, []byte("suffixes = [\"local.old.com\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "local.new.com"},
+		WorkDir:      dir,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: suffixesPath,
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	want := "Next: remove " + suffixesPath + ", then re-run: lewp setup --suffix local.new.com"
+	if !strings.Contains(stderr.String(), want) {
+		t.Fatalf("stderr missing cleanup guidance %q:\n%s", want, stderr.String())
 	}
 }
 
@@ -540,7 +642,7 @@ func TestRunSetupAdditiveSuffixConfig(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	dir := t.TempDir()
 	suffixesPath := dir + "/config/suffixes.toml"
-	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.old.com"}}); err != nil {
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{{Name: "local.old.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
 		t.Fatal(err)
 	}
 	code := Run(Config{
@@ -564,7 +666,10 @@ func TestRunSetupAdditiveSuffixConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load suffix config: %v", err)
 	}
-	if want := []string{"local.new.com", "local.old.com"}; !reflect.DeepEqual(cfg.Suffixes, want) {
+	if want := []suffix.Entry{
+		{Name: "local.new.com", Mode: suffix.ModeSafeSubtree},
+		{Name: "local.old.com", Mode: suffix.ModeSafeSubtree},
+	}; !reflect.DeepEqual(cfg.Suffixes, want) {
 		t.Fatalf("suffixes=%v want %v", cfg.Suffixes, want)
 	}
 	assertResolverPort(t, dir+"/resolver/lewp")
@@ -576,7 +681,10 @@ func TestRunSuffixListShowsBuiltInAndCustom(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	dir := t.TempDir()
 	suffixesPath := dir + "/config/suffixes.toml"
-	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{
+		{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree},
+		{Name: "todoordie.com", Mode: suffix.ModeDomainMirror},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -589,7 +697,7 @@ func TestRunSuffixListShowsBuiltInAndCustom(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	if got, want := stdout.String(), "SUFFIX\tKIND\nlewp\tbuilt-in\nlocal.todoordie.com\tcustom\n"; got != want {
+	if got, want := stdout.String(), "SUFFIX\tMODE\nlewp\tbuilt-in\nlocal.todoordie.com\tsafe-subtree\ntodoordie.com\tdomain-mirror\n"; got != want {
 		t.Fatalf("stdout=%q want %q", got, want)
 	}
 	if stderr.Len() != 0 {
@@ -603,7 +711,7 @@ func TestRunSuffixRemoveDeletesConfigAndResolver(t *testing.T) {
 	suffixesPath := dir + "/config/suffixes.toml"
 	resolverPath := dir + "/resolver/lewp"
 	customResolverPath := dir + "/resolver/local.todoordie.com"
-	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := dns.WriteResolverFile(customResolverPath, dns.DefaultPort); err != nil {
@@ -708,7 +816,7 @@ func TestSystemUninstallRemovesCustomSuffixResolvers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := suffix.Save(dir+"/suffixes.toml", suffix.Config{Suffixes: []string{"local.todoordie.com"}}); err != nil {
+	if err := suffix.Save(dir+"/suffixes.toml", suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer

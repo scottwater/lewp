@@ -280,6 +280,7 @@ func runSetup(cfg Config) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	start := fs.Bool("start", false, "")
+	allowDomainMirror := fs.Bool("allow-domain-mirror", false, "")
 	var suffixFlags stringListFlag
 	fs.Var(&suffixFlags, "suffix", "")
 	if fs.Parse(cfg.Args[1:]) != nil {
@@ -289,11 +290,18 @@ func runSetup(cfg Config) int {
 	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
 	if err != nil {
 		fmt.Fprintf(cfg.Stderr, "load suffix config: %v\n", err)
+		if strings.Contains(err.Error(), "old suffix config format") {
+			fmt.Fprintf(cfg.Stderr, "Next: remove %s, then re-run: %s\n", cfg.SuffixesPath, setupRerunCommand(suffixFlags, *allowDomainMirror))
+		}
 		return 1
 	}
 	addedSuffixes := []string(nil)
+	suffixMode := suffix.ModeSafeSubtree
+	if *allowDomainMirror {
+		suffixMode = suffix.ModeDomainMirror
+	}
 	if len(suffixFlags) > 0 {
-		updated, added, err := suffix.Add(suffixCfg, suffixFlags...)
+		updated, added, err := suffix.Add(suffixCfg, suffixMode, suffixFlags...)
 		if err != nil {
 			fmt.Fprintf(cfg.Stderr, "invalid suffix: %v\n", err)
 			return 1
@@ -374,6 +382,9 @@ func runSetup(cfg Config) int {
 	fmt.Fprintf(cfg.Stdout, "RESOLVER=%s\n", cfg.ResolverPath)
 	for _, s := range addedSuffixes {
 		fmt.Fprintf(cfg.Stdout, "SUFFIX=%s RESOLVER=%s\n", s, resolverPathForSuffix(cfg, s))
+		if suffixMode == suffix.ModeDomainMirror {
+			fmt.Fprintf(cfg.Stdout, "# warning: domain mirror %s shadows public DNS for this suffix and its subdomains on this Mac\n", s)
+		}
 	}
 	fmt.Fprintf(cfg.Stdout, "CA=%s\n", cfg.CAPath)
 	fmt.Fprintf(cfg.Stdout, "LOGS=%s\n", cfg.LogDir)
@@ -394,6 +405,17 @@ func runSetup(cfg Config) int {
 	}
 	fmt.Fprintln(cfg.Stdout, "Next: lewp system start && lewp doctor")
 	return 0
+}
+
+func setupRerunCommand(suffixFlags []string, allowDomainMirror bool) string {
+	parts := []string{"lewp", "setup"}
+	for _, s := range suffixFlags {
+		parts = append(parts, "--suffix", s)
+	}
+	if allowDomainMirror {
+		parts = append(parts, "--allow-domain-mirror")
+	}
+	return strings.Join(parts, " ")
 }
 
 func runSuffix(cfg Config) int {
@@ -423,10 +445,10 @@ func runSuffixList(cfg Config) int {
 		fmt.Fprintf(cfg.Stderr, "read suffix config: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(cfg.Stdout, "SUFFIX\tKIND")
+	fmt.Fprintln(cfg.Stdout, "SUFFIX\tMODE")
 	fmt.Fprintf(cfg.Stdout, "%s\tbuilt-in\n", suffix.BuiltIn)
-	for _, s := range suffixCfg.Suffixes {
-		fmt.Fprintf(cfg.Stdout, "%s\tcustom\n", s)
+	for _, entry := range suffixCfg.Suffixes {
+		fmt.Fprintf(cfg.Stdout, "%s\t%s\n", entry.Name, entry.Mode)
 	}
 	return 0
 }
@@ -609,9 +631,9 @@ func uninstallRemovalItems(cfg Config) []uninstallRemovalItem {
 	if err != nil {
 		return items
 	}
-	for _, s := range suffixCfg.Suffixes {
+	for _, entry := range suffixCfg.Suffixes {
 		items = append(items, uninstallRemovalItem{
-			path:   resolverPathForSuffix(cfg, s),
+			path:   resolverPathForSuffix(cfg, entry.Name),
 			marker: dns.ResolverFile(dns.DefaultPort),
 		})
 	}
@@ -630,8 +652,8 @@ func reportUninstallPlan(cfg Config) {
 	fmt.Fprintln(cfg.Stdout, "  keychain: remove trust for \"Lewp Local Development CA\"")
 	fmt.Fprintf(cfg.Stdout, "  resolver: remove %s (may prompt for sudo)\n", cfg.ResolverPath)
 	if suffixCfg, err := suffix.Load(cfg.SuffixesPath); err == nil {
-		for _, s := range suffixCfg.Suffixes {
-			fmt.Fprintf(cfg.Stdout, "  resolver: remove %s (custom suffix %s; may prompt for sudo)\n", resolverPathForSuffix(cfg, s), s)
+		for _, entry := range suffixCfg.Suffixes {
+			fmt.Fprintf(cfg.Stdout, "  resolver: remove %s (custom suffix %s; may prompt for sudo)\n", resolverPathForSuffix(cfg, entry.Name), entry.Name)
 		}
 		if len(suffixCfg.Suffixes) > 0 {
 			fmt.Fprintf(cfg.Stdout, "  suffix config: remove %s\n", cfg.SuffixesPath)

@@ -128,9 +128,9 @@ func suffixResolverChecks(cfg Config) []doctorCheck {
 		return []doctorCheck{{Name: "custom suffixes", Status: statusFail, Detail: err.Error()}}
 	}
 	checks := make([]doctorCheck, 0, len(suffixCfg.Suffixes))
-	for _, s := range suffixCfg.Suffixes {
-		path := resolverPathForSuffix(cfg, s)
-		c := doctorCheck{Name: "resolver " + s, Inspect: path}
+	for _, entry := range suffixCfg.Suffixes {
+		path := resolverPathForSuffix(cfg, entry.Name)
+		c := doctorCheck{Name: "resolver " + entry.Name, Inspect: path}
 		body, err := os.ReadFile(path)
 		if err != nil {
 			c.Status = statusFail
@@ -140,7 +140,7 @@ func suffixResolverChecks(cfg Config) []doctorCheck {
 			c.Detail = "resolver does not point at Lewp DNS port"
 		} else {
 			c.Status = statusOK
-			c.Detail = fmt.Sprintf("%s -> port %d", path, port)
+			c.Detail = fmt.Sprintf("%s (%s) -> port %d", path, entry.Mode, port)
 		}
 		checks = append(checks, c)
 	}
@@ -305,9 +305,9 @@ func dnsResolutionChecks(cfg Config) []doctorCheck {
 	if err != nil {
 		return append(checks, doctorCheck{Name: "custom suffix DNS", Status: statusFail, Detail: err.Error()})
 	}
-	for _, s := range suffixCfg.Suffixes {
-		host := "doctor." + s
-		checks = append(checks, dnsResolutionCheck("DNS "+s, host, host, cfg))
+	for _, entry := range suffixCfg.Suffixes {
+		host := "doctor." + entry.Name
+		checks = append(checks, dnsResolutionCheck("DNS "+entry.Name, host, host, cfg))
 	}
 	return checks
 }

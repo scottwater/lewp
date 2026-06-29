@@ -39,7 +39,7 @@ func NewWithSuffixes(store *registry.Store, managed []string) *Proxy {
 	return &Proxy{
 		store:           store,
 		lastSeen:        map[int64]time.Time{},
-		managedSuffixes: suffix.Managed(managed),
+		managedSuffixes: append([]string(nil), managed...),
 	}
 }
 
