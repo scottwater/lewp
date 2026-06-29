@@ -22,6 +22,14 @@ func TestValidateCustomPSLCases(t *testing.T) {
 		{name: "safe rejects registrable com", mode: ModeSafeSubtree, input: "todoordie.com", wantErr: true},
 		{name: "safe rejects registrable co uk", mode: ModeSafeSubtree, input: "todoordie.co.uk", wantErr: true},
 		{name: "safe rejects leftmost www", mode: ModeSafeSubtree, input: "www.todoordie.com", wantErr: true},
+		{name: "safe rejects local", mode: ModeSafeSubtree, input: "local", wantErr: true},
+		{name: "safe rejects local rightmost label", mode: ModeSafeSubtree, input: "foo.local", wantErr: true},
+		{name: "safe rejects nested local rightmost label", mode: ModeSafeSubtree, input: "bar.foo.local", wantErr: true},
+		{name: "safe rejects test", mode: ModeSafeSubtree, input: "test", wantErr: true},
+		{name: "safe rejects public suffix jp", mode: ModeSafeSubtree, input: "jp", wantErr: true},
+		{name: "safe rejects public suffix com", mode: ModeSafeSubtree, input: "com", wantErr: true},
+		{name: "safe rejects empty label", mode: ModeSafeSubtree, input: "local..todoordie.com", wantErr: true},
+		{name: "safe rejects built in", mode: ModeSafeSubtree, input: "lewp", wantErr: true},
 		{name: "mirror allows registrable com", mode: ModeDomainMirror, input: "todoordie.com", want: "todoordie.com"},
 		{name: "mirror allows registrable co uk", mode: ModeDomainMirror, input: "todoordie.co.uk", want: "todoordie.co.uk"},
 		{name: "mirror allows leftmost www", mode: ModeDomainMirror, input: "www.todoordie.com", want: "www.todoordie.com"},
@@ -34,7 +42,6 @@ func TestValidateCustomPSLCases(t *testing.T) {
 		{name: "mirror rejects public suffix com", mode: ModeDomainMirror, input: "com", wantErr: true},
 		{name: "mirror rejects empty label", mode: ModeDomainMirror, input: "local..todoordie.com", wantErr: true},
 		{name: "mirror rejects built in", mode: ModeDomainMirror, input: "lewp", wantErr: true},
-		{name: "safe rejects built in", mode: ModeSafeSubtree, input: "lewp", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -166,8 +173,8 @@ func TestLoadSaveAddRemoveRoundTrip(t *testing.T) {
 	if !ok || removed != "b.todoordie.com" {
 		t.Fatalf("Remove removed=%q ok=%v", removed, ok)
 	}
-	if Names(loaded.Suffixes)[0] != "a.todoordie.com" {
-		t.Fatalf("after Remove=%v want first suffix a.todoordie.com", loaded.Suffixes)
+	if got, want := Names(loaded.Suffixes), []string{"a.todoordie.com", "todoordie.com", "www.todoordie.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("after Remove names=%v want %v", got, want)
 	}
 }
 
