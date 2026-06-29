@@ -15,8 +15,20 @@ import (
 
 const BuiltIn = "lewp"
 
+type Mode string
+
+const (
+	ModeSafeSubtree  Mode = "safe-subtree"
+	ModeDomainMirror Mode = "domain-mirror"
+)
+
+type Entry struct {
+	Name string `toml:"name"`
+	Mode Mode   `toml:"mode"`
+}
+
 type Config struct {
-	Suffixes []string `toml:"suffixes"`
+	Suffixes []Entry `toml:"suffixes"`
 }
 
 var reservedSuffixes = map[string]struct{}{
@@ -26,7 +38,7 @@ var reservedSuffixes = map[string]struct{}{
 	"test":      {},
 }
 
-func ValidateCustom(input string) (string, error) {
+func ValidateCustom(input string, mode Mode) (string, error) {
 	normalized, err := Normalize(input)
 	if err != nil {
 		return "", err
@@ -34,11 +46,14 @@ func ValidateCustom(input string) (string, error) {
 	if normalized == BuiltIn {
 		return "", fmt.Errorf("suffix %q is built in", normalized)
 	}
+	if err := validateMode(mode); err != nil {
+		return "", err
+	}
 	labels := strings.Split(normalized, ".")
 	if _, ok := reservedSuffixes[labels[len(labels)-1]]; ok {
 		return "", fmt.Errorf("suffix %q is reserved", normalized)
 	}
-	if labels[0] == "www" {
+	if mode == ModeSafeSubtree && labels[0] == "www" {
 		return "", fmt.Errorf("suffix %q cannot start with www", normalized)
 	}
 
@@ -46,10 +61,19 @@ func ValidateCustom(input string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("suffix %q must be below a registrable domain: %w", normalized, err)
 	}
-	if normalized == registrable {
+	if mode == ModeSafeSubtree && normalized == registrable {
 		return "", fmt.Errorf("suffix %q must be below registrable domain %q", normalized, registrable)
 	}
 	return normalized, nil
+}
+
+func validateMode(mode Mode) error {
+	switch mode {
+	case ModeSafeSubtree, ModeDomainMirror:
+		return nil
+	default:
+		return fmt.Errorf("unknown suffix mode %q", mode)
+	}
 }
 
 func Normalize(input string) (string, error) {
@@ -69,15 +93,12 @@ func Normalize(input string) (string, error) {
 	return normalized, nil
 }
 
-func Managed(custom []string) []string {
+func Managed(custom []Entry) []string {
 	seen := map[string]struct{}{BuiltIn: {}}
 	normalized := make([]string, 0, len(custom))
-	for _, raw := range custom {
-		suffix, err := Normalize(raw)
+	for _, entry := range custom {
+		suffix, err := ValidateCustom(entry.Name, entry.Mode)
 		if err != nil {
-			continue
-		}
-		if suffix == BuiltIn {
 			continue
 		}
 		if _, ok := seen[suffix]; ok {
@@ -88,6 +109,14 @@ func Managed(custom []string) []string {
 	}
 	sort.Strings(normalized)
 	return append([]string{BuiltIn}, normalized...)
+}
+
+func Names(entries []Entry) []string {
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name)
+	}
+	return names
 }
 
 func HostInManagedSuffix(host string, managed []string) bool {
@@ -117,6 +146,9 @@ func Load(path string) (Config, error) {
 	}
 	meta, err := toml.DecodeFile(path, &cfg)
 	if err != nil {
+		if isOldStringArrayConfig(path) {
+			return Config{}, fmt.Errorf("%s: old suffix config format is no longer supported; remove and re-add suffixes", path)
+		}
 		return Config{}, err
 	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
@@ -144,8 +176,10 @@ func Save(path string, cfg Config) error {
 	cfg.Suffixes = suffixes
 
 	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
-		return err
+	if len(cfg.Suffixes) > 0 {
+		if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
+			return err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -156,19 +190,22 @@ func Save(path string, cfg Config) error {
 	return os.Chmod(path, 0o600)
 }
 
-func Add(cfg Config, raw ...string) (Config, []string, error) {
+func Add(cfg Config, mode Mode, raw ...string) (Config, []string, error) {
+	if err := validateMode(mode); err != nil {
+		return Config{}, nil, err
+	}
 	suffixes, err := validateCustomList(cfg.Suffixes)
 	if err != nil {
 		return Config{}, nil, err
 	}
 	seen := make(map[string]struct{}, len(suffixes)+len(raw))
-	for _, suffix := range suffixes {
-		seen[suffix] = struct{}{}
+	for _, entry := range suffixes {
+		seen[entry.Name] = struct{}{}
 	}
 
 	added := make([]string, 0, len(raw))
 	for _, input := range raw {
-		suffix, err := ValidateCustom(input)
+		suffix, err := ValidateCustom(input, mode)
 		if err != nil {
 			return Config{}, nil, err
 		}
@@ -176,17 +213,20 @@ func Add(cfg Config, raw ...string) (Config, []string, error) {
 			continue
 		}
 		seen[suffix] = struct{}{}
-		suffixes = append(suffixes, suffix)
+		suffixes = append(suffixes, Entry{Name: suffix, Mode: mode})
 		added = append(added, suffix)
 	}
-	sort.Strings(suffixes)
+	sortEntries(suffixes)
 	return Config{Suffixes: suffixes}, added, nil
 }
 
 func Remove(cfg Config, raw string) (Config, string, bool, error) {
-	suffix, err := ValidateCustom(raw)
+	suffix, err := Normalize(raw)
 	if err != nil {
 		return Config{}, "", false, err
+	}
+	if suffix == BuiltIn {
+		return Config{}, "", false, fmt.Errorf("suffix %q is built in", suffix)
 	}
 	suffixes, err := validateCustomList(cfg.Suffixes)
 	if err != nil {
@@ -194,7 +234,7 @@ func Remove(cfg Config, raw string) (Config, string, bool, error) {
 	}
 
 	for i, existing := range suffixes {
-		if existing == suffix {
+		if existing.Name == suffix {
 			suffixes = append(suffixes[:i], suffixes[i+1:]...)
 			return Config{Suffixes: suffixes}, suffix, true, nil
 		}
@@ -202,11 +242,11 @@ func Remove(cfg Config, raw string) (Config, string, bool, error) {
 	return Config{Suffixes: suffixes}, suffix, false, nil
 }
 
-func validateCustomList(raw []string) ([]string, error) {
+func validateCustomList(raw []Entry) ([]Entry, error) {
 	seen := make(map[string]struct{}, len(raw))
-	suffixes := make([]string, 0, len(raw))
+	suffixes := make([]Entry, 0, len(raw))
 	for _, input := range raw {
-		suffix, err := ValidateCustom(input)
+		suffix, err := ValidateCustom(input.Name, input.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -214,10 +254,24 @@ func validateCustomList(raw []string) ([]string, error) {
 			continue
 		}
 		seen[suffix] = struct{}{}
-		suffixes = append(suffixes, suffix)
+		suffixes = append(suffixes, Entry{Name: suffix, Mode: input.Mode})
 	}
-	sort.Strings(suffixes)
+	sortEntries(suffixes)
 	return suffixes, nil
+}
+
+func sortEntries(entries []Entry) {
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+}
+
+func isOldStringArrayConfig(path string) bool {
+	var old struct {
+		Suffixes []string `toml:"suffixes"`
+	}
+	meta, err := toml.DecodeFile(path, &old)
+	return err == nil && meta.IsDefined("suffixes")
 }
 
 func validateLabel(label string) error {
