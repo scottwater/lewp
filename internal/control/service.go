@@ -206,7 +206,7 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 			return LeaseResponse{}, &HostConflictError{Host: resolved.Host, OwnerPath: owner.Path}
 		}
 		original := resolved.Host
-		resolved.Host = suffixedHost(resolved.Host, resolved.Path)
+		resolved.Host = suffixedHost(resolved.Host, resolved.Path, s.managedSuffixes)
 		resolved.HostKind = identity.HostKindCustom
 		resolved.Warnings = append(resolved.Warnings,
 			fmt.Sprintf("warning: %s is already assigned to %s; using %s", original, owner.Path, resolved.Host))
@@ -446,10 +446,23 @@ func response(resolved identity.Result, port int, state string) LeaseResponse {
 	}
 }
 
-func suffixedHost(host, path string) string {
+func suffixedHost(host, path string, managed []string) string {
 	parts := strings.Split(host, ".")
 	hash := sha1.Sum([]byte(path))
-	parts[0] = parts[0] + "-" + hex.EncodeToString(hash[:])[:4]
+	first := parts[0] + "-" + hex.EncodeToString(hash[:])[:4]
+	normalizedHost, err := suffix.Normalize(host)
+	if err == nil {
+		for _, raw := range managed {
+			managedSuffix, err := suffix.Normalize(raw)
+			if err != nil || managedSuffix == suffix.BuiltIn {
+				continue
+			}
+			if normalizedHost == managedSuffix {
+				return first + "." + managedSuffix
+			}
+		}
+	}
+	parts[0] = first
 	return strings.Join(parts, ".")
 }
 

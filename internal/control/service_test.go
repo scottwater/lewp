@@ -242,6 +242,37 @@ func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
 	}
 }
 
+func TestServiceAutoSuffixExactCustomSuffixStaysInsideManagedSuffix(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	svc.SetManagedSuffixes([]string{"localkickofflabs.com"})
+	ctx := context.Background()
+	firstDir := t.TempDir()
+	secondDir := t.TempDir()
+
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: firstDir, Host: "localkickofflabs.com"}); err != nil {
+		t.Fatal(err)
+	}
+	suffixed, err := svc.Lease(ctx, LeaseRequest{
+		WorkDir:    secondDir,
+		Host:       "localkickofflabs.com",
+		AutoSuffix: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if suffixed.Host == "localkickofflabs.com" {
+		t.Fatalf("auto-suffix did not change host: %q", suffixed.Host)
+	}
+	if !strings.HasSuffix(suffixed.Host, ".localkickofflabs.com") {
+		t.Fatalf("auto-suffix escaped managed suffix: %q", suffixed.Host)
+	}
+	if strings.HasSuffix(suffixed.Host, "-localkickofflabs.com") {
+		t.Fatalf("auto-suffix rewrote apex outside resolver suffix: %q", suffixed.Host)
+	}
+}
+
 func TestServiceRemembersExplicitHostOnPlainLease(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})

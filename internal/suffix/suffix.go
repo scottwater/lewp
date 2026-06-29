@@ -151,6 +151,9 @@ func Load(path string) (Config, error) {
 		}
 		return Config{}, err
 	}
+	if meta.Type("suffixes") == "Array" {
+		return Config{}, fmt.Errorf("%s: old suffix config format is no longer supported; remove and re-add suffixes", path)
+	}
 	if undecoded := meta.Undecoded(); len(undecoded) > 0 {
 		keys := make([]string, 0, len(undecoded))
 		for _, k := range undecoded {

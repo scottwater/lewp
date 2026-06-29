@@ -208,6 +208,21 @@ func TestLoadRejectsOldStringArrayConfig(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsEmptyOldStringArrayConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "suffixes.toml")
+	if err := os.WriteFile(path, []byte("suffixes = []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load accepted empty old suffixes array format")
+	}
+	if !strings.Contains(err.Error(), "old suffix config format is no longer supported") {
+		t.Fatalf("error should explain old format cleanup: %v", err)
+	}
+}
+
 func TestSaveEmptyConfigAndTightensExistingMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "suffixes.toml")
 	if err := os.WriteFile(path, []byte("# old\n"), 0o644); err != nil {

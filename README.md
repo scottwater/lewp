@@ -172,7 +172,7 @@ lewp add --host leads.localkickofflabs.com
 While the resolver file exists, that suffix shadows public DNS on this Mac.
 Proxy routing is still exact-host routing: each hostname needs its own
 `lewp add --host ...` route before Lewp will serve it. After adding a suffix,
-run `lewp system start` (or `lewp setup --suffix local.todoordie.com --start`)
+run `lewp system start` (or `lewp setup --suffix localkickofflabs.com --allow-domain-mirror --start`)
 so the daemon kickstarts and loads the updated suffix list.
 
 Custom public suffix and domain-mirror routes are HTTP-only in V1. `.lewp`
