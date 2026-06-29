@@ -56,7 +56,7 @@ Run "lewp <command> --help" for command-specific help.
 
 // Per-command help. Each is printed to stdout on `lewp <cmd> --help`.
 const (
-	setupHelp = `lewp setup — one-time macOS setup for .lewp routing and HTTPS
+	setupHelp = `lewp setup — one-time macOS setup for .lewp routing and .lewp HTTPS
 
 Setup may prompt for your password (sudo) to install /etc/resolver/lewp, and
 macOS may prompt you to trust the local development CA in your keychain.

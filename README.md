@@ -79,10 +79,11 @@ HOST_KIND=instance
 ```
 
 `add` always prints both the HTTP `URL` and the `HTTPS_URL` whenever the lease
-has a host; whether the browser accepts the HTTPS one depends on `lewp setup`
-having trusted the local CA (see [HTTPS](#https)). `STATE` and `HOST_KIND` are
-descriptive; use `--shell` for clean `export` lines (which omit them) when you
-want `eval "$(lewp add --shell)"`.
+has a host. For `.lewp` hosts, whether the browser accepts the HTTPS one depends
+on `lewp setup` having trusted the local CA (see [HTTPS](#https)); custom public
+suffix routes are HTTP-only in V1. `STATE` and `HOST_KIND` are descriptive; use
+`--shell` for clean `export` lines (which omit them) when you want
+`eval "$(lewp add --shell)"`.
 
 Start your app yourself on the leased port:
 
@@ -173,6 +174,9 @@ Proxy routing is still exact-host routing: each hostname needs its own
 `lewp add --host ...` route before Lewp will serve it. After adding a suffix,
 run `lewp system start` (or `lewp setup --suffix local.todoordie.com --start`)
 so the daemon kickstarts and loads the updated suffix list.
+
+Custom public suffix and domain-mirror routes are HTTP-only in V1. `.lewp`
+hosts still support HTTPS through Lewp's local CA.
 
 ## Worktree walkthrough
 
