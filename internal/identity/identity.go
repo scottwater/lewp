@@ -225,6 +225,9 @@ func ValidateHostForSuffixes(host string, managed []string) error {
 	if !suffix.HostInManagedSuffix(host, managed) {
 		return fmt.Errorf("host %q must be inside a configured Lewp suffix", host)
 	}
+	if host == suffix.BuiltIn {
+		return fmt.Errorf("host %q must be below the built-in Lewp suffix", host)
+	}
 	for _, label := range strings.Split(host, ".") {
 		if label == "" || len(label) > 63 {
 			return fmt.Errorf("host %q contains an invalid DNS label", host)

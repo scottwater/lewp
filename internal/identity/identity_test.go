@@ -212,6 +212,9 @@ func TestValidateHostAllowsConfiguredSuffix(t *testing.T) {
 }
 
 func TestValidateHostAllowsExactManagedSuffix(t *testing.T) {
+	if err := ValidateHostForSuffixes("lewp", []string{"lewp", "local.todoordie.com"}); err == nil {
+		t.Fatal("bare built-in suffix accepted as route host")
+	}
 	managed := []string{"lewp", "local.todoordie.com", "localkickofflabs.com"}
 	if err := ValidateHostForSuffixes("local.todoordie.com", managed); err != nil {
 		t.Fatalf("exact nested managed suffix rejected: %v", err)
