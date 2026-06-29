@@ -225,9 +225,6 @@ func ValidateHostForSuffixes(host string, managed []string) error {
 	if !suffix.HostInManagedSuffix(host, managed) {
 		return fmt.Errorf("host %q must be inside a configured Lewp suffix", host)
 	}
-	if !hasLabelBeforeManagedSuffix(host, managed) {
-		return fmt.Errorf("host %q must include at least one label before its managed suffix", host)
-	}
 	for _, label := range strings.Split(host, ".") {
 		if label == "" || len(label) > 63 {
 			return fmt.Errorf("host %q contains an invalid DNS label", host)
@@ -238,26 +235,6 @@ func ValidateHostForSuffixes(host string, managed []string) error {
 		}
 	}
 	return nil
-}
-
-func hasLabelBeforeManagedSuffix(host string, managed []string) bool {
-	normalized := make([]string, 0, len(managed))
-	for _, raw := range managed {
-		s, err := suffix.Normalize(raw)
-		if err != nil {
-			continue
-		}
-		normalized = append(normalized, s)
-		if host == s {
-			return false
-		}
-	}
-	for _, s := range normalized {
-		if strings.HasSuffix(host, "."+s) {
-			return strings.TrimSuffix(host, "."+s) != ""
-		}
-	}
-	return false
 }
 
 func normalizeHost(host string) string {

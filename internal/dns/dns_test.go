@@ -50,6 +50,26 @@ func TestHandleWithSuffixesAnswersCustomManagedSuffix(t *testing.T) {
 	}
 }
 
+func TestHandleWithSuffixesAnswersCustomManagedSuffixApex(t *testing.T) {
+	query := mustQuery(t, "localkickofflabs.com.", dnsmessage.TypeA)
+
+	reply, err := HandleWithSuffixes(query, []string{"lewp", "localkickofflabs.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answers := parseAnswers(t, reply)
+	if len(answers) != 1 {
+		t.Fatalf("answers=%d", len(answers))
+	}
+	a, ok := answers[0].Body.(*dnsmessage.AResource)
+	if !ok {
+		t.Fatalf("answer type=%T", answers[0].Body)
+	}
+	if got := netip.AddrFrom4(a.A); got.String() != "127.0.0.1" {
+		t.Fatalf("A=%s", got)
+	}
+}
+
 func TestHandlerRejectsNonLewpHost(t *testing.T) {
 	query := mustQuery(t, "example.com.", dnsmessage.TypeA)
 

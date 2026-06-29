@@ -205,6 +205,32 @@ func TestProxyUnknownConfiguredSuffixShowsLewpDebugPage(t *testing.T) {
 	}
 }
 
+func TestProxyRoutesExactManagedSuffixApex(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "localkickofflabs.com" {
+			t.Fatalf("Host=%q", r.Host)
+		}
+		_, _ = w.Write([]byte("apex ok"))
+	}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+
+	store := openProxyStore(t)
+	registerRoute(t, store, "localkickofflabs.com", port)
+	handler := NewWithSuffixes(store, []string{"lewp", "localkickofflabs.com"})
+
+	req := httptest.NewRequest(http.MethodGet, "http://localkickofflabs.com/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if rr.Body.String() != "apex ok" {
+		t.Fatalf("body=%q", rr.Body.String())
+	}
+}
+
 func TestProxyUnknownLewpHostEscapesHost(t *testing.T) {
 	store := openProxyStore(t)
 	handler := New(store)

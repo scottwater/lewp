@@ -211,12 +211,15 @@ func TestValidateHostAllowsConfiguredSuffix(t *testing.T) {
 	}
 }
 
-func TestValidateHostRejectsBareManagedSuffix(t *testing.T) {
-	managed := []string{"lewp", "local.todoordie.com", "deep.local.todoordie.com"}
-	if err := ValidateHostForSuffixes("deep.local.todoordie.com", managed); err == nil {
-		t.Fatal("bare nested managed suffix accepted as a host")
+func TestValidateHostAllowsExactManagedSuffix(t *testing.T) {
+	managed := []string{"lewp", "local.todoordie.com", "localkickofflabs.com"}
+	if err := ValidateHostForSuffixes("local.todoordie.com", managed); err != nil {
+		t.Fatalf("exact nested managed suffix rejected: %v", err)
 	}
-	if err := ValidateHostForSuffixes("feature.deep.local.todoordie.com", managed); err != nil {
+	if err := ValidateHostForSuffixes("localkickofflabs.com", managed); err != nil {
+		t.Fatalf("exact managed suffix rejected: %v", err)
+	}
+	if err := ValidateHostForSuffixes("feature.local.todoordie.com", managed); err != nil {
 		t.Fatalf("host below nested managed suffix rejected: %v", err)
 	}
 }
