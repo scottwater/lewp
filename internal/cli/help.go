@@ -96,10 +96,11 @@ Examples:
   lewp system status
 `
 
-	addHelp = `lewp add — register a stable port and .lewp hostname for this directory
+	addHelp = `lewp add — register a stable port and host for this directory
 
-Re-running from the same directory returns the same port and host. Root and name
-are inferred from the directory layout unless overridden.
+Re-running from the same directory returns the same port and host. By default,
+the host is under .lewp. Root and name are inferred from the directory layout
+unless overridden.
 
 Identity is discovered in this order: CLI flags, then LEWP_ROOT / LEWP_NAME /
 LEWP_HOST environment variables, then the nearest .lewp.local.toml, then path
@@ -112,7 +113,7 @@ Usage:
 Flags:
   --root <root>   Override the inferred root segment of the hostname
   --name <name>   Override the inferred instance segment of the hostname
-  --host <host>   Register an explicit host inside .lewp (e.g. atlas.lewp)
+  --host <host>   Register an explicit .lewp or managed custom-suffix host
   --auto-suffix   On an explicit --host conflict, append a deterministic suffix
                   instead of failing
   --json          Emit the route as a JSON object
