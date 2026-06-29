@@ -153,12 +153,26 @@ lewp setup --suffix local.todoordie.com
 lewp add --host feature-1.local.todoordie.com
 ```
 
-Lewp installs a resolver only for `local.todoordie.com`, so `todoordie.com` and
-`www.todoordie.com` continue to use normal DNS. Custom suffixes must be below a
-registrable domain; apex domains such as `todoordie.com` and `todoordie.co.uk`
-are rejected. After adding a suffix, run `lewp system start` (or
-`lewp setup --suffix local.todoordie.com --start`) so the daemon kickstarts and
-loads the updated suffix list.
+Lewp installs a resolver only for the configured subtree. With
+`local.todoordie.com`, `todoordie.com` and `www.todoordie.com` continue to use
+normal DNS. This is the default safe-subtree mode. Custom suffixes must be below
+a registrable domain; apex domains such as `todoordie.com` and
+`todoordie.co.uk` are rejected unless you explicitly choose domain mirror mode.
+
+Domain mirror mode is for local mirrors of an owned public domain:
+
+```sh
+lewp setup --suffix localkickofflabs.com --allow-domain-mirror
+lewp add --host localkickofflabs.com
+lewp add --host app.localkickofflabs.com
+lewp add --host leads.localkickofflabs.com
+```
+
+While the resolver file exists, that suffix shadows public DNS on this Mac.
+Proxy routing is still exact-host routing: each hostname needs its own
+`lewp add --host ...` route before Lewp will serve it. After adding a suffix,
+run `lewp system start` (or `lewp setup --suffix local.todoordie.com --start`)
+so the daemon kickstarts and loads the updated suffix list.
 
 ## Worktree walkthrough
 

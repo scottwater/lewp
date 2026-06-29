@@ -62,11 +62,21 @@ Setup may prompt for your password (sudo) to install /etc/resolver/lewp, and
 macOS may prompt you to trust the local development CA in your keychain.
 
 Usage:
-  lewp setup
+  lewp setup [--suffix <suffix>] [--allow-domain-mirror] [--start]
 
 It writes /etc/resolver/lewp (via sudo when needed), creates the local CA under
 ~/Library/Application Support/lewp/, installs the launchd plist, and trusts the
 CA with the macOS "security" tool. Run "lewp system start" afterward.
+
+Custom public dev suffixes default to safe-subtree mode:
+  lewp setup --suffix local.todoordie.com
+
+This installs a resolver only for the subtree, so todoordie.com and
+www.todoordie.com continue to use public DNS.
+
+Domain mirror mode is explicit because it shadows public DNS locally while the
+resolver exists:
+  lewp setup --suffix localkickofflabs.com --allow-domain-mirror
 `
 
 	systemHelp = `lewp system — manage the launchd-managed daemon

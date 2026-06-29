@@ -25,7 +25,7 @@ install.
 ## Commands
 
 ```sh
-lewp setup [--suffix S]
+lewp setup [--suffix S] [--allow-domain-mirror]
 lewp system start|stop|status|restart|uninstall
 lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--json|--shell]
 lewp init [--root R] [--name N] [--host H] [--force]
@@ -61,20 +61,37 @@ error) plus a `Next:` line describing how to recover — for example the precise
 `security add-trusted-cert ...` command to run by hand if keychain trust fails.
 
 `.lewp` is built in and is always installed. `--suffix S` additively installs a
-resolver for an owned public-domain subtree, useful when an OAuth provider
-rejects private TLDs:
+resolver for an owned public dev suffix, useful when an OAuth provider rejects
+private TLDs.
+
+By default, custom suffixes use safe-subtree mode:
 
 ```sh
 lewp setup --suffix local.todoordie.com
 ```
 
-Custom suffixes must be below a registrable domain. `local.todoordie.com` and
-`local.todoordie.co.uk` are accepted; apex domains such as `todoordie.com` and
-`todoordie.co.uk`, `www.*`, and reserved suffixes are rejected. Setup is
-additive: re-running with another `--suffix` keeps previously configured
-suffixes. After adding a suffix, run `lewp system start` (or pass `--start` to
-setup) so launchd starts or kickstarts the daemon and it loads the updated suffix
-list.
+This installs a resolver only for the configured subtree. With
+`local.todoordie.com`, public DNS for `todoordie.com` and `www.todoordie.com`
+continues normally.
+
+Domain mirror mode must be opted into:
+
+```sh
+lewp setup --suffix localkickofflabs.com --allow-domain-mirror
+```
+
+It allows an owned registrable domain as the suffix and shadows public DNS for
+that suffix locally until you run `lewp suffix remove localkickofflabs.com` or
+`lewp system uninstall`. Proxy routing remains exact-host routing: add each
+hostname you want Lewp to serve with `lewp add --host ...`.
+
+Safe-subtree suffixes must be below a registrable domain. `local.todoordie.com`
+and `local.todoordie.co.uk` are accepted; apex domains such as `todoordie.com`
+and `todoordie.co.uk`, `www.*`, and reserved suffixes are rejected unless domain
+mirror mode is explicitly allowed. Setup is additive: re-running with another
+`--suffix` keeps previously configured suffixes. After adding a suffix, run
+`lewp system start` (or pass `--start` to setup) so launchd starts or kickstarts
+the daemon and it loads the updated suffix list.
 
 Output:
 
@@ -162,6 +179,14 @@ lewp suffix remove local.todoordie.com
 `.lewp` is built in and cannot be removed. Custom suffixes are added with
 `lewp setup --suffix S`; `suffix remove S` removes the suffix from Lewp config
 and deletes its resolver file after confirming the resolver is Lewp-owned.
+`suffix list` includes each suffix mode:
+
+```text
+SUFFIX                 MODE
+lewp                   built-in
+local.todoordie.com    safe-subtree
+localkickofflabs.com   domain-mirror
+```
 
 Example:
 
