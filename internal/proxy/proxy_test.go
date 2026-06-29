@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,32 @@ func TestProxyUnknownLewpHostShowsHelpfulPage(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestProxyNewWithSuffixesDefaultsEmptyToBuiltIn(t *testing.T) {
+	store := openProxyStore(t)
+	handler := NewWithSuffixes(store, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-2.audit.lewp/dashboard", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "feature-2.audit.lewp is not registered with Lewp") {
+		t.Fatalf("empty suffixes did not default to Lewp debug page:\n%s", rr.Body.String())
+	}
+}
+
+func TestProxyNewWithSuffixesCanonicalizesNames(t *testing.T) {
+	store := openProxyStore(t)
+	handler := NewWithSuffixes(store, []string{"Local.TodoOrDie.Com.", "lewp", "local.todoordie.com"})
+
+	want := []string{"lewp", "local.todoordie.com"}
+	if !reflect.DeepEqual(handler.managedSuffixes, want) {
+		t.Fatalf("managedSuffixes=%v want %v", handler.managedSuffixes, want)
 	}
 }
 

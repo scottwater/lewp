@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -102,6 +103,36 @@ func TestServiceLeaseAllowsConfiguredCustomSuffix(t *testing.T) {
 		t.Fatal(err)
 	}
 	if lease.Host != "feature-1.local.todoordie.com" {
+		t.Fatalf("host=%q", lease.Host)
+	}
+}
+
+func TestServiceSetManagedSuffixesCanonicalizesNames(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	svc.SetManagedSuffixes([]string{"Local.TodoOrDie.Com.", "lewp", "local.todoordie.com"})
+
+	want := []string{"lewp", "local.todoordie.com"}
+	if !reflect.DeepEqual(svc.managedSuffixes, want) {
+		t.Fatalf("managedSuffixes=%v want %v", svc.managedSuffixes, want)
+	}
+}
+
+func TestServiceSetManagedSuffixesKeepsBuiltInWithCustomOnly(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	svc.SetManagedSuffixes([]string{"local.todoordie.com"})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	lease, err := svc.Lease(ctx, LeaseRequest{
+		WorkDir: dir,
+		Host:    "feature-1.audit.lewp",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Host != "feature-1.audit.lewp" {
 		t.Fatalf("host=%q", lease.Host)
 	}
 }

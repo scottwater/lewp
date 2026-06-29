@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/scottwater/lewp/internal/identity"
@@ -124,11 +125,29 @@ type ListEntry struct {
 }
 
 func NewService(store *registry.Store, portRange registry.PortRange) *Service {
-	return &Service{store: store, portRange: portRange, managedSuffixes: []string{suffix.BuiltIn}}
+	return &Service{store: store, portRange: portRange, managedSuffixes: canonicalManagedSuffixes(nil)}
 }
 
 func (s *Service) SetManagedSuffixes(managed []string) {
-	s.managedSuffixes = append([]string(nil), managed...)
+	s.managedSuffixes = canonicalManagedSuffixes(managed)
+}
+
+func canonicalManagedSuffixes(managed []string) []string {
+	seen := map[string]struct{}{suffix.BuiltIn: {}}
+	custom := make([]string, 0, len(managed))
+	for _, raw := range managed {
+		name, err := suffix.Normalize(raw)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		custom = append(custom, name)
+	}
+	sort.Strings(custom)
+	return append([]string{suffix.BuiltIn}, custom...)
 }
 
 // requestEnv normalizes a request's forwarded environment to a non-nil map.

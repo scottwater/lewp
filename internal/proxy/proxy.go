@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,8 +40,26 @@ func NewWithSuffixes(store *registry.Store, managed []string) *Proxy {
 	return &Proxy{
 		store:           store,
 		lastSeen:        map[int64]time.Time{},
-		managedSuffixes: append([]string(nil), managed...),
+		managedSuffixes: canonicalManagedSuffixes(managed),
 	}
+}
+
+func canonicalManagedSuffixes(managed []string) []string {
+	seen := map[string]struct{}{suffix.BuiltIn: {}}
+	custom := make([]string, 0, len(managed))
+	for _, raw := range managed {
+		name, err := suffix.Normalize(raw)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		custom = append(custom, name)
+	}
+	sort.Strings(custom)
+	return append([]string{suffix.BuiltIn}, custom...)
 }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
