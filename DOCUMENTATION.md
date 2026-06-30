@@ -32,7 +32,7 @@ lewp alias add <host> [--json]
 lewp alias remove <host>
 lewp alias list [--json]
 lewp init [--root R] [--name N] [--host H] [--force]
-lewp info [--json]
+lewp info [--name N] [--host H] [--json|--shell|--port]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
 lewp port release [--name N] [--forget]
@@ -369,37 +369,36 @@ port.
 ```sh
 lewp info
 lewp info --json
+lewp info --host feature-1.atlas.lewp --port
+lewp info --name vite --port
 ```
 
 Default output for a directory with one route, one alias, and one bare port:
 
 ```sh
-ROUTE
-PORT=42137
-URL=http://feature-1.atlas.lewp
-HTTPS_URL=https://feature-1.atlas.lewp
-HOST=feature-1.atlas.lewp
-STATE=up
-DIR=/Users/scott/projects/atlas/feature-1
-
-ALIASES
-PORT=42137
-URL=http://tags.feature-1.atlas.lewp
-HTTPS_URL=https://tags.feature-1.atlas.lewp
-HOST=tags.feature-1.atlas.lewp
-STATE=up
-DIR=/Users/scott/projects/atlas/feature-1
-
-PORTS
-NAME=vite
-PORT=42138
-STATE=down
-DIR=/Users/scott/projects/atlas/feature-1
+HOST                       NAME       KIND   PORT   STATE  PATH
+feature-1.atlas.lewp       feature-1  route  42137  up     /Users/scott/projects/atlas/feature-1
+tags.feature-1.atlas.lewp  feature-1  alias  42137  up     /Users/scott/projects/atlas/feature-1
+-                          vite       port   42138  down   /Users/scott/projects/atlas/feature-1
 ```
 
-The project directory is reported as `DIR=` (not `PATH=`) so the env-style
-output never shadows the shell's `$PATH`. A routed host also prints a
-`# <host> is local-only (resolves to 127.0.0.1)` note on stderr.
+Use `--json` for machine-readable entries. `--name` filters by logical name;
+aliases share their route's name. `--host` filters by exact host, which is the
+clearest way to select a route or alias.
+
+`--port` emits only the port digits with no trailing newline. It requires
+exactly one matching entry:
+
+```sh
+PORT="$(lewp info --host feature-1.atlas.lewp --port)"
+VITE_RUBY_PORT="$(lewp info --name vite --port)"
+```
+
+`--shell` emits eval-safe exports for exactly one matching entry:
+
+```sh
+eval "$(lewp info --host feature-1.atlas.lewp --shell)"
+```
 
 If no route or port is registered for the current directory, `info` exits
 non-zero and points you at the commands that create or relocate one:

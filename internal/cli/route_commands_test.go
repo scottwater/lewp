@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/scottwater/lewp/internal/control"
+	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/registry"
 )
 
@@ -294,21 +295,19 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("info code=%d stderr=%q", code, stderr.String())
 	}
 	infoOut := stdout.String()
-	if !strings.Contains(infoOut, "ROUTE\n") || !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "DIR="+srcDir) {
+	if !strings.HasPrefix(infoOut, "HOST") || !strings.Contains(infoOut, "KIND") || !strings.Contains(infoOut, "PATH") {
+		t.Fatalf("info output should be a table: %q", infoOut)
+	}
+	if !strings.Contains(infoOut, "feature-1.audit.lewp") || !strings.Contains(infoOut, "feature-1  route") || !strings.Contains(infoOut, srcDir) {
 		t.Fatalf("info output missing route fields: %q", infoOut)
 	}
-	// HTTPS_URL accompanies the HTTP URL for a routed host.
-	if !strings.Contains(infoOut, "HTTPS_URL=https://feature-1.audit.lewp") {
-		t.Fatalf("info output missing HTTPS_URL: %q", infoOut)
-	}
-	if !strings.Contains(infoOut, "ALIASES\n") || !strings.Contains(infoOut, "HOST=tags.feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://tags.feature-1.audit.lewp") {
+	if !strings.Contains(infoOut, "tags.feature-1.audit.lewp") || !strings.Contains(infoOut, "feature-1  alias") {
 		t.Fatalf("info output missing alias fields: %q", infoOut)
 	}
-	// The misleading PATH= key (which shadows $PATH) must be gone.
-	if strings.Contains(infoOut, "PATH=") {
-		t.Fatalf("info output should not emit PATH= (use DIR=): %q", infoOut)
+	if strings.Contains(infoOut, "PATH=") || strings.Contains(infoOut, "HOST=") || strings.Contains(infoOut, "PORT=") {
+		t.Fatalf("info output should not emit env-style fields by default: %q", infoOut)
 	}
-	if !strings.Contains(infoOut, "PORTS\n") || !strings.Contains(infoOut, "NAME=vite") || !strings.Contains(infoOut, "STATE=down") {
+	if !strings.Contains(infoOut, "vite") || !strings.Contains(infoOut, "port") || !strings.Contains(infoOut, "down") {
 		t.Fatalf("info output missing bare port fields: %q", infoOut)
 	}
 
@@ -332,7 +331,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code = Run(Config{Args: []string{"info"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("source info after move code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "PORTS\n") || !strings.Contains(stdout.String(), "NAME=vite") || strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") {
+	if !strings.Contains(stdout.String(), "vite") || !strings.Contains(stdout.String(), "port") || strings.Contains(stdout.String(), "feature-1.audit.lewp") {
 		t.Fatalf("source info after move should only show port: %q", stdout.String())
 	}
 	stdout.Reset()
@@ -340,7 +339,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code = Run(Config{Args: []string{"info"}, WorkDir: destDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("dest info after move code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") || !strings.Contains(stdout.String(), "HOST=tags.feature-1.audit.lewp") {
+	if !strings.Contains(stdout.String(), "feature-1.audit.lewp") || !strings.Contains(stdout.String(), "tags.feature-1.audit.lewp") {
 		t.Fatalf("dest info after move missing route: %q", stdout.String())
 	}
 }
@@ -485,6 +484,198 @@ func TestRunListAlignsColumnsWithMixedHosts(t *testing.T) {
 		}
 		if line[portCol] == ' ' || line[stateCol] == ' ' || line[pathCol] == ' ' {
 			t.Fatalf("list row missing value at aligned column:\n%s", got)
+		}
+	}
+}
+
+func TestRunInfoDefaultsToCurrentDirectoryTable(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+	otherDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("alias add code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "other"}, WorkDir: otherDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add other code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	if !strings.HasPrefix(got, "HOST") || !strings.Contains(got, "KIND") || strings.Contains(got, "ROUTE\n") || strings.Contains(got, "PORT=") {
+		t.Fatalf("info should render as a table by default:\n%s", got)
+	}
+	if !strings.Contains(got, "app.work.lewp") || !strings.Contains(got, "tags.app.work.lewp") || !strings.Contains(got, "vite") {
+		t.Fatalf("info table missing current directory entries:\n%s", got)
+	}
+	if strings.Contains(got, "other.work.lewp") {
+		t.Fatalf("info table leaked another directory:\n%s", got)
+	}
+}
+
+func TestRunInfoPortFiltersToOneEntryWithoutNewline(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("alias add code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--host", "tags.app.work.lewp", "--port"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --host --port code=%d stderr=%q", code, stderr.String())
+	}
+	hostPort := stdout.String()
+	if hostPort == "" || strings.Contains(hostPort, "\n") || strings.Contains(hostPort, "PORT=") {
+		t.Fatalf("info --host --port stdout=%q want bare port without newline", hostPort)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--name", "vite", "--port"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --name --port code=%d stderr=%q", code, stderr.String())
+	}
+	namePort := stdout.String()
+	if namePort == "" || strings.Contains(namePort, "\n") || strings.Contains(namePort, "PORT=") {
+		t.Fatalf("info --name --port stdout=%q want bare port without newline", namePort)
+	}
+	if namePort == hostPort {
+		t.Fatalf("bare port should differ from routed host port; got %q", namePort)
+	}
+}
+
+func TestRunInfoShellRequiresSingleFilteredEntry(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("alias add code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--shell"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 2 {
+		t.Fatalf("info --shell code=%d want 2 stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "requires exactly one matching entry") || !strings.Contains(stderr.String(), "--host") {
+		t.Fatalf("info --shell error should ask for a filter: %q", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--shell", "--host", "app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --shell --host code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "export PORT=") || !strings.Contains(got, "export HOST=app.work.lewp\n") || !strings.Contains(got, "export URL=http://app.work.lewp\n") {
+		t.Fatalf("info --shell --host missing exports:\n%s", got)
+	}
+}
+
+func TestRunInfoJSONAndTableFilters(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("alias add code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--json", "--host", "tags.app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --json --host code=%d stderr=%q", code, stderr.String())
+	}
+	var entries []control.ListEntry
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("info --json --host not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if len(entries) != 1 || entries[0].Kind != control.KindAlias || entries[0].Host != "tags.app.work.lewp" {
+		t.Fatalf("info --json --host entries=%+v", entries)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--json", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --json --name code=%d stderr=%q", code, stderr.String())
+	}
+	entries = nil
+	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
+		t.Fatalf("info --json --name not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if len(entries) != 2 || entries[0].Kind != identity.KindRoute || entries[1].Kind != control.KindAlias {
+		t.Fatalf("info --json --name should return route and alias sharing name: %+v", entries)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --name code=%d stderr=%q", code, stderr.String())
+	}
+	got := stdout.String()
+	if !strings.Contains(got, "app.work.lewp") || !strings.Contains(got, "tags.app.work.lewp") {
+		t.Fatalf("info --name should include route and alias sharing that name:\n%s", got)
+	}
+}
+
+func TestRunInfoRejectsConflictingScalarFormats(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+
+	for _, args := range [][]string{
+		{"info", "--json", "--shell"},
+		{"info", "--json", "--port"},
+		{"info", "--shell", "--port"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := Run(Config{Args: args, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 2 {
+			t.Fatalf("%v code=%d want 2 stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
 		}
 	}
 }

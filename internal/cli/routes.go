@@ -214,7 +214,23 @@ func runInfo(cfg Config) int {
 	fs := flag.NewFlagSet("info", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	jsonOut := fs.Bool("json", false, "")
+	shellOut := fs.Bool("shell", false, "")
+	portOnly := fs.Bool("port", false, "")
+	name := fs.String("name", "", "")
+	host := fs.String("host", "", "")
 	if !parseFlags(cfg, fs, "info") {
+		return 2
+	}
+	if *jsonOut && *shellOut {
+		fmt.Fprintln(cfg.Stderr, "lewp info: --json and --shell cannot be combined")
+		return 2
+	}
+	if *jsonOut && *portOnly {
+		fmt.Fprintln(cfg.Stderr, "lewp info: --json and --port cannot be combined")
+		return 2
+	}
+	if *shellOut && *portOnly {
+		fmt.Fprintln(cfg.Stderr, "lewp info: --shell and --port cannot be combined")
 		return 2
 	}
 	resp, err := call(cfg, control.Request{Command: "info", Info: control.InfoRequest{WorkDir: cfg.WorkDir}})
@@ -228,8 +244,53 @@ func runInfo(cfg Config) int {
 		fmt.Fprintln(cfg.Stderr, "Or move an existing route here: lewp move --from <path>")
 		return 1
 	}
-	writeInfo(cfg.Stdout, cfg.Stderr, resp.Entries, *jsonOut)
+	entries := filterInfoEntries(resp.Entries, *name, *host)
+	if *jsonOut {
+		if entries == nil {
+			entries = []control.ListEntry{}
+		}
+		_ = json.NewEncoder(cfg.Stdout).Encode(entries)
+		return 0
+	}
+	if len(entries) == 0 {
+		fmt.Fprintln(cfg.Stderr, "no matching Lewp route or port for this directory")
+		return 1
+	}
+	if *portOnly {
+		if len(entries) != 1 {
+			fmt.Fprintln(cfg.Stderr, "lewp info --port requires exactly one matching entry; pass --host <host> or --name <name>")
+			return 2
+		}
+		fmt.Fprintf(cfg.Stdout, "%d", entries[0].Port)
+		return 0
+	}
+	if *shellOut {
+		if len(entries) != 1 {
+			fmt.Fprintln(cfg.Stderr, "lewp info --shell requires exactly one matching entry; pass --host <host> or --name <name>")
+			return 2
+		}
+		writeInfoShell(cfg.Stdout, entries[0])
+		return 0
+	}
+	writeEntriesTable(cfg.Stdout, entries)
 	return 0
+}
+
+func filterInfoEntries(entries []control.ListEntry, name, host string) []control.ListEntry {
+	if name == "" && host == "" {
+		return entries
+	}
+	filtered := make([]control.ListEntry, 0, len(entries))
+	for _, entry := range entries {
+		if name != "" && entry.Name != name {
+			continue
+		}
+		if host != "" && entry.Host != host {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func runMove(cfg Config) int {
@@ -306,16 +367,20 @@ func runList(cfg Config) int {
 		_ = json.NewEncoder(cfg.Stdout).Encode(entries)
 		return 0
 	}
-	tw := tabwriter.NewWriter(cfg.Stdout, 0, 0, 2, ' ', 0)
+	writeEntriesTable(cfg.Stdout, resp.Entries)
+	return 0
+}
+
+func writeEntriesTable(stdout io.Writer, entries []control.ListEntry) {
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "HOST\tNAME\tKIND\tPORT\tSTATE\tPATH")
-	for _, entry := range resp.Entries {
+	for _, entry := range entries {
 		host := dashIfEmpty(entry.Host)
 		name := dashIfEmpty(entry.Name)
 		kind := dashIfEmpty(string(entry.Kind))
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", host, name, kind, entry.Port, entry.State, entry.Path)
 	}
 	_ = tw.Flush()
-	return 0
 }
 
 // dashIfEmpty renders an empty column value as "-" so tabular output keeps a
@@ -416,75 +481,11 @@ func writeRoutes(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut 
 	writeLocalOnlyNote(stderr, host)
 }
 
-func writeInfo(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut bool) {
-	if jsonOut {
-		_ = json.NewEncoder(stdout).Encode(entries)
-		return
-	}
-	routes := make([]control.ListEntry, 0, len(entries))
-	aliases := make([]control.ListEntry, 0, len(entries))
-	ports := make([]control.ListEntry, 0, len(entries))
-	for _, entry := range entries {
-		switch entry.Kind {
-		case identity.KindRoute:
-			routes = append(routes, entry)
-		case control.KindAlias:
-			aliases = append(aliases, entry)
-		case identity.KindPort:
-			ports = append(ports, entry)
-		}
-	}
-	var host string
-	if len(routes) > 0 {
-		fmt.Fprintln(stdout, "ROUTE")
-		host = writeInfoRoutes(stdout, routes)
-	}
-	if len(routes) > 0 && len(aliases) > 0 {
-		fmt.Fprintln(stdout)
-	}
-	if len(aliases) > 0 {
-		fmt.Fprintln(stdout, "ALIASES")
-		host = writeInfoRoutes(stdout, aliases)
-	}
-	if (len(routes) > 0 || len(aliases) > 0) && len(ports) > 0 {
-		fmt.Fprintln(stdout)
-	}
-	if len(ports) > 0 {
-		fmt.Fprintln(stdout, "PORTS")
-		writeInfoPorts(stdout, ports)
-	}
-	writeLocalOnlyNote(stderr, host)
-}
-
-// writeInfoRoutes prints each route block and returns the last route host seen,
-// so the caller can attach a single local-only note.
-func writeInfoRoutes(w io.Writer, entries []control.ListEntry) string {
-	var host string
-	for i, entry := range entries {
-		if i > 0 {
-			fmt.Fprintln(w)
-		}
-		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
-		if entry.Host != "" {
-			host = entry.Host
-			fmt.Fprintf(w, "URL=http://%s\n", entry.Host)
-			fmt.Fprintf(w, "HTTPS_URL=https://%s\n", entry.Host)
-			fmt.Fprintf(w, "HOST=%s\n", entry.Host)
-		}
-		fmt.Fprintf(w, "STATE=%s\n", entry.State)
-		fmt.Fprintf(w, "DIR=%s\n", entry.Path)
-	}
-	return host
-}
-
-func writeInfoPorts(w io.Writer, entries []control.ListEntry) {
-	for i, entry := range entries {
-		if i > 0 {
-			fmt.Fprintln(w)
-		}
-		fmt.Fprintf(w, "NAME=%s\n", entry.Name)
-		fmt.Fprintf(w, "PORT=%d\n", entry.Port)
-		fmt.Fprintf(w, "STATE=%s\n", entry.State)
-		fmt.Fprintf(w, "DIR=%s\n", entry.Path)
+func writeInfoShell(w io.Writer, entry control.ListEntry) {
+	fmt.Fprintf(w, "export PORT=%d\n", entry.Port)
+	if entry.Host != "" {
+		fmt.Fprintf(w, "export URL=http://%s\n", entry.Host)
+		fmt.Fprintf(w, "export HTTPS_URL=https://%s\n", entry.Host)
+		fmt.Fprintf(w, "export HOST=%s\n", entry.Host)
 	}
 }

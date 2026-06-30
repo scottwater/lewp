@@ -115,7 +115,8 @@ Wildcards match one label only. `*.feature-1.atlas.lewp` matches
 Check or relocate a route later:
 
 ```sh
-lewp info                                  # show this directory's route and ports
+lewp info                                  # table of this directory's route and ports
+PORT="$(lewp info --host feature-1.atlas.lewp --port)"
 lewp move --from ~/projects/atlas/feature-1   # bring its route, aliases, and port here
 ```
 
