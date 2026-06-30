@@ -636,16 +636,19 @@ func (s *Store) TouchLastSeen(ctx context.Context, leaseID int64) error {
 }
 
 func (s *Store) List(ctx context.Context, all bool) ([]Record, error) {
-	query := `select r.id, rh.id, coalesce(l.id, 0), r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, 'route', r.path, coalesce(l.port, 0), coalesce(l.state, ''), coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+	query := `select route_id, host_id, lease_id, root, name, normalized_root, normalized_name, host, host_type, kind, path, port, state, last_seen_at, released_at
+from (
+select r.id route_id, rh.id host_id, coalesce(l.id, 0) lease_id, r.root root, r.name name, r.normalized_root normalized_root, r.normalized_name normalized_name, rh.host host, rh.host_type host_type, 'route' kind, r.path path, coalesce(l.port, 0) port, coalesce(l.state, '') state, coalesce(l.last_seen_at, '') last_seen_at, coalesce(l.released_at, '') released_at
 from routes r
 join route_hosts rh on rh.route_id = r.id
 left join leases l on l.route_id = r.id
 where (? or l.state = ?)
 union all
-select p.id, 0, p.id, '', p.name, '', p.normalized_name, '', '', 'port', p.path, p.port, p.state, '', coalesce(p.released_at, '')
+select p.id route_id, 0 host_id, p.id lease_id, '' root, p.name name, '' normalized_root, p.normalized_name normalized_name, '' host, '' host_type, 'port' kind, p.path path, p.port port, p.state state, '' last_seen_at, coalesce(p.released_at, '') released_at
 from ports p
 where (? or p.state = ?)
-order by 11, 5, 9, 8`
+)
+order by path, case when kind='route' and host_type='primary' then 0 when kind='route' and host_type='alias' then 1 when kind='route' and host_type='wildcard' then 2 when kind='route' then 3 when kind='port' then 4 else 5 end, name, host`
 	rows, err := s.db.QueryContext(ctx, query, all, StateActive, all, StateActive)
 	if err != nil {
 		return nil, err

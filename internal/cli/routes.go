@@ -436,7 +436,7 @@ func writeInfo(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut bo
 	}
 	var host string
 	if len(routes) > 0 {
-		fmt.Fprintln(stdout, "ROUTES")
+		fmt.Fprintln(stdout, "ROUTE")
 		host = writeInfoRoutes(stdout, routes)
 	}
 	if len(routes) > 0 && len(aliases) > 0 {

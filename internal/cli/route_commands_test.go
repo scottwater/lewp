@@ -294,7 +294,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("info code=%d stderr=%q", code, stderr.String())
 	}
 	infoOut := stdout.String()
-	if !strings.Contains(infoOut, "ROUTES\n") || !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "DIR="+srcDir) {
+	if !strings.Contains(infoOut, "ROUTE\n") || !strings.Contains(infoOut, "HOST=feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://feature-1.audit.lewp") || !strings.Contains(infoOut, "DIR="+srcDir) {
 		t.Fatalf("info output missing route fields: %q", infoOut)
 	}
 	// HTTPS_URL accompanies the HTTP URL for a routed host.
@@ -505,6 +505,11 @@ func TestRunListJSONEmitsEntries(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
+	if code := Run(Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("alias add code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
 	if code := Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
 	}
@@ -518,16 +523,24 @@ func TestRunListJSONEmitsEntries(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
 		t.Fatalf("list --json not valid JSON: %v\n%s", err, stdout.String())
 	}
-	if len(entries) != 2 {
-		t.Fatalf("list --json entries=%d want 2:\n%s", len(entries), stdout.String())
+	if len(entries) != 3 {
+		t.Fatalf("list --json entries=%d want 3:\n%s", len(entries), stdout.String())
 	}
-	var sawRoute, sawPort bool
+	if entries[0].Kind != "route" || entries[1].Kind != "alias" {
+		t.Fatalf("list --json should order primary route before aliases: %+v", entries)
+	}
+	var sawRoute, sawAlias, sawPort bool
 	for _, e := range entries {
 		switch e.Kind {
 		case "route":
 			sawRoute = true
 			if e.Host != "app.work.lewp" {
 				t.Fatalf("route entry host=%q", e.Host)
+			}
+		case "alias":
+			sawAlias = true
+			if e.Host != "tags.app.work.lewp" {
+				t.Fatalf("alias entry host=%q", e.Host)
 			}
 		case "port":
 			sawPort = true
@@ -539,7 +552,7 @@ func TestRunListJSONEmitsEntries(t *testing.T) {
 			t.Fatalf("entry missing state: %+v", e)
 		}
 	}
-	if !sawRoute || !sawPort {
-		t.Fatalf("list --json missing route or port kind: %s", stdout.String())
+	if !sawRoute || !sawAlias || !sawPort {
+		t.Fatalf("list --json missing route, alias, or port kind: %s", stdout.String())
 	}
 }
