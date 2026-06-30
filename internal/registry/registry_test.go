@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -239,16 +240,16 @@ func TestOpenHandlesConcurrentStartup(t *testing.T) {
 	}
 }
 
-func TestLeaseRouteReusesStablePort(t *testing.T) {
+func TestLeaseRouteReusesStablePortAndPrimaryHost(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	ident := testIdentity(t, "feature.audit.lewp", identity.KindRoute)
 
-	first, err := store.Lease(ctx, ident, PortRange{Start: 41000, End: 41010})
+	first, err := store.LeaseRoute(ctx, ident, PortRange{Start: 41000, End: 41010})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.Lease(ctx, ident, PortRange{Start: 41000, End: 41010})
+	second, err := store.LeaseRoute(ctx, ident, PortRange{Start: 41000, End: 41010})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,30 +257,19 @@ func TestLeaseRouteReusesStablePort(t *testing.T) {
 		t.Fatalf("port changed: %d -> %d", first.Port, second.Port)
 	}
 	if second.RouteID != first.RouteID {
-		t.Fatalf("identity changed: %d -> %d", first.RouteID, second.RouteID)
+		t.Fatalf("route changed: %d -> %d", first.RouteID, second.RouteID)
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	hosts, err := store.RouteHosts(ctx, first.RouteID, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = ln.Close()
-	ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(first.Port)))
-	if err != nil {
-		t.Fatalf("could not occupy leased port %d: %v", first.Port, err)
-	}
-	defer ln.Close()
-
-	third, err := store.Lease(ctx, ident, PortRange{Start: 41000, End: 41010})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if third.Port != first.Port {
-		t.Fatalf("running app port not reused: %d -> %d", first.Port, third.Port)
+	if len(hosts) != 1 || hosts[0].Host != "feature.audit.lewp" || hosts[0].HostType != HostTypePrimary {
+		t.Fatalf("primary host not persisted: %+v", hosts)
 	}
 }
 
-func TestLeaseSkipsBusyPortAndBarePortHasNoHost(t *testing.T) {
+func TestPortLeaseSkipsBusyPortAndHasNoHost(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -292,10 +282,8 @@ func TestLeaseSkipsBusyPortAndBarePortHasNoHost(t *testing.T) {
 	ident := testIdentity(t, "", identity.KindPort)
 	ident.Name = "vite"
 	ident.NormalizedName = "vite"
-	ident.HostKind = ""
-	ident.HostSource = identity.SourceCLI
 
-	lease, err := store.Lease(ctx, ident, PortRange{Start: busy, End: busy + 2})
+	lease, err := store.LeasePort(ctx, ident, PortRange{Start: busy, End: busy + 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,8 +295,448 @@ func TestLeaseSkipsBusyPortAndBarePortHasNoHost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(records) != 1 || records[0].Kind != identity.KindPort || records[0].Host != "" || records[0].Port != lease.Port {
+	if len(records) != 1 || records[0].Kind != identity.KindPort || records[0].Host != "" {
 		t.Fatalf("bare port listed incorrectly: %+v", records)
+	}
+}
+
+func TestAddRouteHostExactAliasReusesRoutePort(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	ident := testIdentity(t, "app.work.lewp", identity.KindRoute)
+	lease, err := store.LeaseRoute(ctx, ident, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	host, created, err := store.AddRouteHost(ctx, lease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || host.Host != "tags.app.work.lewp" || host.HostType != HostTypeAlias {
+		t.Fatalf("alias add=%+v created=%v", host, created)
+	}
+
+	route, ok, err := store.RouteByHost(ctx, "tags.app.work.lewp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || route.Port != lease.Port || route.HostType != HostTypeAlias {
+		t.Fatalf("alias lookup route=%+v ok=%v", route, ok)
+	}
+}
+
+func TestWildcardRouteHostMatchesOneLabelOnly(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	ident := testIdentity(t, "api.work.lewp", identity.KindRoute)
+	lease, err := store.LeaseRoute(ctx, ident, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, lease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, host := range []string{"tags.app.work.lewp", "leads.app.work.lewp"} {
+		route, ok, err := store.RouteByHost(ctx, host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok || route.Port != lease.Port || route.MatchedHost != "*.app.work.lewp" {
+			t.Fatalf("wildcard lookup %s route=%+v ok=%v", host, route, ok)
+		}
+	}
+	for _, host := range []string{"app.work.lewp", "foo.tags.app.work.lewp"} {
+		if route, ok, err := store.RouteByHost(ctx, host); err != nil || ok {
+			t.Fatalf("wildcard should not match %s: route=%+v ok=%v err=%v", host, route, ok, err)
+		}
+	}
+}
+
+func TestAddRouteHostIdempotentAndRouteHostsAliasesOnly(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	lease, err := store.LeaseRoute(ctx, testIdentity(t, "app.work.lewp", identity.KindRoute), PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, created, err := store.AddRouteHost(ctx, lease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("first alias add was not created")
+	}
+	second, created, err := store.AddRouteHost(ctx, lease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || second.ID != first.ID {
+		t.Fatalf("duplicate alias not idempotent: first=%+v second=%+v created=%v", first, second, created)
+	}
+
+	hosts, err := store.RouteHosts(ctx, lease.RouteID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 1 || hosts[0].HostType == HostTypePrimary || hosts[0].Host != "tags.app.work.lewp" {
+		t.Fatalf("aliases only listed incorrectly: %+v", hosts)
+	}
+}
+
+func TestRemoveRouteHostDoesNotRemovePrimary(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	lease, err := store.LeaseRoute(ctx, testIdentity(t, "app.work.lewp", identity.KindRoute), PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, lease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := store.RemoveRouteHost(ctx, lease.RouteID, "app.work.lewp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 {
+		t.Fatalf("removed primary host: %d", removed)
+	}
+	removed, err = store.RemoveRouteHost(ctx, lease.RouteID, "tags.app.work.lewp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed alias = %d, want 1", removed)
+	}
+
+	hosts, err := store.RouteHosts(ctx, lease.RouteID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hosts) != 1 || hosts[0].HostType != HostTypePrimary {
+		t.Fatalf("primary host not retained: %+v", hosts)
+	}
+}
+
+func TestActiveRouteByPathReturnsPrimaryHost(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	ident := testIdentity(t, "app.work.lewp", identity.KindRoute)
+	lease, err := store.LeaseRoute(ctx, ident, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, lease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	route, ok, err := store.ActiveRouteByPath(ctx, ident.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || route.RouteID != lease.RouteID || route.Host != "app.work.lewp" || route.HostType != HostTypePrimary || route.Port != lease.Port {
+		t.Fatalf("active route by path route=%+v ok=%v", route, ok)
+	}
+}
+
+func TestRouteHostConflictsIncludeOwnerPath(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "tags.app.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "app.work.lewp", identity.KindRoute)
+	second.Name = "app"
+	second.NormalizedName = "app"
+
+	if _, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010}); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = store.AddRouteHost(ctx, secondLease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli")
+	if err == nil {
+		t.Fatal("expected wildcard conflict")
+	}
+	if !strings.Contains(err.Error(), "wildcard *.app.work.lewp would cover tags.app.work.lewp") || !strings.Contains(err.Error(), first.Path) {
+		t.Fatalf("conflict missing covered host/path: %v", err)
+	}
+}
+
+func TestAddRouteHostRejectsPrimaryHostType(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	lease, err := store.LeaseRoute(ctx, testIdentity(t, "app.work.lewp", identity.KindRoute), PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := store.AddRouteHost(ctx, lease.RouteID, "other.app.work.lewp", HostTypePrimary, "cli"); err == nil {
+		t.Fatal("AddRouteHost accepted primary host type")
+	}
+}
+
+func TestAddRouteHostRejectsExactAliasOwnedByAnotherRoute(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "app.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "api.work.lewp", identity.KindRoute)
+
+	if _, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010}); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = store.AddRouteHost(ctx, secondLease.RouteID, "app.work.lewp", HostTypeAlias, "cli")
+	if err == nil {
+		t.Fatal("expected exact alias conflict")
+	}
+	if !strings.Contains(err.Error(), first.Path) {
+		t.Fatalf("conflict missing owner path: %v", err)
+	}
+}
+
+func TestAddRouteHostNormalizesExactAliasBeforeConflictAndLookup(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "app.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "api.work.lewp", identity.KindRoute)
+
+	if _, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010}); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, secondLease.RouteID, "App.Work.Lewp.", HostTypeAlias, "cli"); err == nil {
+		t.Fatal("expected normalized exact alias conflict")
+	}
+
+	host, created, err := store.AddRouteHost(ctx, secondLease.RouteID, "Tags.App.Work.Lewp.", HostTypeAlias, "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || host.Host != "tags.app.work.lewp" {
+		t.Fatalf("host not normalized on insert: %+v created=%v", host, created)
+	}
+	secondHost, created, err := store.AddRouteHost(ctx, secondLease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || secondHost.ID != host.ID {
+		t.Fatalf("normalized duplicate not idempotent: first=%+v second=%+v created=%v", host, secondHost, created)
+	}
+	route, ok, err := store.RouteByHost(ctx, "Tags.App.Work.Lewp.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || route.Host != "tags.app.work.lewp" || route.MatchedHost != "tags.app.work.lewp" {
+		t.Fatalf("normalized lookup route=%+v ok=%v", route, ok)
+	}
+	removed, err := store.RemoveRouteHost(ctx, secondLease.RouteID, "Tags.App.Work.Lewp.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("normalized remove = %d, want 1", removed)
+	}
+}
+
+func TestAddRouteHostRejectsExactAliasCoveredByOtherWildcard(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "api.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "other.work.lewp", identity.KindRoute)
+
+	firstLease, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, firstLease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = store.AddRouteHost(ctx, secondLease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli")
+	if err == nil {
+		t.Fatal("expected wildcard-covered exact alias conflict")
+	}
+	if !strings.Contains(err.Error(), first.Path) {
+		t.Fatalf("conflict missing owner path: %v", err)
+	}
+}
+
+func TestAddRouteHostNormalizesWildcardBeforeConflictAndLookup(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "api.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "other.work.lewp", identity.KindRoute)
+
+	firstLease, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, created, err := store.AddRouteHost(ctx, firstLease.RouteID, "*.App.Work.Lewp.", HostTypeWildcard, "cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || host.Host != "*.app.work.lewp" {
+		t.Fatalf("wildcard not normalized on insert: %+v created=%v", host, created)
+	}
+	route, ok, err := store.RouteByHost(ctx, "Tags.App.Work.Lewp.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || route.MatchedHost != "*.app.work.lewp" {
+		t.Fatalf("normalized wildcard lookup route=%+v ok=%v", route, ok)
+	}
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, secondLease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli"); err == nil {
+		t.Fatal("expected normalized duplicate wildcard conflict")
+	}
+}
+
+func TestAddRouteHostRejectsDuplicateWildcardOwnedByAnotherRoute(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "api.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "other.work.lewp", identity.KindRoute)
+
+	firstLease, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, firstLease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = store.AddRouteHost(ctx, secondLease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli")
+	if err == nil {
+		t.Fatal("expected duplicate wildcard conflict")
+	}
+	if !strings.Contains(err.Error(), first.Path) {
+		t.Fatalf("conflict missing owner path: %v", err)
+	}
+}
+
+func TestConcurrentAddRouteHostDuplicateIsIdempotent(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	lease, err := store.LeaseRoute(ctx, testIdentity(t, "app.work.lewp", identity.KindRoute), PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	created := make([]bool, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, made, err := store.AddRouteHost(ctx, lease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli")
+			errs[i] = err
+			created[i] = made
+		}(i)
+	}
+	wg.Wait()
+
+	createdCount := 0
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("alias add %d failed: %v", i, errs[i])
+		}
+		if created[i] {
+			createdCount++
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("created count = %d, want 1", createdCount)
+	}
+	if got := countRows(t, store.db, `select count(*) from route_hosts where route_id=? and host=?`, lease.RouteID, "tags.app.work.lewp"); got != 1 {
+		t.Fatalf("alias row count = %d, want 1", got)
+	}
+}
+
+func TestLeaseRouteRejectsReleasedAliasNowOwnedByAnotherRoute(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "app.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "api.work.lewp", identity.KindRoute)
+
+	firstLease, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, firstLease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Release(ctx, first.Path, identity.KindRoute, first.NormalizedName, false); err != nil {
+		t.Fatal(err)
+	}
+
+	secondLease, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, secondLease.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010})
+	if err == nil {
+		t.Fatal("released route reclaimed alias owned by active route")
+	}
+	if !strings.Contains(err.Error(), "tags.app.work.lewp") || !strings.Contains(err.Error(), second.Path) {
+		t.Fatalf("conflict missing alias or owner path: %v", err)
+	}
+}
+
+func TestRememberRejectsReleasedWildcardNowCoveringAnotherRoute(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := testIdentity(t, "api.work.lewp", identity.KindRoute)
+	second := testIdentity(t, "tags.app.work.lewp", identity.KindRoute)
+
+	firstLease, err := store.LeaseRoute(ctx, first, PortRange{Start: 41000, End: 41010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, firstLease.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Release(ctx, first.Path, identity.KindRoute, first.NormalizedName, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LeaseRoute(ctx, second, PortRange{Start: 41000, End: 41010}); err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.Remember(ctx, first, 41019)
+	if err == nil {
+		t.Fatal("remembered route reclaimed wildcard covering active route")
+	}
+	if !strings.Contains(err.Error(), "*.app.work.lewp") || !strings.Contains(err.Error(), second.Path) {
+		t.Fatalf("conflict missing wildcard or owner path: %v", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,10 @@ type Store struct {
 	// leases_port_active_uq unique index (busy_timeout does not retry
 	// constraint violations).
 	allocMu sync.Mutex
+	// hostMu serializes route host conflict checks with host inserts/updates.
+	// Exact/wildcard overlap is enforced in application logic, not by a single
+	// SQLite constraint, so the check and write must happen under one lock.
+	hostMu sync.Mutex
 }
 
 var migrateMu sync.Mutex
@@ -230,10 +235,26 @@ func (s *Store) Lease(ctx context.Context, ident identity.Result, portRange Port
 		return Lease{}, errors.New("invalid port range")
 	}
 	if ident.Kind == identity.KindPort {
-		return s.leasePort(ctx, ident, portRange)
+		lease, err := s.LeasePort(ctx, ident, portRange)
+		if err != nil {
+			return Lease{}, err
+		}
+		return Lease{ID: lease.ID, Port: lease.Port, State: lease.State, Created: lease.Created}, nil
+	}
+	return s.LeaseRoute(ctx, ident, portRange)
+}
+
+func (s *Store) LeaseRoute(ctx context.Context, ident identity.Result, portRange PortRange) (Lease, error) {
+	if portRange.Start <= 0 || portRange.End < portRange.Start {
+		return Lease{}, errors.New("invalid port range")
+	}
+	if ident.Kind != identity.KindRoute {
+		return Lease{}, fmt.Errorf("lease route requires %s identity", identity.KindRoute)
 	}
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -245,10 +266,13 @@ func (s *Store) Lease(ctx context.Context, ident identity.Result, portRange Port
 	if err != nil {
 		return Lease{}, err
 	}
-	if err := ensureHostAvailable(ctx, tx, ident.Host, routeID); err != nil {
+	if err := s.ensureRouteHostAvailable(ctx, tx, routeID, ident.Host, HostTypePrimary); err != nil {
 		return Lease{}, err
 	}
 	if err := upsertPrimaryHost(ctx, tx, routeID, ident, now); err != nil {
+		return Lease{}, err
+	}
+	if err := s.ensureExistingRouteHostsAvailable(ctx, tx, routeID); err != nil {
 		return Lease{}, err
 	}
 	if lease, ok, err := activeRouteLease(ctx, tx, routeID); err != nil {
@@ -289,6 +313,16 @@ func (s *Store) Lease(ctx context.Context, ident identity.Result, portRange Port
 	return Lease{ID: leaseID, RouteID: routeID, Port: port, State: StateActive, Created: true}, nil
 }
 
+func (s *Store) LeasePort(ctx context.Context, ident identity.Result, portRange PortRange) (PortLease, error) {
+	if portRange.Start <= 0 || portRange.End < portRange.Start {
+		return PortLease{}, errors.New("invalid port range")
+	}
+	if ident.Kind != identity.KindPort {
+		return PortLease{}, fmt.Errorf("lease port requires %s identity", identity.KindPort)
+	}
+	return s.leasePort(ctx, ident, portRange)
+}
+
 func (s *Store) Identity(ctx context.Context, id int64) (identity.Result, error) {
 	var got identity.Result
 	var source string
@@ -310,6 +344,8 @@ func (s *Store) Remember(ctx context.Context, ident identity.Result, port int) e
 	if ident.Kind == identity.KindPort {
 		return s.rememberPort(ctx, ident, port)
 	}
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -320,10 +356,13 @@ func (s *Store) Remember(ctx context.Context, ident identity.Result, port int) e
 	if err != nil {
 		return err
 	}
-	if err := ensureHostAvailable(ctx, tx, ident.Host, routeID); err != nil {
+	if err := s.ensureRouteHostAvailable(ctx, tx, routeID, ident.Host, HostTypePrimary); err != nil {
 		return err
 	}
 	if err := upsertPrimaryHost(ctx, tx, routeID, ident, now); err != nil {
+		return err
+	}
+	if err := s.ensureExistingRouteHostsAvailable(ctx, tx, routeID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `update leases set state=?, released_at=?, updated_at=? where route_id=? and state=?`, StateReleased, now, now, routeID, StateActive); err != nil {
@@ -339,6 +378,7 @@ func (s *Store) Remember(ctx context.Context, ident identity.Result, port int) e
 }
 
 func (s *Store) FindByHost(ctx context.Context, host string) (identity.Result, bool, error) {
+	host = normalizeRouteHost(host)
 	var got identity.Result
 	var source string
 	err := s.db.QueryRowContext(ctx, `select r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.source, r.path
@@ -433,6 +473,7 @@ limit 1`, HostTypePrimary, path).
 }
 
 func (s *Store) RouteByHost(ctx context.Context, host string) (Record, bool, error) {
+	host = normalizeRouteHost(host)
 	var r Record
 	err := s.db.QueryRowContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
 from route_hosts rh
@@ -443,11 +484,149 @@ order by case rh.host_type when 'primary' then 0 else 1 end, rh.id
 limit 1`, host, StateActive).
 		Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Record{}, false, nil
+		return s.wildcardRouteByHost(ctx, host)
 	}
 	r.MatchedHost = r.Host
 	r.Kind = identity.KindRoute
 	return r, err == nil, err
+}
+
+func (s *Store) wildcardRouteByHost(ctx context.Context, host string) (Record, bool, error) {
+	host = normalizeRouteHost(host)
+	rows, err := s.db.QueryContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+from route_hosts rh
+join routes r on r.id = rh.route_id
+join leases l on l.route_id = r.id
+where rh.host_type=? and l.state=?
+order by rh.id`, HostTypeWildcard, StateActive)
+	if err != nil {
+		return Record{}, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r Record
+		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt); err != nil {
+			return Record{}, false, err
+		}
+		if !wildcardMatches(r.Host, host) {
+			continue
+		}
+		r.MatchedHost = r.Host
+		r.Host = host
+		r.Kind = identity.KindRoute
+		return r, true, nil
+	}
+	if err := rows.Err(); err != nil {
+		return Record{}, false, err
+	}
+	return Record{}, false, nil
+}
+
+func (s *Store) ActiveRouteByPath(ctx context.Context, path string) (Record, bool, error) {
+	var r Record
+	err := s.db.QueryRowContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+from routes r
+join leases l on l.route_id = r.id
+join route_hosts rh on rh.route_id = r.id and rh.host_type=?
+where r.path=? and l.state=?
+order by l.id desc
+limit 1`, HostTypePrimary, path, StateActive).
+		Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, false, nil
+	}
+	if err != nil {
+		return Record{}, false, err
+	}
+	r.MatchedHost = r.Host
+	r.Kind = identity.KindRoute
+	return r, true, nil
+}
+
+func (s *Store) AddRouteHost(ctx context.Context, routeID int64, host, hostType, source string) (RouteHost, bool, error) {
+	host = normalizeRouteHost(host)
+	if source == "" {
+		source = string(identity.SourceCLI)
+	}
+	switch hostType {
+	case HostTypeAlias:
+		if isWildcardHost(host) {
+			return RouteHost{}, false, fmt.Errorf("alias host %q cannot be a wildcard", host)
+		}
+	case HostTypeWildcard:
+		if !isWildcardHost(host) {
+			return RouteHost{}, false, fmt.Errorf("wildcard host %q must start with *.", host)
+		}
+	default:
+		return RouteHost{}, false, fmt.Errorf("invalid host type %q", hostType)
+	}
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return RouteHost{}, false, err
+	}
+	defer tx.Rollback()
+
+	if existing, ok, err := routeHost(ctx, tx, routeID, host); err != nil {
+		return RouteHost{}, false, err
+	} else if ok {
+		return existing, false, tx.Commit()
+	}
+	if err := s.ensureRouteHostAvailable(ctx, tx, routeID, host, hostType); err != nil {
+		return RouteHost{}, false, err
+	}
+	res, err := tx.ExecContext(ctx, `insert into route_hosts(route_id, host, host_type, source, created_at, updated_at) values(?, ?, ?, ?, ?, ?)`,
+		routeID, host, hostType, source, now, now)
+	if err != nil {
+		return RouteHost{}, false, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return RouteHost{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RouteHost{}, false, err
+	}
+	return RouteHost{ID: id, RouteID: routeID, Host: host, HostType: hostType, Source: source}, true, nil
+}
+
+func (s *Store) RemoveRouteHost(ctx context.Context, routeID int64, host string) (int, error) {
+	host = normalizeRouteHost(host)
+	res, err := s.db.ExecContext(ctx, `delete from route_hosts where route_id=? and host=? and host_type<>?`, routeID, host, HostTypePrimary)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(affected), nil
+}
+
+func (s *Store) RouteHosts(ctx context.Context, routeID int64, aliasesOnly bool) ([]RouteHost, error) {
+	query := `select id, route_id, host, host_type, source from route_hosts where route_id=?`
+	args := []any{routeID}
+	if aliasesOnly {
+		query += ` and host_type<>?`
+		args = append(args, HostTypePrimary)
+	}
+	query += ` order by case host_type when 'primary' then 0 when 'alias' then 1 else 2 end, host`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var hosts []RouteHost
+	for rows.Next() {
+		var host RouteHost
+		if err := rows.Scan(&host.ID, &host.RouteID, &host.Host, &host.HostType, &host.Source); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, host)
+	}
+	return hosts, rows.Err()
 }
 
 func (s *Store) TouchLastSeen(ctx context.Context, leaseID int64) error {
@@ -589,46 +768,46 @@ func (s *Store) ReleasePath(ctx context.Context, path string, kind identity.Kind
 	return released, nil
 }
 
-func (s *Store) leasePort(ctx context.Context, ident identity.Result, portRange PortRange) (Lease, error) {
+func (s *Store) leasePort(ctx context.Context, ident identity.Result, portRange PortRange) (PortLease, error) {
 	s.allocMu.Lock()
 	defer s.allocMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
 	defer tx.Rollback()
 	if lease, ok, err := activePortLease(ctx, tx, ident.Path, ident.NormalizedName); err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	} else if ok {
 		return lease, tx.Commit()
 	}
 	port, err := preferredReleasedBarePort(ctx, tx, ident.Path, ident.NormalizedName, portRange)
 	if err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
 	if port == 0 {
 		port, err = s.nextPort(ctx, tx, portRange)
 	}
 	if err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
 	if err := ensurePortAvailable(ctx, tx, port); err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
 	res, err := tx.ExecContext(ctx, `insert into ports(path, name, normalized_name, port, state, created_at, updated_at) values(?, ?, ?, ?, ?, ?, ?)`,
 		ident.Path, ident.Name, ident.NormalizedName, port, StateActive, now, now)
 	if err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
 	id, err := res.LastInsertId()
 	if err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return Lease{}, err
+		return PortLease{}, err
 	}
-	return Lease{ID: id, Port: port, State: StateActive, Created: true}, nil
+	return PortLease{ID: id, Path: ident.Path, Name: ident.Name, NormalizedName: ident.NormalizedName, Port: port, State: StateActive, Created: true}, nil
 }
 
 func (s *Store) rememberPort(ctx context.Context, ident identity.Result, port int) error {
@@ -726,7 +905,8 @@ func upsertRoute(ctx context.Context, tx *sql.Tx, ident identity.Result, now str
 }
 
 func upsertPrimaryHost(ctx context.Context, tx *sql.Tx, routeID int64, ident identity.Result, now string) error {
-	if ident.Host == "" {
+	host := normalizeRouteHost(ident.Host)
+	if host == "" {
 		return nil
 	}
 	source := string(ident.HostSource)
@@ -736,14 +916,14 @@ func upsertPrimaryHost(ctx context.Context, tx *sql.Tx, routeID int64, ident ide
 	var id int64
 	err := tx.QueryRowContext(ctx, `select id from route_hosts where route_id=? and host_type=?`, routeID, HostTypePrimary).Scan(&id)
 	if err == nil {
-		_, err = tx.ExecContext(ctx, `update route_hosts set host=?, source=?, updated_at=? where id=?`, ident.Host, source, now, id)
+		_, err = tx.ExecContext(ctx, `update route_hosts set host=?, source=?, updated_at=? where id=?`, host, source, now, id)
 		return err
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `insert into route_hosts(route_id, host, host_type, source, created_at, updated_at) values(?, ?, ?, ?, ?, ?)`,
-		routeID, ident.Host, HostTypePrimary, source, now, now)
+		routeID, host, HostTypePrimary, source, now, now)
 	return err
 }
 
@@ -757,34 +937,95 @@ func activeRouteLease(ctx context.Context, tx *sql.Tx, routeID int64) (Lease, bo
 	return lease, err == nil, err
 }
 
-func activePortLease(ctx context.Context, tx *sql.Tx, path, normalizedName string) (Lease, bool, error) {
-	var lease Lease
-	err := tx.QueryRowContext(ctx, `select id, port, state from ports where path=? and normalized_name=? and state=?`, path, normalizedName, StateActive).
-		Scan(&lease.ID, &lease.Port, &lease.State)
+func activePortLease(ctx context.Context, tx *sql.Tx, path, normalizedName string) (PortLease, bool, error) {
+	var lease PortLease
+	err := tx.QueryRowContext(ctx, `select id, path, name, normalized_name, port, state from ports where path=? and normalized_name=? and state=?`, path, normalizedName, StateActive).
+		Scan(&lease.ID, &lease.Path, &lease.Name, &lease.NormalizedName, &lease.Port, &lease.State)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Lease{}, false, nil
+		return PortLease{}, false, nil
 	}
 	return lease, err == nil, err
 }
 
-func ensureHostAvailable(ctx context.Context, tx *sql.Tx, host string, routeID int64) error {
+func routeHost(ctx context.Context, tx *sql.Tx, routeID int64, host string) (RouteHost, bool, error) {
+	host = normalizeRouteHost(host)
+	var got RouteHost
+	err := tx.QueryRowContext(ctx, `select id, route_id, host, host_type, source from route_hosts where route_id=? and host=?`, routeID, host).
+		Scan(&got.ID, &got.RouteID, &got.Host, &got.HostType, &got.Source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RouteHost{}, false, nil
+	}
+	return got, err == nil, err
+}
+
+func (s *Store) ensureRouteHostAvailable(ctx context.Context, tx *sql.Tx, routeID int64, host, hostType string) error {
+	host = normalizeRouteHost(host)
 	if host == "" {
 		return nil
 	}
-	var ownerPath string
-	err := tx.QueryRowContext(ctx, `select r.path
+	wildcard := hostType == HostTypeWildcard || isWildcardHost(host)
+	rows, err := tx.QueryContext(ctx, `select r.path, rh.host, rh.host_type
 from route_hosts rh
 join routes r on r.id = rh.route_id
 join leases l on l.route_id = r.id
-where rh.host=? and l.state=? and r.id<>?
-limit 1`, host, StateActive, routeID).Scan(&ownerPath)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
+where l.state=? and r.id<>?`, StateActive, routeID)
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("host %s is already active: %s", host, ownerPath)
+	defer rows.Close()
+	for rows.Next() {
+		var ownerPath, otherHost, otherType string
+		if err := rows.Scan(&ownerPath, &otherHost, &otherType); err != nil {
+			return err
+		}
+		otherHost = normalizeRouteHost(otherHost)
+		otherWildcard := otherType == HostTypeWildcard || isWildcardHost(otherHost)
+		if !wildcard {
+			if otherHost == host || (otherWildcard && wildcardMatches(otherHost, host)) {
+				return fmt.Errorf("host %s conflicts with route owned by %s", host, ownerPath)
+			}
+			continue
+		}
+		if otherWildcard {
+			if otherHost == host {
+				return fmt.Errorf("host %s conflicts with route owned by %s", host, ownerPath)
+			}
+			continue
+		}
+		if wildcardMatches(host, otherHost) {
+			return fmt.Errorf("wildcard %s would cover %s owned by %s", host, otherHost, ownerPath)
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) ensureExistingRouteHostsAvailable(ctx context.Context, tx *sql.Tx, routeID int64) error {
+	rows, err := tx.QueryContext(ctx, `select host, host_type from route_hosts where route_id=?`, routeID)
+	if err != nil {
+		return err
+	}
+	var hosts []RouteHost
+	for rows.Next() {
+		var host RouteHost
+		if err := rows.Scan(&host.Host, &host.HostType); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		hosts = append(hosts, host)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, host := range hosts {
+		if err := s.ensureRouteHostAvailable(ctx, tx, routeID, host.Host, host.HostType); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func preferredReleasedRoutePort(ctx context.Context, tx *sql.Tx, routeID int64, portRange PortRange) (int, error) {
@@ -880,6 +1121,30 @@ func hostKind(host, normalizedRoot, normalizedName string) identity.HostKind {
 	default:
 		return identity.HostKindCustom
 	}
+}
+
+func wildcardMatches(pattern, host string) bool {
+	pattern = normalizeRouteHost(pattern)
+	host = normalizeRouteHost(host)
+	if !isWildcardHost(pattern) {
+		return false
+	}
+	suffix := strings.TrimPrefix(pattern, "*.")
+	needle := "." + suffix
+	if !strings.HasSuffix(host, needle) {
+		return false
+	}
+	label := strings.TrimSuffix(host, needle)
+	return label != "" && !strings.Contains(label, ".")
+}
+
+func isWildcardHost(host string) bool {
+	host = normalizeRouteHost(host)
+	return strings.HasPrefix(host, "*.") && len(host) > 2
+}
+
+func normalizeRouteHost(host string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
 
 func isPortFree(port int) bool {
