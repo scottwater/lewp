@@ -18,6 +18,7 @@ type AliasRemoveResponse struct {
 }
 
 const (
+	KindAlias        identity.Kind     = "alias"
 	HostKindAlias    identity.HostKind = "alias"
 	HostKindWildcard identity.HostKind = "wildcard"
 )
@@ -111,7 +112,7 @@ func (s *Service) AliasList(ctx context.Context, req AliasRequest) ([]ListEntry,
 	for _, host := range hosts {
 		entry := routeRecordEntry(route)
 		entry.Host = host.Host
-		entry.Kind = identity.Kind("alias")
+		entry.Kind = KindAlias
 		entries = append(entries, entry)
 	}
 	return entries, nil
@@ -156,12 +157,16 @@ func listEntryResponse(record registry.Record) LeaseResponse {
 }
 
 func routeRecordEntry(record registry.Record) ListEntry {
+	kind := record.Kind
+	if record.HostType != "" && record.HostType != registry.HostTypePrimary {
+		kind = KindAlias
+	}
 	return ListEntry{
 		Host:  record.Host,
 		Port:  record.Port,
 		State: recordState(record),
 		Path:  record.Path,
-		Kind:  record.Kind,
+		Kind:  kind,
 		Root:  record.Root,
 		Name:  record.Name,
 	}

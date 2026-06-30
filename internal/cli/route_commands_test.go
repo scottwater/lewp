@@ -265,6 +265,16 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 		t.Fatalf("add output missing host: %q", addOut)
 	}
 
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(Config{Args: []string{"alias", "add", "tags.feature-1.audit.lewp"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("alias add code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "HOST=tags.feature-1.audit.lewp") {
+		t.Fatalf("alias add output missing host: %q", stdout.String())
+	}
+
 	// port registers a bare port for the same directory.
 	stdout.Reset()
 	stderr.Reset()
@@ -291,6 +301,9 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if !strings.Contains(infoOut, "HTTPS_URL=https://feature-1.audit.lewp") {
 		t.Fatalf("info output missing HTTPS_URL: %q", infoOut)
 	}
+	if !strings.Contains(infoOut, "ALIASES\n") || !strings.Contains(infoOut, "HOST=tags.feature-1.audit.lewp") || !strings.Contains(infoOut, "URL=http://tags.feature-1.audit.lewp") {
+		t.Fatalf("info output missing alias fields: %q", infoOut)
+	}
 	// The misleading PATH= key (which shadows $PATH) must be gone.
 	if strings.Contains(infoOut, "PATH=") {
 		t.Fatalf("info output should not emit PATH= (use DIR=): %q", infoOut)
@@ -306,7 +319,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("move code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") || !strings.Contains(stdout.String(), "DIR="+destDir) {
+	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") || !strings.Contains(stdout.String(), "HOST=tags.feature-1.audit.lewp") || !strings.Contains(stdout.String(), "DIR="+destDir) {
 		t.Fatalf("move output missing moved route: %q", stdout.String())
 	}
 	if strings.Contains(stdout.String(), "PATH=") {
@@ -327,7 +340,7 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code = Run(Config{Args: []string{"info"}, WorkDir: destDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("dest info after move code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") {
+	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") || !strings.Contains(stdout.String(), "HOST=tags.feature-1.audit.lewp") {
 		t.Fatalf("dest info after move missing route: %q", stdout.String())
 	}
 }

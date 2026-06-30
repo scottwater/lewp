@@ -311,19 +311,10 @@ func (s *Service) List(ctx context.Context, all bool) ([]ListEntry, error) {
 	}
 	entries := make([]ListEntry, 0, len(records))
 	for _, record := range records {
-		state := recordState(record)
 		if !all && record.State != registry.StateActive {
 			continue
 		}
-		entries = append(entries, ListEntry{
-			Host:  record.Host,
-			Port:  record.Port,
-			State: state,
-			Path:  record.Path,
-			Kind:  record.Kind,
-			Root:  record.Root,
-			Name:  record.Name,
-		})
+		entries = append(entries, routeRecordEntry(record))
 	}
 	return entries, nil
 }
@@ -342,15 +333,7 @@ func (s *Service) Info(ctx context.Context, req InfoRequest) ([]ListEntry, error
 		if record.State != registry.StateActive || record.Path != abs {
 			continue
 		}
-		entries = append(entries, ListEntry{
-			Host:  record.Host,
-			Port:  record.Port,
-			State: recordState(record),
-			Path:  record.Path,
-			Kind:  record.Kind,
-			Root:  record.Root,
-			Name:  record.Name,
-		})
+		entries = append(entries, routeRecordEntry(record))
 	}
 	return entries, nil
 }
@@ -376,15 +359,7 @@ func (s *Service) Move(ctx context.Context, req MoveRequest) ([]ListEntry, error
 	}
 	entries := make([]ListEntry, 0, len(records))
 	for _, record := range records {
-		entries = append(entries, ListEntry{
-			Host:  record.Host,
-			Port:  record.Port,
-			State: registry.StateActive,
-			Path:  record.Path,
-			Kind:  record.Kind,
-			Root:  record.Root,
-			Name:  record.Name,
-		})
+		entries = append(entries, routeRecordEntry(record))
 	}
 	return entries, nil
 }

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -13,9 +14,10 @@ import (
 var ErrNoRouteForPath = errors.New("no active route registered for path")
 
 // MovePath reassigns every active route at fromPath to toPath, preserving each
-// route's host and port. Leases stay attached to their routes, so the move never
-// reallocates a port. It fails if source and destination are the same, if
-// fromPath has no active route, or if the destination already owns a route.
+// route host and port. Leases and route_hosts stay attached to their routes, so
+// the move never reallocates a port. It fails if source and destination are the
+// same, if fromPath has no active route, or if the destination already owns a
+// route.
 func (s *Store) MovePath(ctx context.Context, fromPath, toPath string, kind identity.Kind) ([]Record, error) {
 	if fromPath == toPath {
 		return nil, fmt.Errorf("source and destination are the same directory")
@@ -85,8 +87,40 @@ where r.path=? and l.state=?`, toPath, StateActive).Scan(&activeDestination)
 			return nil, err
 		}
 	}
+	var result []Record
+	for _, r := range moved {
+		hosts, err := movedRouteHosts(ctx, tx, r.RouteID, kind)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, hosts...)
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return moved, nil
+	return result, nil
+}
+
+func movedRouteHosts(ctx context.Context, tx *sql.Tx, routeID int64, kind identity.Kind) ([]Record, error) {
+	rows, err := tx.QueryContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+from routes r
+join route_hosts rh on rh.route_id = r.id
+join leases l on l.route_id = r.id
+where r.id=? and l.state=?
+order by case rh.host_type when 'primary' then 0 when 'alias' then 1 when 'wildcard' then 2 else 3 end, rh.host`, routeID, StateActive)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []Record
+	for rows.Next() {
+		var r Record
+		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt); err != nil {
+			return nil, err
+		}
+		r.Kind = kind
+		r.MatchedHost = r.Host
+		records = append(records, r)
+	}
+	return records, rows.Err()
 }

@@ -638,15 +638,15 @@ func (s *Store) TouchLastSeen(ctx context.Context, leaseID int64) error {
 func (s *Store) List(ctx context.Context, all bool) ([]Record, error) {
 	query := `select r.id, rh.id, coalesce(l.id, 0), r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, 'route', r.path, coalesce(l.port, 0), coalesce(l.state, ''), coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
 from routes r
-join route_hosts rh on rh.route_id = r.id and rh.host_type=?
+join route_hosts rh on rh.route_id = r.id
 left join leases l on l.route_id = r.id
 where (? or l.state = ?)
 union all
 select p.id, 0, p.id, '', p.name, '', p.normalized_name, '', '', 'port', p.path, p.port, p.state, '', coalesce(p.released_at, '')
 from ports p
 where (? or p.state = ?)
-order by 8, 11, 5`
-	rows, err := s.db.QueryContext(ctx, query, HostTypePrimary, all, StateActive, all, StateActive)
+order by 11, 5, 9, 8`
+	rows, err := s.db.QueryContext(ctx, query, all, StateActive, all, StateActive)
 	if err != nil {
 		return nil, err
 	}

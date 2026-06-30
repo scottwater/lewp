@@ -89,6 +89,32 @@ func TestServiceInfoEmptyForUnknownDir(t *testing.T) {
 	}
 }
 
+func TestServiceReleaseHidesAliases(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AliasAdd(ctx, AliasRequest{WorkDir: dir, Host: "tags.app.work.lewp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Release(ctx, ReleaseRequest{WorkDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := svc.List(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Host == "tags.app.work.lewp" {
+			t.Fatalf("released alias still listed: %+v", entries)
+		}
+	}
+}
+
 func TestServiceMovePreservesPortAndHost(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
@@ -122,6 +148,36 @@ func TestServiceMovePreservesPortAndHost(t *testing.T) {
 	}
 	if len(destInfo) != 1 || destInfo[0].Port != lease.Port || destInfo[0].Host != lease.Host {
 		t.Fatalf("destination missing moved route: %+v", destInfo)
+	}
+}
+
+func TestServiceMovePreservesAliases(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: srcDir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AliasAdd(ctx, AliasRequest{WorkDir: srcDir, Host: "tags.app.work.lewp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Move(ctx, MoveRequest{WorkDir: destDir, From: srcDir}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := svc.Info(ctx, InfoRequest{WorkDir: destDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawPrimary, sawAlias bool
+	for _, entry := range entries {
+		sawPrimary = sawPrimary || entry.Host == "app.work.lewp"
+		sawAlias = sawAlias || entry.Host == "tags.app.work.lewp"
+	}
+	if !sawPrimary || !sawAlias {
+		t.Fatalf("moved route missing primary or alias: %+v", entries)
 	}
 }
 

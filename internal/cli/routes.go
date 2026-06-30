@@ -422,11 +422,14 @@ func writeInfo(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut bo
 		return
 	}
 	routes := make([]control.ListEntry, 0, len(entries))
+	aliases := make([]control.ListEntry, 0, len(entries))
 	ports := make([]control.ListEntry, 0, len(entries))
 	for _, entry := range entries {
 		switch entry.Kind {
 		case identity.KindRoute:
 			routes = append(routes, entry)
+		case control.KindAlias:
+			aliases = append(aliases, entry)
 		case identity.KindPort:
 			ports = append(ports, entry)
 		}
@@ -436,7 +439,14 @@ func writeInfo(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut bo
 		fmt.Fprintln(stdout, "ROUTES")
 		host = writeInfoRoutes(stdout, routes)
 	}
-	if len(routes) > 0 && len(ports) > 0 {
+	if len(routes) > 0 && len(aliases) > 0 {
+		fmt.Fprintln(stdout)
+	}
+	if len(aliases) > 0 {
+		fmt.Fprintln(stdout, "ALIASES")
+		host = writeInfoRoutes(stdout, aliases)
+	}
+	if (len(routes) > 0 || len(aliases) > 0) && len(ports) > 0 {
 		fmt.Fprintln(stdout)
 	}
 	if len(ports) > 0 {
