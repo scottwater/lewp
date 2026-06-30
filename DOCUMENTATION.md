@@ -28,6 +28,9 @@ install.
 lewp setup [--suffix S] [--allow-domain-mirror]
 lewp system start|stop|status|restart|uninstall
 lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--json|--shell]
+lewp alias add <host> [--json]
+lewp alias remove <host>
+lewp alias list [--json]
 lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--json]
 lewp move --from <path> [--json]
@@ -83,8 +86,9 @@ lewp setup --suffix localkickofflabs.com --allow-domain-mirror
 
 It allows an owned registrable domain as the suffix and shadows public DNS for
 that suffix locally until you run `lewp suffix remove localkickofflabs.com` or
-`lewp system uninstall`. Proxy routing remains exact-host routing: add each
-hostname you want Lewp to serve with `lewp add --host ...`.
+`lewp system uninstall`. Proxy routing remains host-based: register a primary
+route with `lewp add --host ...`, then attach same-app hostnames with
+`lewp alias add ...`.
 
 Safe-subtree suffixes must be below a registrable domain. `local.todoordie.com`
 and `local.todoordie.co.uk` are accepted; apex domains such as `todoordie.com`
@@ -281,6 +285,54 @@ deterministic suffix (the original owner is kept). An explicit `--host` that
 collides fails with the conflicting path and cleanup guidance; pass
 `--auto-suffix` to take a deterministic suffix instead of failing.
 
+## `lewp alias`
+
+Attach extra hostnames to the current directory's active route. Aliases reuse
+the route's existing port and process; they do not allocate another port, create
+another primary route, or start anything.
+
+```sh
+lewp alias add tags.feature-1.atlas.lewp
+lewp alias add '*.feature-1.atlas.lewp'
+lewp alias list
+lewp alias remove tags.feature-1.atlas.lewp
+```
+
+Use aliases when one app process serves multiple hostnames, such as Rails
+subdomain routing (`tags.app.lewp`, `leads.app.lewp`) or a local domain mirror
+where several public-looking URLs should point to the same dev server.
+
+`alias add` requires an active route in the current directory. Run `lewp add`
+first. The host must be under `.lewp` or a suffix configured by
+[`lewp setup --suffix`](#lewp-setup); public apex/domain-mirror hosts still
+require the same setup opt-in rules as `lewp add --host`.
+
+Wildcards are supported as host patterns:
+
+```sh
+lewp alias add '*.app.lewp'
+```
+
+A wildcard matches exactly one label. `*.app.lewp` matches `tags.app.lewp`, but
+not `app.lewp` and not `api.tags.app.lewp`. Lewp rejects aliases and wildcards
+that conflict with an existing active host and reports the conflicting path.
+Adding an exact alias already covered by a wildcard on the same route succeeds
+with a warning.
+
+Default `alias add` output mirrors `lewp add` for the attached host:
+
+```sh
+PORT=42137
+URL=http://tags.feature-1.atlas.lewp
+HTTPS_URL=https://tags.feature-1.atlas.lewp
+HOST=tags.feature-1.atlas.lewp
+STATE=new
+HOST_KIND=alias
+```
+
+`alias list` prints env-style blocks for aliases on the current route. `--json`
+is available for `add` and `list`; list JSON is always an array.
+
 ## `lewp init`
 
 Generate a `.lewp.local.toml` for the current directory so its identity is
@@ -319,14 +371,22 @@ lewp info
 lewp info --json
 ```
 
-Default output for a directory with one route and one bare port:
+Default output for a directory with one route, one alias, and one bare port:
 
 ```sh
-ROUTES
+ROUTE
 PORT=42137
 URL=http://feature-1.atlas.lewp
 HTTPS_URL=https://feature-1.atlas.lewp
 HOST=feature-1.atlas.lewp
+STATE=up
+DIR=/Users/scott/projects/atlas/feature-1
+
+ALIASES
+PORT=42137
+URL=http://tags.feature-1.atlas.lewp
+HTTPS_URL=https://tags.feature-1.atlas.lewp
+HOST=tags.feature-1.atlas.lewp
 STATE=up
 DIR=/Users/scott/projects/atlas/feature-1
 
@@ -354,8 +414,8 @@ Or move an existing route here: lewp move --from <path>
 ## `lewp move`
 
 Move an existing route from another directory to the current directory, keeping
-the same host and port. Use this after relocating or renaming a project folder
-so its stable URL follows it.
+the same primary host, aliases, wildcards, and port. Use this after relocating
+or renaming a project folder so its stable URLs follow it.
 
 ```sh
 lewp move --from ~/projects/atlas/old-feature
@@ -364,9 +424,10 @@ lewp move --from ~/projects/atlas/old-feature --json
 
 `--from` is required and names the directory that currently owns the route. The
 move is atomic: the source directory is left with no route (`lewp info` there
-reports none) and the current directory becomes the owner with the same port and
-host. The port is never reallocated. The moved route is printed in the same
-env-style block as `info` (`PORT`, `URL`, `HTTPS_URL`, `HOST`, `DIR`).
+reports none) and the current directory becomes the owner with the same port,
+primary host, aliases, and wildcards. The port is never reallocated. The moved
+route hosts are printed in env-style blocks (`PORT`, `URL`, `HTTPS_URL`, `HOST`,
+`DIR`).
 
 If the source directory has no active route, or the current directory already
 owns an active route, `move` fails with a clear error and changes nothing.
@@ -426,9 +487,10 @@ lewp release --all
 lewp release --forget
 ```
 
-By default `release` frees only the route. `--all` additionally releases every
-bare port leased for this directory (equivalent to running `lewp port release`
-for each one). Without `--forget`, history stays in the registry; with
+By default `release` frees only the route, including its aliases and wildcard
+hosts. `--all` additionally releases every bare port leased for this directory
+(equivalent to running `lewp port release` for each one). Without `--forget`,
+history stays in the registry; with
 `--forget`, Lewp removes the remembered identity/history for the current folder.
 
 Release is idempotent: when nothing is active it reports `no active route for
@@ -438,7 +500,7 @@ and exits `0`. To release a single named bare port instead of all of them, use
 
 ## `lewp list`
 
-List registry entries (routes and bare ports).
+List registry entries (routes, aliases, and bare ports).
 
 ```sh
 lewp list
@@ -451,10 +513,12 @@ Human columns:
 ```text
 HOST              NAME       KIND   PORT   STATE  PATH
 feature-1.atlas.lewp  feature-1  route  42137  up     /Users/scott/projects/atlas/feature-1
+tags.feature-1.atlas.lewp  feature-1  alias  42137  up     /Users/scott/projects/atlas/feature-1
 -                 vite       port   42138  down   /Users/scott/projects/atlas/feature-1
 ```
 
-`KIND` is `route` or `port`; a bare port has no host, so `HOST` shows `-`.
+`KIND` is `route`, `alias`, or `port`; a bare port has no host, so `HOST` shows
+`-`. Alias rows share the route's port and path.
 
 States:
 
@@ -463,13 +527,14 @@ States:
 - `stale`: registered path no longer exists
 - `released`: route was explicitly released
 
-Default list hides released routes. `--all` includes registry history.
+Default list hides released routes and their aliases. `--all` includes registry
+history.
 
 `--json` emits a JSON array of entries (always an array, never `null`), each
 with `host`, `port`, `state`, `path`, `kind`, `root`, and `name`:
 
 ```sh
-lewp list --json | jq '.[] | select(.kind == "route")'
+lewp list --json | jq '.[] | select(.kind == "alias")'
 ```
 
 ## `lewp doctor`
@@ -640,8 +705,9 @@ https://<host>   # .lewp hosts only
 ```
 
 DNS resolves all `.lewp` names and configured custom suffixes to loopback. The
-proxy routes by full registered host, so `feature-1.atlas.lewp` and `atlas.lewp`
-can point to different local ports.
+proxy routes by full registered host. Different primary routes can point to
+different local ports, while route aliases let multiple hostnames point to one
+route and port. Wildcard aliases match one label only.
 
 HTTPS uses Lewp's local CA, created and trusted by `lewp setup`. Browser support
 in V1 is `.lewp`-only: Lewp mints certificates only for `.lewp` SNI names.
@@ -681,5 +747,6 @@ HTTPS warnings:
 Port collisions:
 
 - Lewp never steals another remembered live assignment
-- conflicting hosts receive deterministic suffixes
+- conflicting primary hosts receive deterministic suffixes
+- conflicting aliases and wildcards are rejected with the conflicting path
 - use `lewp release --forget` from old folders to remove stale ownership

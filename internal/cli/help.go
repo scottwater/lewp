@@ -132,6 +132,10 @@ Examples:
 
 	aliasHelp = `lewp alias — manage extra hostnames for the current route
 
+Aliases attach to the current directory's active route and reuse its port. Use
+them when one app process serves multiple hosts. Wildcards match one label only:
+*.app.lewp matches tags.app.lewp, not api.tags.app.lewp.
+
 Usage:
   lewp alias add <host> [--json]
   lewp alias remove <host>
@@ -172,7 +176,7 @@ Examples:
 
 Reads existing registry data only; it never creates, allocates, or changes a
 route or port. Exits non-zero if no route or port is registered for this
-directory.
+directory. Aliases are shown in their own ALIASES section.
 
 Usage:
   lewp info [--json]
@@ -188,8 +192,9 @@ Examples:
 	moveHelp = `lewp move — move a route from another directory to this one
 
 Reassigns the active route(s) owned by --from to the current directory, keeping
-the same host and port. Use this after moving or renaming a project folder so
-its stable URL follows it. The source directory is left with no route.
+the same host, aliases, wildcards, and port. Use this after moving or renaming a
+project folder so its stable URLs follow it. The source directory is left with
+no route.
 
 Usage:
   lewp move --from <path> [--json]
@@ -246,8 +251,9 @@ Flags:
              the route
   --forget   Also remove remembered identity and history for this directory
 
-Release is idempotent: releasing when nothing is active is reported, never an
-error. To release a single named bare port instead of all of them, use
+Releasing a route also releases its aliases and wildcard hosts. Release is
+idempotent: releasing when nothing is active is reported, never an error. To
+release a single named bare port instead of all of them, use
 "lewp port release --name <name>".
 
 Examples:
@@ -256,10 +262,11 @@ Examples:
   lewp release --forget
 `
 
-	listHelp = `lewp list — list routes and bare ports with their health
+	listHelp = `lewp list — list routes, aliases, and bare ports with their health
 
 States are derived from TCP checks: up, down, or stale. The human table has
-HOST, NAME, KIND, PORT, STATE, and PATH columns; bare ports show "-" for HOST.
+HOST, NAME, KIND, PORT, STATE, and PATH columns; KIND is route, alias, or port.
+Bare ports show "-" for HOST.
 
 Usage:
   lewp list [--all] [--json]
@@ -270,7 +277,7 @@ Flags:
 
 Examples:
   lewp list
-  lewp list --json | jq '.[] | select(.kind == "route")'
+  lewp list --json | jq '.[] | select(.kind == "alias")'
 `
 
 	suffixHelp = `lewp suffix — list or remove custom managed suffixes

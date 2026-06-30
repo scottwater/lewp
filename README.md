@@ -98,11 +98,25 @@ http://feature-1.atlas.lewp
 https://feature-1.atlas.lewp
 ```
 
+Add extra hostnames for the same app process with `alias`. Aliases attach to
+the current route and reuse its port; they do not create another route or start
+another process:
+
+```sh
+lewp alias add tags.feature-1.atlas.lewp
+lewp alias add '*.feature-1.atlas.lewp'
+lewp alias list
+```
+
+Wildcards match one label only. `*.feature-1.atlas.lewp` matches
+`tags.feature-1.atlas.lewp`, but not `feature-1.atlas.lewp` or
+`api.tags.feature-1.atlas.lewp`.
+
 Check or relocate a route later:
 
 ```sh
 lewp info                                  # show this directory's route and ports
-lewp move --from ~/projects/atlas/feature-1   # bring its route here, same port
+lewp move --from ~/projects/atlas/feature-1   # bring its route, aliases, and port here
 ```
 
 ## Identity and configuration
@@ -165,18 +179,38 @@ Domain mirror mode is for local mirrors of an owned public domain:
 ```sh
 lewp setup --suffix localkickofflabs.com --allow-domain-mirror
 lewp add --host localkickofflabs.com
-lewp add --host app.localkickofflabs.com
-lewp add --host leads.localkickofflabs.com
+lewp alias add app.localkickofflabs.com
+lewp alias add leads.localkickofflabs.com
 ```
 
 While the resolver file exists, that suffix shadows public DNS on this Mac.
-Proxy routing is still exact-host routing: each hostname needs its own
-`lewp add --host ...` route before Lewp will serve it. After adding a suffix,
+Proxy routing is still host-based: add the primary route once with `lewp add`,
+then attach any same-app hostnames with `lewp alias add`. After adding a suffix,
 run `lewp system start` (or `lewp setup --suffix localkickofflabs.com --allow-domain-mirror --start`)
 so the daemon kickstarts and loads the updated suffix list.
 
 Custom public suffix and domain-mirror routes are HTTP-only in V1. `.lewp`
 hosts still support HTTPS through Lewp's local CA.
+
+## Route aliases
+
+One app process can serve multiple local hostnames through the same Lewp route.
+Create the route once, start the app on that port, then add aliases:
+
+```sh
+lewp add
+lewp alias add tags.app.lewp
+lewp alias add leads.app.lewp
+lewp alias add '*.app.lewp'
+```
+
+Aliases reuse the current directory's active route and port. They never allocate
+a second app port. Wildcards match exactly one label: `*.app.lewp` matches
+`tags.app.lewp`, but not `app.lewp` or `foo.tags.app.lewp`.
+
+For public-domain aliases, first configure the managed suffix with
+`lewp setup --suffix ...`; use `--allow-domain-mirror` only when you
+intentionally want to shadow that domain locally.
 
 ## Worktree walkthrough
 
@@ -216,7 +250,7 @@ lewp info                                      # this directory's route and port
 
 git worktree move ~/scratch/wt/atlas-login-fix ~/projects/atlas/login-fix
 cd ~/projects/atlas/login-fix
-lewp move --from ~/scratch/wt/atlas-login-fix  # same host and port, new directory
+lewp move --from ~/scratch/wt/atlas-login-fix  # same host, aliases, and port
 ```
 
 ## HTTPS
