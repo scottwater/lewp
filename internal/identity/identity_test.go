@@ -226,3 +226,63 @@ func TestValidateHostAllowsExactManagedSuffix(t *testing.T) {
 		t.Fatalf("host below nested managed suffix rejected: %v", err)
 	}
 }
+
+func TestValidateRouteHostPatternAcceptsExactAndWildcard(t *testing.T) {
+	managed := []string{"lewp", "local.todoordie.com"}
+	for _, host := range []string{
+		"tags.app.lewp",
+		"*.app.lewp",
+		"tags.app.local.todoordie.com",
+		"*.app.local.todoordie.com",
+		"*.App.Local.TodoOrDie.Com.",
+	} {
+		if err := ValidateRouteHostPatternForSuffixes(host, managed); err != nil {
+			t.Fatalf("ValidateRouteHostPatternForSuffixes(%q) error: %v", host, err)
+		}
+	}
+}
+
+func TestValidateRouteHostPatternAllowsCustomSuffixStartingWithLewp(t *testing.T) {
+	managed := []string{"lewp", "lewp.example.com"}
+	if err := ValidateRouteHostPatternForSuffixes("*.lewp.example.com", managed); err != nil {
+		t.Fatalf("wildcard under custom lewp-prefixed suffix rejected: %v", err)
+	}
+}
+
+func TestValidateRouteHostPatternRejectsBadWildcards(t *testing.T) {
+	managed := []string{"lewp"}
+	for _, host := range []string{"*", "*.", "*.*.app.lewp", "foo.*.app.lewp", "*.lewp", "*.bad.com", "*.app.lewp.."} {
+		if err := ValidateRouteHostPatternForSuffixes(host, managed); err == nil {
+			t.Fatalf("ValidateRouteHostPatternForSuffixes(%q) succeeded", host)
+		}
+	}
+}
+
+func TestValidateRouteHostPatternRejectsExactDoubleTrailingDot(t *testing.T) {
+	if err := ValidateRouteHostPatternForSuffixes("tags.app.lewp..", []string{"lewp"}); err == nil {
+		t.Fatal("exact host with double trailing dot accepted")
+	}
+}
+
+func TestNormalizeHostPattern(t *testing.T) {
+	if got := NormalizeHostPattern(" *.App.Lewp. "); got != "*.app.lewp" {
+		t.Fatalf("NormalizeHostPattern=%q want *.app.lewp", got)
+	}
+}
+
+func TestWildcardRouteHostMatchesOneLabel(t *testing.T) {
+	if !WildcardRouteHostMatches("*.app.lewp", "tags.app.lewp") {
+		t.Fatal("expected wildcard to match one label")
+	}
+	if !WildcardRouteHostMatches("*.App.Lewp.", "Tags.App.Lewp.") {
+		t.Fatal("expected wildcard match to normalize host and pattern")
+	}
+	for _, host := range []string{"app.lewp", "foo.tags.app.lewp"} {
+		if WildcardRouteHostMatches("*.app.lewp", host) {
+			t.Fatalf("wildcard should not match %s", host)
+		}
+	}
+	if WildcardRouteHostMatches("app.lewp", "tags.app.lewp") {
+		t.Fatal("non-wildcard pattern matched host")
+	}
+}

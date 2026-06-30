@@ -240,6 +240,49 @@ func ValidateHostForSuffixes(host string, managed []string) error {
 	return nil
 }
 
+func NormalizeHostPattern(host string) string {
+	return normalizeHost(host)
+}
+
+func IsWildcardRouteHost(host string) bool {
+	host = NormalizeHostPattern(host)
+	return strings.HasPrefix(host, "*.") && len(host) > 2
+}
+
+func ValidateRouteHostPatternForSuffixes(host string, managed []string) error {
+	raw := strings.ToLower(strings.TrimSpace(host))
+	normalized := NormalizeHostPattern(host)
+	if IsWildcardRouteHost(host) {
+		suffixHost := strings.TrimPrefix(raw, "*.")
+		if suffixHost == "" || strings.Contains(suffixHost, "*") {
+			return fmt.Errorf("wildcard host %q must use exactly one leading * label", normalized)
+		}
+		if err := ValidateHostForSuffixes(suffixHost, managed); err != nil {
+			return err
+		}
+		return nil
+	}
+	if strings.Contains(raw, "*") {
+		return fmt.Errorf("host %q contains invalid wildcard placement", normalized)
+	}
+	return ValidateHostForSuffixes(host, managed)
+}
+
+func WildcardRouteHostMatches(pattern, host string) bool {
+	pattern = NormalizeHostPattern(pattern)
+	host = NormalizeHostPattern(host)
+	if !IsWildcardRouteHost(pattern) {
+		return false
+	}
+	suffixHost := strings.TrimPrefix(pattern, "*.")
+	suffix := "." + suffixHost
+	if !strings.HasSuffix(host, suffix) {
+		return false
+	}
+	left := strings.TrimSuffix(host, suffix)
+	return left != "" && !strings.Contains(left, ".")
+}
+
 func normalizeHost(host string) string {
 	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 }
