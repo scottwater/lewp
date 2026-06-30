@@ -442,7 +442,7 @@ func openProxyStore(t *testing.T) *registry.Store {
 	return store
 }
 
-func registerRoute(t *testing.T, store *registry.Store, host string, port int) {
+func registerRoute(t *testing.T, store *registry.Store, host string, port int) int64 {
 	t.Helper()
 	ident := identity.Result{
 		Root:           "audit",
@@ -458,6 +458,14 @@ func registerRoute(t *testing.T, store *registry.Store, host string, port int) {
 	if err := store.Remember(context.Background(), ident, port); err != nil {
 		t.Fatal(err)
 	}
+	route, ok, err := store.ActiveRouteByPath(context.Background(), ident.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("registered route not active")
+	}
+	return route.RouteID
 }
 
 func freePort(t *testing.T) int {

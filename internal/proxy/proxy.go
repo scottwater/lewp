@@ -245,6 +245,9 @@ func writeDebugPage(w http.ResponseWriter, r *http.Request, route registry.Recor
 
 	fmt.Fprint(w, "<dl>")
 	fmt.Fprintf(w, "<dt>Target</dt><dd><code>%s</code></dd>", html.EscapeString(target))
+	if route.MatchedHost != "" && route.MatchedHost != route.Host {
+		fmt.Fprintf(w, "<dt>Matched route</dt><dd><code>%s</code></dd>", html.EscapeString(route.MatchedHost))
+	}
 	fmt.Fprintf(w, "<dt>Project</dt><dd><code>%s</code></dd>", html.EscapeString(route.Path))
 	fmt.Fprintf(w, "<dt>Root/name</dt><dd>%s / %s</dd>", html.EscapeString(route.Root), html.EscapeString(route.Name))
 	fmt.Fprintf(w, "<dt>Last seen</dt><dd>%s</dd>", html.EscapeString(lastSeenOrNever(route.LastSeenAt)))
