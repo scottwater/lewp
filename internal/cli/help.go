@@ -24,6 +24,7 @@ Commands:
   setup      Install the .lewp DNS resolver, local CA, and launchd service
   system     Manage the daemon: start|stop|status|restart|uninstall
   add        Register a stable port and managed hostname for the current directory
+  alias      Manage extra hostnames for the current route
   init       Generate a .lewp.local.toml identity file for the current directory
   info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory
@@ -127,6 +128,19 @@ Examples:
   lewp add
   lewp add --root atlas --name feature-1
   eval "$(lewp add --shell)"
+`
+
+	aliasHelp = `lewp alias — manage extra hostnames for the current route
+
+Usage:
+  lewp alias add <host> [--json]
+  lewp alias remove <host>
+  lewp alias list [--json]
+
+Examples:
+  lewp alias add tags.app.lewp
+  lewp alias add '*.app.lewp'
+  lewp alias list
 `
 
 	initHelp = `lewp init — generate a .lewp.local.toml for this directory

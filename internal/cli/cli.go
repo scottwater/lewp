@@ -141,6 +141,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runAdd(cfg)
+	case "alias":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, aliasHelp)
+			return 0
+		}
+		return runAlias(cfg)
 	case "init":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, initHelp)

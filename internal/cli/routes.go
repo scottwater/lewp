@@ -75,6 +75,141 @@ func runPortRelease(cfg Config) int {
 	return 0
 }
 
+func runAlias(cfg Config) int {
+	if len(cfg.Args) < 2 {
+		fmt.Fprint(cfg.Stderr, aliasHelp)
+		return 2
+	}
+	switch cfg.Args[1] {
+	case "add":
+		return runAliasAdd(cfg)
+	case "remove":
+		return runAliasRemove(cfg)
+	case "list":
+		return runAliasList(cfg)
+	default:
+		fmt.Fprintf(cfg.Stderr, "lewp alias: unknown action %q\nRun: lewp alias --help\n", cfg.Args[1])
+		return 2
+	}
+}
+
+func runAliasAdd(cfg Config) int {
+	host, jsonOut, err := parseAliasHostArgs(cfg.Args[2:])
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp alias add: %v\n", err)
+		fmt.Fprintln(cfg.Stderr, "lewp alias add <host>")
+		return 2
+	}
+	resp, err := call(cfg, control.Request{Command: "alias-add", Alias: control.AliasRequest{WorkDir: cfg.WorkDir, Host: host}})
+	if err != nil {
+		return daemonError(cfg, err)
+	}
+	if resp.Lease == nil {
+		fmt.Fprintln(cfg.Stderr, "malformed daemon response: missing alias lease")
+		return 1
+	}
+	writeLease(cfg.Stdout, cfg.Stderr, *resp.Lease, jsonOut, false)
+	return 0
+}
+
+func runAliasRemove(cfg Config) int {
+	host, err := parseAliasRemoveArgs(cfg.Args[2:])
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp alias remove: %v\n", err)
+		fmt.Fprintln(cfg.Stderr, "lewp alias remove <host>")
+		return 2
+	}
+	resp, err := call(cfg, control.Request{Command: "alias-remove", Alias: control.AliasRequest{WorkDir: cfg.WorkDir, Host: host}})
+	if err != nil {
+		return daemonError(cfg, err)
+	}
+	if resp.AliasRemove == nil {
+		fmt.Fprintln(cfg.Stderr, "malformed daemon response: missing alias remove result")
+		return 1
+	}
+	if resp.AliasRemove.Removed == 0 {
+		fmt.Fprintf(cfg.Stdout, "no alias %s for this directory\n", host)
+		return 0
+	}
+	fmt.Fprintf(cfg.Stdout, "removed alias %s\n", host)
+	return 0
+}
+
+func parseAliasRemoveArgs(args []string) (string, error) {
+	var host string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return "", fmt.Errorf("unknown flag %s", arg)
+		}
+		if host != "" {
+			return "", fmt.Errorf("too many arguments")
+		}
+		host = arg
+	}
+	if host == "" {
+		return "", fmt.Errorf("host is required")
+	}
+	return host, nil
+}
+
+func runAliasList(cfg Config) int {
+	jsonOut, err := parseAliasListArgs(cfg.Args[2:])
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp alias list: %v\n", err)
+		fmt.Fprintln(cfg.Stderr, "lewp alias list")
+		return 2
+	}
+	resp, err := call(cfg, control.Request{Command: "alias-list", Alias: control.AliasRequest{WorkDir: cfg.WorkDir}})
+	if err != nil {
+		return daemonError(cfg, err)
+	}
+	entries := resp.Entries
+	if entries == nil {
+		entries = []control.ListEntry{}
+	}
+	writeRoutes(cfg.Stdout, cfg.Stderr, entries, jsonOut)
+	return 0
+}
+
+func parseAliasHostArgs(args []string) (string, bool, error) {
+	var host string
+	var jsonOut bool
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOut = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return "", false, fmt.Errorf("unknown flag %s", arg)
+			}
+			if host != "" {
+				return "", false, fmt.Errorf("too many arguments")
+			}
+			host = arg
+		}
+	}
+	if host == "" {
+		return "", false, fmt.Errorf("host is required")
+	}
+	return host, jsonOut, nil
+}
+
+func parseAliasListArgs(args []string) (bool, error) {
+	var jsonOut bool
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			jsonOut = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return false, fmt.Errorf("unknown flag %s", arg)
+			}
+			return false, fmt.Errorf("too many arguments")
+		}
+	}
+	return jsonOut, nil
+}
+
 func runInfo(cfg Config) int {
 	fs := flag.NewFlagSet("info", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)

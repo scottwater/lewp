@@ -13,6 +13,7 @@ var completionCommands = []struct{ name, desc string }{
 	{"setup", "Install the .lewp resolver, local CA, and launchd service"},
 	{"system", "Manage the daemon (start|stop|status|restart|uninstall)"},
 	{"add", "Register a stable port and .lewp hostname for this directory"},
+	{"alias", "Manage extra hostnames for the current route"},
 	{"init", "Generate a .lewp.local.toml identity file"},
 	{"info", "Show routes and bare ports for this directory"},
 	{"move", "Move a route from another directory to this one"},
@@ -71,6 +72,7 @@ _lewp() {
   fi
   case "${COMP_WORDS[1]}" in
     system) COMPREPLY=( $(compgen -W "start stop status restart uninstall --help" -- "$cur") ) ;;
+    alias)  COMPREPLY=( $(compgen -W "add remove list --json --help" -- "$cur") ) ;;
     port)   COMPREPLY=( $(compgen -W "release --name --json --shell --forget --help" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish --help" -- "$cur") ) ;;
     *)      COMPREPLY=( $(compgen -W "--help" -- "$cur") ) ;;
@@ -97,6 +99,7 @@ func zshCompletion() string {
 	b.WriteString("  else\n")
 	b.WriteString("    case \"${words[2]}\" in\n")
 	b.WriteString("      system) _values 'action' start stop status restart uninstall ;;\n")
+	b.WriteString("      alias) _values 'alias subcommand/options' add remove list --json --help ;;\n")
 	b.WriteString("      port) _values 'port subcommand/options' release --name --json --shell --forget --help ;;\n")
 	b.WriteString("      completion) _values 'shell' bash zsh fish ;;\n")
 	b.WriteString("      *) _arguments '--help[show command help]' ;;\n")
@@ -116,6 +119,8 @@ func fishCompletion() string {
 		fmt.Fprintf(&b, "complete -c lewp -n __fish_use_subcommand -a %s -d '%s'\n", c.name, c.desc)
 	}
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from system' -a 'start stop status restart uninstall'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from alias' -a 'add remove list'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from alias' -l json -d 'Emit JSON'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -a release -d 'Release a bare port lease'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l name -r -d 'Logical port name'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l json -d 'Emit JSON'\n")
