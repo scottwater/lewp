@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -125,6 +126,151 @@ func TestSocketCallAddAllowsConfiguredCustomSuffix(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("server did not stop")
 	}
+}
+
+func TestSocketCallAliasCommands(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socketDir, err := os.MkdirTemp("/tmp", fmt.Sprintf("lewp-%d-", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "control.sock")
+	registryPath := t.TempDir() + "/nested/registry.sqlite"
+	workDir := t.TempDir()
+
+	errs := make(chan error, 1)
+	go func() {
+		errs <- Serve(ctx, socketPath, registryPath, registry.PortRange{Start: 41000, End: 41020})
+	}()
+	waitForSocket(t, socketPath, errs)
+
+	add, err := Call(ctx, socketPath, Request{
+		Command: "add",
+		Lease: LeaseRequest{
+			WorkDir: workDir,
+			Root:    "work",
+			Name:    "app",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias, err := Call(ctx, socketPath, Request{
+		Command: "alias-add",
+		Alias: AliasRequest{
+			WorkDir: workDir,
+			Host:    "tags.app.work.lewp",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alias.Lease == nil || add.Lease == nil || alias.Lease.Port != add.Lease.Port || alias.Lease.Host != "tags.app.work.lewp" {
+		t.Fatalf("bad alias add response: add=%+v alias=%+v", add, alias)
+	}
+	aliasPayload := callRaw(t, ctx, socketPath, Request{
+		Command: "alias-add",
+		Alias: AliasRequest{
+			WorkDir: workDir,
+			Host:    "tags.app.work.lewp",
+		},
+	})
+	if string(aliasPayload) == "" || containsJSONKey(aliasPayload, "entries") {
+		t.Fatalf("alias add response should not include entries: %s", aliasPayload)
+	}
+	missingList, err := Call(ctx, socketPath, Request{
+		Command: "alias-list",
+		Alias:   AliasRequest{WorkDir: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingList.Entries == nil || len(missingList.Entries) != 0 {
+		t.Fatalf("missing-route alias list should decode as []: %+v", missingList)
+	}
+	emptyWorkDir := t.TempDir()
+	if _, err := Call(ctx, socketPath, Request{
+		Command: "add",
+		Lease: LeaseRequest{
+			WorkDir: emptyWorkDir,
+			Root:    "work",
+			Name:    "empty",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	emptyList, err := Call(ctx, socketPath, Request{
+		Command: "alias-list",
+		Alias:   AliasRequest{WorkDir: emptyWorkDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if emptyList.Entries == nil || len(emptyList.Entries) != 0 {
+		t.Fatalf("empty alias list should decode as []: %+v", emptyList)
+	}
+	list, err := Call(ctx, socketPath, Request{
+		Command: "alias-list",
+		Alias:   AliasRequest{WorkDir: workDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Entries) != 1 || list.Entries[0].Host != "tags.app.work.lewp" {
+		t.Fatalf("bad alias list response: %+v", list)
+	}
+	remove, err := Call(ctx, socketPath, Request{
+		Command: "alias-remove",
+		Alias: AliasRequest{
+			WorkDir: workDir,
+			Host:    "tags.app.work.lewp",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remove.AliasRemove == nil || remove.AliasRemove.Removed != 1 {
+		t.Fatalf("bad alias remove response: %+v", remove)
+	}
+
+	cancel()
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func callRaw(t *testing.T, ctx context.Context, socketPath string, req Request) []byte {
+	t.Helper()
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func containsJSONKey(payload []byte, key string) bool {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &obj); err != nil {
+		return false
+	}
+	_, ok := obj[key]
+	return ok
 }
 
 func waitForSocket(t *testing.T, socketPath string, errs <-chan error) {

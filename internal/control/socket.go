@@ -20,15 +20,40 @@ type Request struct {
 	Release ReleaseRequest `json:"release,omitempty"`
 	Info    InfoRequest    `json:"info,omitempty"`
 	Move    MoveRequest    `json:"move,omitempty"`
+	Alias   AliasRequest   `json:"alias,omitempty"`
 	All     bool           `json:"all,omitempty"`
 }
 
 type Response struct {
-	Lease   *LeaseResponse   `json:"lease,omitempty"`
-	Release *ReleaseResponse `json:"release,omitempty"`
-	Entries []ListEntry      `json:"entries,omitempty"`
-	Checks  []string         `json:"checks,omitempty"`
-	Error   string           `json:"error,omitempty"`
+	Lease       *LeaseResponse       `json:"lease,omitempty"`
+	Release     *ReleaseResponse     `json:"release,omitempty"`
+	AliasRemove *AliasRemoveResponse `json:"alias_remove,omitempty"`
+	Entries     []ListEntry          `json:"entries,omitempty"`
+	Checks      []string             `json:"checks,omitempty"`
+	Error       string               `json:"error,omitempty"`
+}
+
+func (r Response) MarshalJSON() ([]byte, error) {
+	obj := map[string]any{}
+	if r.Lease != nil {
+		obj["lease"] = r.Lease
+	}
+	if r.Release != nil {
+		obj["release"] = r.Release
+	}
+	if r.AliasRemove != nil {
+		obj["alias_remove"] = r.AliasRemove
+	}
+	if r.Entries != nil {
+		obj["entries"] = r.Entries
+	}
+	if len(r.Checks) > 0 {
+		obj["checks"] = r.Checks
+	}
+	if r.Error != "" {
+		obj["error"] = r.Error
+	}
+	return json.Marshal(obj)
 }
 
 func Serve(ctx context.Context, socketPath, registryPath string, portRange registry.PortRange) error {
@@ -150,6 +175,15 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 		return Response{Entries: entries}, err
 	case "move":
 		entries, err := svc.Move(ctx, req.Move)
+		return Response{Entries: entries}, err
+	case "alias-add":
+		lease, err := svc.AliasAdd(ctx, req.Alias)
+		return Response{Lease: &lease}, err
+	case "alias-remove":
+		res, err := svc.AliasRemove(ctx, req.Alias)
+		return Response{AliasRemove: &res}, err
+	case "alias-list":
+		entries, err := svc.AliasList(ctx, req.Alias)
 		return Response{Entries: entries}, err
 	case "doctor":
 		return Response{Checks: svc.Doctor(ctx)}, nil
