@@ -255,6 +255,39 @@ func TestDoctorKeychainCheckReflectsTrust(t *testing.T) {
 	}
 }
 
+func TestRunSetupCreatesPrivateLogDir(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	logDir := dir + "/Logs/lewp"
+	code := Run(Config{
+		Args:         []string{"setup"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/suffixes.toml",
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		LogDir:       logDir,
+		ProgramPath:  dir + "/bin/lewp",
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand:   func(context.Context, []string) error { return nil },
+		RunCommandOutput: func(context.Context, []string) (string, error) {
+			return dir + "/bin/lewp\n", nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	info, err := os.Stat(logDir)
+	if err != nil {
+		t.Fatalf("stat log dir: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("log dir mode=%#o, want 0700", got)
+	}
+}
+
 func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {
 	dir := t.TempDir()
 	suffixesPath := dir + "/suffixes.toml"
@@ -935,6 +968,127 @@ func TestRunSystemUninstallPrintsAffectedSummaryFirst(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("uninstall summary missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestRunSystemUninstallContinuesAfterLaunchctlFailure proves uninstall is
+// best-effort: a failing launchctl bootout does not abort the run, so the
+// keychain trust, plist, and resolver are still cleaned up, and the accumulated
+// failure is reported with a non-zero exit code.
+func TestRunSystemUninstallContinuesAfterLaunchctlFailure(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var ran []string
+	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	resolverPath := dir + "/resolver/lewp"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolverPath, []byte(dns.ResolverFile(dns.DefaultPort)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"system", "uninstall"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    plistPath,
+		ResolverPath: resolverPath,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand: func(_ context.Context, argv []string) error {
+			ran = append(ran, strings.Join(argv, " "))
+			if len(argv) > 0 && argv[0] == "launchctl" {
+				return errors.New("Bootstrap failed: 125: Domain does not support specified action")
+			}
+			return nil
+		},
+	})
+	if code != 1 {
+		t.Fatalf("expected non-zero exit on launchctl failure, code=%d", code)
+	}
+	if !strings.Contains(stderr.String(), "uninstall:") {
+		t.Fatalf("stderr missing accumulated launchctl failure: %q", stderr.String())
+	}
+	// The keychain untrust must still run despite the earlier launchctl failure.
+	if !strings.Contains(strings.Join(ran, "\n"), "security delete-certificate") {
+		t.Fatalf("uninstall stopped before keychain cleanup: %v", ran)
+	}
+	// Plist and resolver must still be removed (best-effort continues).
+	if _, err := os.Stat(plistPath); !os.IsNotExist(err) {
+		t.Fatalf("plist not removed after launchctl failure: %v", err)
+	}
+	if _, err := os.Stat(resolverPath); !os.IsNotExist(err) {
+		t.Fatalf("resolver not removed after launchctl failure: %v", err)
+	}
+}
+
+// TestRunSystemUninstallTreatsNotLoadedAsSuccess proves an already-unloaded
+// launchd service is non-fatal for uninstall: the desired end state is already
+// met, so the run exits 0 and still removes the remaining files.
+func TestRunSystemUninstallTreatsNotLoadedAsSuccess(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	resolverPath := dir + "/resolver/lewp"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolverPath, []byte(dns.ResolverFile(dns.DefaultPort)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"system", "uninstall"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    plistPath,
+		ResolverPath: resolverPath,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand: func(_ context.Context, argv []string) error {
+			if len(argv) > 0 && argv[0] == "launchctl" {
+				return errors.New("Boot-out failed: 3: No such process")
+			}
+			return nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("already-unloaded service should be non-fatal, code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "service already unloaded") {
+		t.Fatalf("stdout missing already-unloaded note: %q", stdout.String())
+	}
+	if _, err := os.Stat(plistPath); !os.IsNotExist(err) {
+		t.Fatalf("plist not removed: %v", err)
+	}
+}
+
+// TestIsDaemonDownClassification proves the daemon-down check keys off the dial
+// failure (a *net.OpError with Op=="dial"), not on fragile error-text
+// substrings, and does not misclassify post-dial or unrelated errors.
+func TestIsDaemonDownClassification(t *testing.T) {
+	// A real dial failure against a missing/oversized unix socket path.
+	var d net.Dialer
+	_, dialErr := d.DialContext(context.Background(), "unix", t.TempDir()+"/missing.sock")
+	if dialErr == nil {
+		t.Fatal("expected dial to fail against missing socket")
+	}
+	if !isDaemonDown(dialErr) {
+		t.Fatalf("dial failure should classify as daemon-down: %v", dialErr)
+	}
+	// A daemon-side error string (post-dial) must not be classified as down,
+	// even though it contains the word "connection".
+	if isDaemonDown(errors.New("lease failed: connection to registry lost")) {
+		t.Fatal("post-dial error text should not classify as daemon-down")
+	}
+	if isDaemonDown(context.DeadlineExceeded) {
+		t.Fatal("request timeout should not classify as daemon-down")
+	}
+	if isDaemonDown(&net.OpError{Op: "dial", Net: "unix", Err: context.DeadlineExceeded}) {
+		t.Fatal("dial timeout should not classify as daemon-down")
 	}
 }
 

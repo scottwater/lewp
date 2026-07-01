@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -361,7 +362,11 @@ func runSetup(cfg Config) int {
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.CAPath)
 		return 1
 	}
-	if err := os.MkdirAll(cfg.LogDir, 0o755); err != nil {
+	// 0700: the daemon's captured stdout/stderr may echo request hostnames and
+	// ports, so keep the log dir readable only by the owner (launchd runs the
+	// daemon as this same user). This matches the 0700 the control socket and
+	// registry dirs use.
+	if err := os.MkdirAll(cfg.LogDir, 0o700); err != nil {
 		fmt.Fprintf(cfg.Stderr, "create log dir: %v\n", err)
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.LogDir)
 		return 1
@@ -598,50 +603,92 @@ func runSystem(cfg Config) int {
 		return 0
 	case "start":
 		return runSystemStart(cfg)
-	case "stop", "restart", "uninstall":
+	case "uninstall":
+		return runUninstall(cfg)
+	case "stop", "restart":
 		plan, err := launchd.Plan(cfg.Args[1], launchd.Config{Label: launchd.DefaultLabel, PlistPath: cfg.PlistPath})
 		if err != nil {
 			fmt.Fprintln(cfg.Stderr, err)
 			return 2
-		}
-		// uninstall is destructive (removes the plist, resolver, and keychain
-		// trust). Print the full affected-file summary up front so the scope is
-		// visible before any removal happens, not inferred from the trailing
-		// "removed X" lines.
-		if cfg.Args[1] == "uninstall" {
-			reportUninstallPlan(cfg)
 		}
 		if err := cfg.RunCommand(context.Background(), plan); err != nil {
 			fmt.Fprintf(cfg.Stderr, "%s: %v\n", cfg.Args[1], err)
 			return 1
 		}
 		fmt.Fprintln(cfg.Stdout, strings.Join(plan, " "))
-		if cfg.Args[1] == "uninstall" {
-			untrust := localtls.UntrustCommand("Lewp Local Development CA")
-			if err := cfg.RunCommand(context.Background(), untrust); err != nil {
-				fmt.Fprintf(cfg.Stderr, "remove CA trust: %v\n", err)
-				return 1
-			}
-			fmt.Fprintln(cfg.Stdout, strings.Join(untrust, " "))
-			for _, item := range uninstallRemovalItems(cfg) {
-				if err := ensureLewpOwnedOrMissing(item.path, item.marker); err != nil {
-					fmt.Fprintf(cfg.Stderr, "refusing to remove %s: %v\n", item.path, err)
-					return 1
-				}
-				if err := removePath(cfg, item.path); err != nil && !os.IsNotExist(err) {
-					fmt.Fprintf(cfg.Stderr, "remove %s: %v\n", item.path, err)
-					return 1
-				}
-				fmt.Fprintf(cfg.Stdout, "removed %s\n", item.path)
-			}
-			_ = os.Remove(cfg.SuffixesPath)
-			reportRetainedCA(cfg)
-		}
 		return 0
 	default:
 		fmt.Fprintf(cfg.Stderr, "unknown system action: %s\n", cfg.Args[1])
 		return 2
 	}
+}
+
+// runUninstall tears down everything setup installed: it boots out the daemon,
+// removes keychain trust, and deletes the plist, resolver, and suffix files.
+//
+// It is deliberately best-effort. Every step runs even if an earlier one fails,
+// so a partially-installed or partially-removed system still gets cleaned up as
+// far as possible rather than stopping at the first error and stranding the
+// rest. Errors are accumulated and reported, and the exit code is non-zero if
+// any step failed. An already-unloaded launchd service is treated as success,
+// since uninstall's goal (the service gone) is already met.
+func runUninstall(cfg Config) int {
+	plan, err := launchd.Plan("uninstall", launchd.Config{Label: launchd.DefaultLabel, PlistPath: cfg.PlistPath})
+	if err != nil {
+		fmt.Fprintln(cfg.Stderr, err)
+		return 2
+	}
+	// Print the full affected-file summary up front so the scope is visible
+	// before any removal happens, not inferred from the trailing "removed X"
+	// lines.
+	reportUninstallPlan(cfg)
+
+	failures := 0
+	fail := func(format string, args ...any) {
+		fmt.Fprintf(cfg.Stderr, format, args...)
+		failures++
+	}
+
+	if err := cfg.RunCommand(context.Background(), plan); err != nil {
+		if isNotLoadedLaunchdError(err) {
+			fmt.Fprintln(cfg.Stdout, "service already unloaded")
+		} else {
+			fail("uninstall: %v\n", err)
+		}
+	} else {
+		fmt.Fprintln(cfg.Stdout, strings.Join(plan, " "))
+	}
+
+	untrust := localtls.UntrustCommand("Lewp Local Development CA")
+	if err := cfg.RunCommand(context.Background(), untrust); err != nil {
+		fail("remove CA trust: %v\n", err)
+	} else {
+		fmt.Fprintln(cfg.Stdout, strings.Join(untrust, " "))
+	}
+
+	for _, item := range uninstallRemovalItems(cfg) {
+		if err := ensureLewpOwnedOrMissing(item.path, item.marker); err != nil {
+			fail("refusing to remove %s: %v\n", item.path, err)
+			continue
+		}
+		if err := removePath(cfg, item.path); err != nil && !os.IsNotExist(err) {
+			fail("remove %s: %v\n", item.path, err)
+			continue
+		}
+		fmt.Fprintf(cfg.Stdout, "removed %s\n", item.path)
+	}
+	if err := os.Remove(cfg.SuffixesPath); err != nil {
+		if !os.IsNotExist(err) {
+			fail("remove %s: %v\n", cfg.SuffixesPath, err)
+		}
+	} else {
+		fmt.Fprintf(cfg.Stdout, "removed %s\n", cfg.SuffixesPath)
+	}
+	reportRetainedCA(cfg)
+	if failures > 0 {
+		return 1
+	}
+	return 0
 }
 
 type uninstallRemovalItem struct {
@@ -792,6 +839,19 @@ func isAlreadyLoadedLaunchdError(err error) bool {
 		strings.Contains(strings.ToLower(text), "service already loaded")
 }
 
+// isNotLoadedLaunchdError reports whether a `launchctl bootout` failed only
+// because the service was not loaded. That is not a real failure for uninstall:
+// the desired end state (service gone) is already true, so the caller treats it
+// as success. launchctl surfaces this as its textual output (there is no
+// structured error to match on), hence the substring check on the known
+// bootout-of-absent-service messages.
+func isNotLoadedLaunchdError(err error) bool {
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "no such process") ||
+		strings.Contains(text, "boot-out failed: 3") ||
+		strings.Contains(text, "could not find specified service")
+}
+
 func writeResolver(cfg Config, path string) error {
 	if filepath.Dir(path) == "/etc/resolver" && os.Geteuid() != 0 {
 		tmp, err := os.CreateTemp("", "lewp-resolver-*")
@@ -902,13 +962,33 @@ func call(cfg Config, req control.Request) (control.Response, error) {
 }
 
 func daemonError(cfg Config, err error) int {
-	if strings.Contains(err.Error(), "connect") || strings.Contains(err.Error(), "no such file") {
+	if isDaemonDown(err) {
 		fmt.Fprintln(cfg.Stderr, "lewp daemon is not running")
 		fmt.Fprintln(cfg.Stderr, "Run: lewp system start")
 		return 1
 	}
 	fmt.Fprintln(cfg.Stderr, err)
 	return 1
+}
+
+// isDaemonDown reports whether err is the control socket being unreachable
+// because the daemon is not up. control.Call surfaces this as the dial error:
+// net.Dialer wraps every connect failure in a *net.OpError with Op == "dial"
+// (socket missing → ENOENT, stale socket → ECONNREFUSED, unusable path →
+// EINVAL, and so on), so matching the dial OpError classifies them all without
+// enumerating errnos. A post-dial failure (a daemon that replied with an error,
+// or a mid-request timeout) is deliberately not classified as "down". This
+// replaces the previous fragile substring match on the error text.
+func isDaemonDown(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) && opErr.Op == "dial" {
+		return true
+	}
+	// Belt-and-suspenders for a dial errno that reaches us unwrapped.
+	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func defaultPlistPath() string {
