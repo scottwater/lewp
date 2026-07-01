@@ -335,15 +335,29 @@ func dnsResolutionCheck(name, host, label string, cfg Config) doctorCheck {
 	return c
 }
 
+// doctorManagedSuffixes loads the configured suffix list so inference and
+// conflict checks validate hosts against the same managed suffixes the daemon
+// and `lewp add` use. A broken suffix config is already surfaced as its own
+// failing check (suffixResolverChecks/dnsResolutionChecks), so here it degrades
+// to the built-in .lewp suffix rather than repeating the load error.
+func doctorManagedSuffixes(cfg Config) []string {
+	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
+	if err != nil {
+		return nil
+	}
+	return suffix.Managed(suffixCfg.Suffixes)
+}
+
 // inferenceCheck shows what root/name/host doctor infers for the current
 // directory, so users can see what `lewp add` would register here. It is
 // inference-only (it does not consult remembered identities in the registry).
 func inferenceCheck(cfg Config) doctorCheck {
 	c := doctorCheck{Name: "current folder"}
 	resolved, err := identity.Resolve(identity.Options{
-		WorkDir: cfg.WorkDir,
-		Env:     map[string]string{},
-		Kind:    identity.KindRoute,
+		WorkDir:         cfg.WorkDir,
+		Env:             map[string]string{},
+		Kind:            identity.KindRoute,
+		ManagedSuffixes: doctorManagedSuffixes(cfg),
 	})
 	if err != nil {
 		c.Status = statusWarn
@@ -402,9 +416,10 @@ func targetPortChecks(cfg Config) []doctorCheck {
 // `lewp add` would print.
 func conflictCheck(cfg Config) []doctorCheck {
 	resolved, err := identity.Resolve(identity.Options{
-		WorkDir: cfg.WorkDir,
-		Env:     map[string]string{},
-		Kind:    identity.KindRoute,
+		WorkDir:         cfg.WorkDir,
+		Env:             map[string]string{},
+		Kind:            identity.KindRoute,
+		ManagedSuffixes: doctorManagedSuffixes(cfg),
 	})
 	if err != nil || resolved.Host == "" {
 		return nil

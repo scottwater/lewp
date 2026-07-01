@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 )
 
@@ -201,6 +202,61 @@ func TestManagerRejectsNonLewpSNI(t *testing.T) {
 	manager := NewManager(ca)
 	if _, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: "example.com"}); err == nil {
 		t.Fatal("accepted non-.lewp SNI")
+	}
+}
+
+// TestManagerRejectsConfiguredCustomSuffixSNI locks the documented V1 contract:
+// custom public suffixes and domain mirrors are HTTP-only, so even a host under
+// a suffix the daemon routes for HTTP/DNS must be refused a leaf certificate.
+// See README/DOCUMENTATION ("Lewp mints certificates only for .lewp SNI names").
+func TestManagerRejectsConfiguredCustomSuffixSNI(t *testing.T) {
+	ca, err := NewCA("Lewp Local Development CA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(ca)
+	for _, host := range []string{"app.local.todoordie.com", "app.localkickofflabs.com"} {
+		if _, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: host}); err == nil {
+			t.Fatalf("issued a leaf for custom-suffix host %q; custom suffixes are HTTP-only in V1", host)
+		}
+	}
+}
+
+// TestManagerConcurrentSameHostConverges exercises the relaxed locking in
+// GetCertificate (leaf generation runs outside m.mu): concurrent handshakes for
+// one host must converge on a single cached certificate and not corrupt the LRU
+// bookkeeping. Run with -race to catch cache/order data races.
+func TestManagerConcurrentSameHostConverges(t *testing.T) {
+	ca, err := NewCA("Lewp Local Development CA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(ca)
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+	results := make([]*gotls.Certificate, goroutines)
+	for i := range results {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			cert, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: "feature-1.audit.lewp"})
+			if err != nil {
+				t.Errorf("goroutine %d: %v", idx, err)
+				return
+			}
+			results[idx] = cert
+		}(i)
+	}
+	wg.Wait()
+
+	for i, cert := range results {
+		if cert != results[0] {
+			t.Fatalf("goroutine %d saw a different cached certificate than goroutine 0", i)
+		}
+	}
+	if len(manager.cacheOrder) != 1 || manager.cache["feature-1.audit.lewp"] == nil {
+		t.Fatalf("cache did not converge on one leaf: order=%v", manager.cacheOrder)
 	}
 }
 

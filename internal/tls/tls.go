@@ -191,9 +191,14 @@ func NewManager(ca *CA) *Manager {
 	return &Manager{ca: ca, cache: map[string]*gotls.Certificate{}, cacheLimit: 128}
 }
 
+// GetCertificate mints (and caches) a leaf certificate for the TLS SNI host.
+//
+// TLS is deliberately limited to the built-in .lewp suffix. Configured custom
+// public suffixes and domain mirrors are HTTP-only in V1 (see README and
+// DOCUMENTATION: "Lewp mints certificates only for .lewp SNI names") — the
+// daemon routes them over HTTP/DNS but never issues certificates for them, so
+// their handshake is refused here rather than served an untrusted leaf.
 func (m *Manager) GetCertificate(hello *gotls.ClientHelloInfo) (*gotls.Certificate, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	host := hello.ServerName
 	if host == "" {
 		return nil, errors.New("missing TLS SNI host")
@@ -201,13 +206,32 @@ func (m *Manager) GetCertificate(hello *gotls.ClientHelloInfo) (*gotls.Certifica
 	if !strings.HasSuffix(strings.TrimSuffix(strings.ToLower(host), "."), ".lewp") {
 		return nil, fmt.Errorf("TLS SNI host %q must be inside .lewp", host)
 	}
+
+	// Hold m.mu only for cache reads and writes, never across leaf generation.
+	// m.ca.Leaf does ECDSA keygen and signing; holding the lock across it would
+	// serialize every concurrent handshake — even ones whose host is already
+	// cached — behind a single cold mint.
+	m.mu.Lock()
 	if cert := m.cache[host]; cert != nil {
 		m.touch(host)
+		m.mu.Unlock()
 		return cert, nil
 	}
+	m.mu.Unlock()
+
 	cert, err := m.ca.Leaf(host)
 	if err != nil {
 		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// A concurrent handshake for the same host may have minted and cached a leaf
+	// while we generated ours; reuse the cached one so all callers for this host
+	// converge on a single certificate instead of racing to overwrite it.
+	if existing := m.cache[host]; existing != nil {
+		m.touch(host)
+		return existing, nil
 	}
 	m.cache[host] = cert
 	m.cacheOrder = append(m.cacheOrder, host)

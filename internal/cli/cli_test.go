@@ -11,7 +11,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/scottwater/lewp/internal/control"
 	"github.com/scottwater/lewp/internal/dns"
+	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/launchd"
 	"github.com/scottwater/lewp/internal/suffix"
 )
@@ -294,6 +296,54 @@ func TestDoctorChecksCustomSuffixDNS(t *testing.T) {
 	}
 	if got := strings.Join(lookedUp, ","); got != "doctor.lewp,doctor.local.todoordie.com" {
 		t.Fatalf("lookups=%q", got)
+	}
+}
+
+// TestDoctorInferenceUsesConfiguredSuffixes proves doctor's current-folder
+// inference honors configured custom suffixes the same way `lewp add` does: a
+// directory whose .lewp.local.toml pins a custom-suffix host must resolve OK,
+// not warn that the folder cannot infer a valid host.
+func TestDoctorInferenceUsesConfiguredSuffixes(t *testing.T) {
+	dir := t.TempDir()
+	suffixesPath := dir + "/suffixes.toml"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/.lewp.local.toml", []byte("host = \"app.local.todoordie.com\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	check := inferenceCheck(Config{WorkDir: dir, SuffixesPath: suffixesPath})
+	if check.Status != statusOK {
+		t.Fatalf("current-folder check should be ok for a configured suffix, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "app.local.todoordie.com") {
+		t.Fatalf("current-folder detail should name the configured host, got %q", check.Detail)
+	}
+}
+
+func TestDoctorConflictUsesConfiguredSuffixes(t *testing.T) {
+	dir := t.TempDir()
+	suffixesPath := dir + "/suffixes.toml"
+	if err := suffix.Save(suffixesPath, suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/.lewp.local.toml", []byte("host = \"app.local.todoordie.com\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	socketPath := startFakeControlResponse(t, control.Response{Entries: []control.ListEntry{{
+		Host:  "app.local.todoordie.com",
+		Path:  dir + "-other",
+		Kind:  identity.KindRoute,
+		State: "down",
+	}}})
+
+	checks := conflictCheck(Config{WorkDir: dir, SuffixesPath: suffixesPath, SocketPath: socketPath})
+	if len(checks) != 1 || checks[0].Name != "hostname conflict" || checks[0].Status != statusWarn {
+		t.Fatalf("expected configured-suffix conflict warning, got %+v", checks)
+	}
+	if !strings.Contains(checks[0].Detail, "app.local.todoordie.com") {
+		t.Fatalf("conflict detail should name the configured host, got %q", checks[0].Detail)
 	}
 }
 
