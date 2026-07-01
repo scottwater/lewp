@@ -20,7 +20,7 @@ func TestServeConnRecoversFromHandlerPanic(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		serveConn(server, func(context.Context, Request) (Response, error) {
+		serveConn(context.Background(), server, func(context.Context, Request) (Response, error) {
 			panic("crafted request blew up the handler")
 		})
 	}()
@@ -40,6 +40,139 @@ func TestServeConnRecoversFromHandlerPanic(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("serveConn did not return after recovering panic")
+	}
+}
+
+// TestCallHonorsContextDeadline covers the fix that propagates the caller's
+// deadline to the connection after dialing: a daemon that accepts a connection
+// but never replies must not hang the CLI. Without the SetDeadline, Decode here
+// would block until the test timed out.
+func TestCallHonorsContextDeadline(t *testing.T) {
+	socketDir, err := os.MkdirTemp("/tmp", fmt.Sprintf("lewp-%d-", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "control.sock")
+
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	holdConn := make(chan struct{})
+	t.Cleanup(func() { close(holdConn) })
+	// Accept connections but never respond, simulating a wedged daemon.
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		<-holdConn
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Call(ctx, socketPath, Request{Command: "doctor"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected Call to fail against an unresponsive daemon")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Call did not return after context deadline; connection deadline not applied")
+	}
+}
+
+// TestServeRejectsOversizedRequest covers the request-size cap: a client that
+// streams a body larger than maxRequestBytes gets an error response and the
+// server stays up rather than buffering it without bound.
+func TestServeRejectsOversizedRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socketDir, err := os.MkdirTemp("/tmp", fmt.Sprintf("lewp-%d-", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "control.sock")
+	registryPath := t.TempDir() + "/registry.sqlite"
+
+	errs := make(chan error, 1)
+	go func() {
+		errs <- Serve(ctx, socketPath, registryPath, registry.PortRange{Start: 41000, End: 41020})
+	}()
+	waitForSocket(t, socketPath, errs)
+
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	// An unterminated JSON string longer than the cap: the decoder reads up to
+	// the limit, then the LimitReader reports EOF and Decode fails.
+	oversized := append([]byte(`{"command":"`), make([]byte, maxRequestBytes+1<<20)...)
+	for i := len(`{"command":"`); i < len(oversized); i++ {
+		oversized[i] = 'a'
+	}
+	go func() { _, _ = conn.Write(oversized) }()
+
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var resp Response
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatalf("expected error response for oversized request, got decode error: %v", err)
+	}
+	if resp.Error == "" {
+		t.Fatalf("expected error response for oversized request, got: %+v", resp)
+	}
+
+	// The server must remain healthy for a normal request afterward.
+	if _, err := Call(ctx, socketPath, Request{Command: "doctor"}); err != nil {
+		t.Fatalf("server unhealthy after oversized request: %v", err)
+	}
+
+	cancel()
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func TestServeConnClosesIdleConnectionOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	client, server := net.Pipe()
+	defer client.Close()
+
+	done := make(chan struct{})
+	dispatchCalled := make(chan struct{}, 1)
+	go func() {
+		defer close(done)
+		serveConn(ctx, server, func(context.Context, Request) (Response, error) {
+			dispatchCalled <- struct{}{}
+			return Response{}, nil
+		})
+	}()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("serveConn did not stop promptly after context cancellation")
+	}
+	select {
+	case <-dispatchCalled:
+		t.Fatal("dispatch ran without a request")
+	default:
 	}
 }
 

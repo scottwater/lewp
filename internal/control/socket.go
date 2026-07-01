@@ -1,16 +1,39 @@
 package control
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/scottwater/lewp/internal/registry"
 	"github.com/scottwater/lewp/internal/suffix"
+)
+
+const (
+	// readTimeout bounds how long a connection may take to deliver its single
+	// request. A local process that connects but sends nothing (or partial JSON)
+	// is dropped instead of pinning a goroutine and fd forever.
+	readTimeout = 10 * time.Second
+	// writeTimeout bounds how long writing the response may block on a client
+	// that stops reading.
+	writeTimeout = 10 * time.Second
+	// requestTimeout bounds the dispatched command itself so a wedged registry
+	// operation cannot hang a handler indefinitely.
+	requestTimeout = 15 * time.Second
+	// maxRequestBytes caps a single request body. Control requests are small JSON
+	// objects; this rejects an oversized/never-ending body well before it can
+	// exhaust memory.
+	maxRequestBytes = 1 << 20 // 1 MiB
+	// handlerDrainTimeout bounds how long shutdown waits for in-flight handlers
+	// to finish before the deferred store.Close runs, so a stuck handler cannot
+	// block daemon shutdown forever.
+	handlerDrainTimeout = 5 * time.Second
 )
 
 type Request struct {
@@ -95,15 +118,41 @@ func ServeWithSuffixes(ctx context.Context, socketPath, registryPath string, por
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+	// handlers tracks in-flight connection handlers so shutdown can drain them
+	// before the deferred store.Close runs, avoiding a handler racing a closed
+	// registry.
+	var handlers sync.WaitGroup
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
+			drainHandlers(&handlers)
+			if ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		go handle(conn, svc)
+		handlers.Add(1)
+		go func() {
+			defer handlers.Done()
+			handle(ctx, conn, svc)
+		}()
+	}
+}
+
+// drainHandlers waits for in-flight handlers to finish, but no longer than
+// handlerDrainTimeout so a stuck handler cannot block shutdown. Per-connection
+// deadlines keep handlers bounded, so this normally returns promptly.
+func drainHandlers(handlers *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() {
+		handlers.Wait()
+		close(done)
+	}()
+	timer := time.NewTimer(handlerDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
 	}
 }
 
@@ -114,6 +163,12 @@ func Call(ctx context.Context, socketPath string, req Request) (Response, error)
 		return Response{}, err
 	}
 	defer conn.Close()
+	// DialContext only bounds the dial. Propagate the caller's deadline to the
+	// connection so a wedged daemon that accepts but never replies cannot hang
+	// the encode/decode (and therefore the CLI command) forever.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return Response{}, err
 	}
@@ -127,8 +182,8 @@ func Call(ctx context.Context, socketPath string, req Request) (Response, error)
 	return resp, nil
 }
 
-func handle(conn net.Conn, svc *Service) {
-	serveConn(conn, func(ctx context.Context, req Request) (Response, error) {
+func handle(ctx context.Context, conn net.Conn, svc *Service) {
+	serveConn(ctx, conn, func(ctx context.Context, req Request) (Response, error) {
 		return dispatch(ctx, svc, req)
 	})
 }
@@ -137,23 +192,46 @@ func handle(conn net.Conn, svc *Service) {
 // from a malformed or crafted request is recovered and returned as an error
 // response so a single bad connection cannot crash the daemon (which also owns
 // the proxy and DNS responder).
-func serveConn(conn net.Conn, dispatch func(context.Context, Request) (Response, error)) {
+//
+// The connection carries read/write deadlines and a request-size cap so a local
+// process that stalls, sends partial JSON, or streams an oversized body cannot
+// pin a handler goroutine. The dispatched command runs under a context derived
+// from the server context (so shutdown cancels in-flight work) with its own
+// timeout.
+func serveConn(ctx context.Context, conn net.Conn, dispatch func(context.Context, Request) (Response, error)) {
 	defer conn.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
 	defer func() {
 		if rec := recover(); rec != nil {
+			_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			_ = json.NewEncoder(conn).Encode(Response{Error: fmt.Sprintf("internal error: %v", rec)})
 		}
 	}()
+	writeResponse := func(resp Response) {
+		_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+		_ = json.NewEncoder(conn).Encode(resp)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
 	var req Request
-	if err := json.NewDecoder(bufio.NewReader(conn)).Decode(&req); err != nil {
-		_ = json.NewEncoder(conn).Encode(Response{Error: err.Error()})
+	if err := json.NewDecoder(io.LimitReader(conn, maxRequestBytes)).Decode(&req); err != nil {
+		writeResponse(Response{Error: err.Error()})
 		return
 	}
-	resp, err := dispatch(connContext(), req)
+	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
+	resp, err := dispatch(reqCtx, req)
 	if err != nil {
 		resp.Error = err.Error()
 	}
-	_ = json.NewEncoder(conn).Encode(resp)
+	writeResponse(resp)
 }
 
 func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) {
@@ -190,10 +268,6 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 	default:
 		return Response{}, errors.New("unknown command")
 	}
-}
-
-func connContext() context.Context {
-	return context.Background()
 }
 
 func dir(path string) string {

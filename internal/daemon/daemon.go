@@ -74,11 +74,27 @@ func Serve(ctx context.Context, cfg Config) error {
 			}
 		}()
 	}
+	// newServer builds a proxy server with header-read and idle-connection
+	// timeouts so a local client that opens a socket but never finishes its
+	// request headers (or keeps an idle keep-alive connection open) cannot pin a
+	// goroutine and fd forever. ReadTimeout/WriteTimeout are intentionally left
+	// unset: the proxy carries arbitrarily long streaming responses (SSE, large
+	// downloads) and slow request bodies (uploads), which a whole-request/response
+	// deadline would truncate.
+	newServer := func() *http.Server {
+		return &http.Server{
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+		}
+	}
 	for _, ln := range cfg.HTTPListeners {
-		serve(&http.Server{Handler: handler}, ln)
+		serve(newServer(), ln)
 	}
 	for _, ln := range cfg.HTTPSListeners {
-		serve(&http.Server{Handler: handler, TLSConfig: tlsConfig}, gotls.NewListener(ln, tlsConfig))
+		server := newServer()
+		server.TLSConfig = tlsConfig
+		serve(server, gotls.NewListener(ln, tlsConfig))
 	}
 	if len(servers) == 0 {
 		<-ctx.Done()

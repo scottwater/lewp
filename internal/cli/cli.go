@@ -8,8 +8,10 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/scottwater/lewp/internal/control"
@@ -255,9 +257,18 @@ func runDaemon(cfg Config) int {
 		return 1
 	}
 	managedSuffixes := suffix.Managed(suffixCfg.Suffixes)
-	ctx, cancel := context.WithCancel(context.Background())
+	// signal.NotifyContext cancels signalCtx on SIGTERM/SIGINT, the signals
+	// launchd (bootout) and an interactive stop send, so the subservers below
+	// run their context-driven cleanup (listener drain, handler drain, store
+	// close) instead of being killed mid-flight. The derived ctx also cancels
+	// when the first subserver exits with an error, bringing the rest down.
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(signalCtx)
 	defer cancel()
-	errs := make(chan error, 3)
+
+	const subservers = 3
+	errs := make(chan error, subservers)
 	go func() {
 		errs <- control.ServeWithSuffixes(ctx, cfg.SocketPath, control.DefaultRegistryPath(), registry.PortRange{Start: 41000, End: 49999}, managedSuffixes)
 	}()
@@ -274,9 +285,19 @@ func runDaemon(cfg Config) int {
 			CAKeyPath:       cfg.CAKeyPath,
 		})
 	}()
-	err = <-errs
-	if err != nil {
-		fmt.Fprintln(cfg.Stderr, err)
+
+	// Wait for the first subserver to exit (an error, or a clean stop from ctx
+	// cancellation), cancel the rest via stop(), then drain every subserver so no
+	// listener, control handler, or store close is abandoned mid-shutdown.
+	var firstErr error
+	for i := 0; i < subservers; i++ {
+		if err := <-errs; err != nil && firstErr == nil {
+			firstErr = err
+		}
+		cancel()
+	}
+	if firstErr != nil {
+		fmt.Fprintln(cfg.Stderr, firstErr)
 		return 1
 	}
 	return 0
@@ -868,8 +889,16 @@ func clientEnv() map[string]string {
 	return env
 }
 
+// controlCallTimeout bounds a single CLI control request end-to-end so a hung or
+// wedged daemon (one that accepts the connection but never replies) cannot stall
+// a command indefinitely. control.Call applies the deadline to the connection
+// after dialing, so it covers the encode/decode as well as the dial.
+const controlCallTimeout = 10 * time.Second
+
 func call(cfg Config, req control.Request) (control.Response, error) {
-	return control.Call(context.Background(), cfg.SocketPath, req)
+	ctx, cancel := context.WithTimeout(context.Background(), controlCallTimeout)
+	defer cancel()
+	return control.Call(ctx, cfg.SocketPath, req)
 }
 
 func daemonError(cfg Config, err error) int {
