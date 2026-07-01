@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -363,7 +364,7 @@ func TestProxyLoggingPreservesWebSocketUpgrade(t *testing.T) {
 	store := openProxyStore(t)
 	registerRoute(t, store, "feature-1.audit.lewp", port)
 	handler := New(store)
-	var logs bytes.Buffer
+	var logs lockedBuffer
 	handler.Logger = log.New(&logs, "", 0)
 	proxyServer := httptest.NewServer(handler)
 	defer proxyServer.Close()
@@ -466,6 +467,23 @@ func registerRoute(t *testing.T, store *registry.Store, host string, port int) i
 		t.Fatal("registered route not active")
 	}
 	return route.RouteID
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func freePort(t *testing.T) int {
