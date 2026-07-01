@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/scottwater/lewp/internal/suffix"
@@ -64,8 +65,16 @@ func ServeWithSuffixes(ctx context.Context, addr string, managed []string) error
 		return err
 	}
 	defer conn.Close()
+	// Close the socket when ctx is cancelled so the blocking ReadFrom returns.
+	// done bounds the watcher to this function so it never outlives Serve when
+	// the read loop exits for its own reason (e.g. an unexpected read error).
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
+		select {
+		case <-ctx.Done():
+		case <-done:
+		}
 		_ = conn.Close()
 	}()
 	buf := make([]byte, 1500)
@@ -85,7 +94,7 @@ func ServeWithSuffixes(ctx context.Context, addr string, managed []string) error
 }
 
 func ResolverFile(port int) string {
-	return "nameserver 127.0.0.1\nport " + itoa(port) + "\n"
+	return "nameserver 127.0.0.1\nport " + strconv.Itoa(port) + "\n"
 }
 
 func WriteResolverFile(path string, port int) error {
@@ -102,8 +111,7 @@ func ResolverPort(content string) (int, bool) {
 	for _, line := range strings.Split(content, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 && fields[0] == "port" {
-			n, ok := atoi(fields[1])
-			if ok {
+			if n, err := strconv.Atoi(fields[1]); err == nil && n > 0 && n <= 65535 {
 				return n, true
 			}
 		}
@@ -159,32 +167,4 @@ func Lookup(ctx context.Context, server, host string) (net.IP, error) {
 		}
 	}
 	return nil, errors.New("no A record in response")
-}
-
-func atoi(s string) (int, bool) {
-	if s == "" {
-		return 0, false
-	}
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, false
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, true
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

@@ -1,11 +1,14 @@
 package dns
 
 import (
+	"context"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -113,6 +116,24 @@ func TestResolverFileUsesHighPort(t *testing.T) {
 	}
 }
 
+func TestResolverPort(t *testing.T) {
+	got, ok := ResolverPort("nameserver 127.0.0.1\nport 15353\n")
+	if !ok || got != 15353 {
+		t.Fatalf("ResolverPort()=(%d, %v)", got, ok)
+	}
+	for _, content := range []string{
+		"nameserver 127.0.0.1\n",
+		"port -1\n",
+		"port 0\n",
+		"port 65536\n",
+		"port nope\n",
+	} {
+		if got, ok := ResolverPort(content); ok {
+			t.Fatalf("ResolverPort(%q)=(%d, true)", content, got)
+		}
+	}
+}
+
 func TestWriteResolverFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "resolver", "lewp")
 	if err := WriteResolverFile(path, 15353); err != nil {
@@ -125,6 +146,64 @@ func TestWriteResolverFile(t *testing.T) {
 	if string(got) != ResolverFile(15353) {
 		t.Fatalf("resolver file=%q", string(got))
 	}
+}
+
+func TestServeAnswersOverUDPAndShutsDown(t *testing.T) {
+	addr := freeUDPAddr(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- ServeWithSuffixes(ctx, addr, []string{"lewp"}) }()
+
+	// Retry the round trip until the server has bound its socket, rather than
+	// sleeping for a fixed interval.
+	ip, err := lookupWithRetry(t, ctx, addr, "feature-1.audit.lewp.")
+	if err != nil {
+		cancel()
+		t.Fatalf("lookup: %v", err)
+	}
+	if ip.String() != "127.0.0.1" {
+		cancel()
+		t.Fatalf("A=%s", ip)
+	}
+
+	cancel()
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("serve returned %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serve did not shut down after ctx cancel")
+	}
+}
+
+func freeUDPAddr(t *testing.T) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := conn.LocalAddr().String()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return addr
+}
+
+func lookupWithRetry(t *testing.T, ctx context.Context, server, host string) (net.IP, error) {
+	t.Helper()
+	var lastErr error
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		queryCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		ip, err := Lookup(queryCtx, server, host)
+		cancel()
+		if err == nil {
+			return ip, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
 }
 
 func mustQuery(t *testing.T, host string, typ dnsmessage.Type) []byte {
