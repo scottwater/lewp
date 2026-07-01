@@ -30,14 +30,19 @@ const schemaVersion = 2
 
 type Store struct {
 	db *sql.DB
-	// allocMu serializes lease allocation so concurrent Lease calls cannot
-	// SELECT the same free port before either inserts and then collide on the
-	// leases_port_active_uq unique index (busy_timeout does not retry
-	// constraint violations).
+	// allocMu serializes every writer that claims or relocates an active port so
+	// concurrent callers cannot SELECT the same free port (or both pass the
+	// cross-table active-port check) before either commits and then collide on
+	// the leases_port_active_uq / ports_port_active_uq unique indexes. Active
+	// port uniqueness spans the leases and ports tables and is enforced in
+	// application logic (activePortCount), not by a single SQLite constraint, so
+	// busy_timeout cannot rescue it. Every active-port writer - Lease, Remember,
+	// and MovePath - takes it.
 	allocMu sync.Mutex
 	// hostMu serializes route host conflict checks with host inserts/updates.
 	// Exact/wildcard overlap is enforced in application logic, not by a single
 	// SQLite constraint, so the check and write must happen under one lock.
+	// Acquire allocMu before hostMu when both are held to avoid deadlock.
 	hostMu sync.Mutex
 }
 
@@ -125,6 +130,11 @@ func dataSourceName(path string) string {
 	values.Add("_pragma", "busy_timeout(5000)")
 	values.Add("_pragma", "foreign_keys(ON)")
 	values.Add("_pragma", "journal_mode(WAL)")
+	// _txlock=immediate makes every read-write transaction BEGIN IMMEDIATE so it
+	// takes the write lock up front instead of upgrading a deferred read
+	// snapshot mid-transaction. Without it, WAL read-then-write paths can fail
+	// with SQLITE_BUSY_SNAPSHOT, which busy_timeout does not retry.
+	values.Add("_txlock", "immediate")
 	return (&url.URL{Scheme: "file", Path: path, RawQuery: values.Encode()}).String()
 }
 
@@ -344,6 +354,10 @@ func (s *Store) Remember(ctx context.Context, ident identity.Result, port int) e
 	if ident.Kind == identity.KindPort {
 		return s.rememberPort(ctx, ident, port)
 	}
+	// Remember claims an active port for the route, so it serializes with every
+	// other active-port writer via allocMu (acquired before hostMu).
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
 	s.hostMu.Lock()
 	defer s.hostMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -814,6 +828,8 @@ func (s *Store) leasePort(ctx context.Context, ident identity.Result, portRange 
 }
 
 func (s *Store) rememberPort(ctx context.Context, ident identity.Result, port int) error {
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1043,7 +1059,11 @@ func preferredReleasedRoutePort(ctx context.Context, tx *sql.Tx, routeID int64, 
 	if port < portRange.Start || port > portRange.End || !isPortFree(port) {
 		return 0, nil
 	}
-	if activePortCount(ctx, tx, port) > 0 {
+	active, err := activePortCount(ctx, tx, port)
+	if err != nil {
+		return 0, err
+	}
+	if active > 0 {
 		return 0, nil
 	}
 	return port, nil
@@ -1061,7 +1081,11 @@ func preferredReleasedBarePort(ctx context.Context, tx *sql.Tx, path, normalized
 	if port < portRange.Start || port > portRange.End || !isPortFree(port) {
 		return 0, nil
 	}
-	if activePortCount(ctx, tx, port) > 0 {
+	active, err := activePortCount(ctx, tx, port)
+	if err != nil {
+		return 0, err
+	}
+	if active > 0 {
 		return 0, nil
 	}
 	return port, nil
@@ -1095,19 +1119,23 @@ select port from ports where state=?`, StateActive, StateActive)
 	return 0, fmt.Errorf("no free port in range %d-%d", portRange.Start, portRange.End)
 }
 
-func activePortCount(ctx context.Context, tx *sql.Tx, port int) int {
+func activePortCount(ctx context.Context, tx *sql.Tx, port int) (int, error) {
 	var active int
 	err := tx.QueryRowContext(ctx, `select
 	(select count(*) from leases where port=? and state=?) +
 	(select count(*) from ports where port=? and state=?)`, port, StateActive, port, StateActive).Scan(&active)
 	if err != nil {
-		return 1
+		return 0, err
 	}
-	return active
+	return active, nil
 }
 
 func ensurePortAvailable(ctx context.Context, tx *sql.Tx, port int) error {
-	if activePortCount(ctx, tx, port) > 0 {
+	active, err := activePortCount(ctx, tx, port)
+	if err != nil {
+		return err
+	}
+	if active > 0 {
 		return fmt.Errorf("port %d is already active", port)
 	}
 	return nil

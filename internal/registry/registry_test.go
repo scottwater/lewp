@@ -188,6 +188,125 @@ func TestRememberRejectsDuplicateActivePortAcrossRoutesAndPorts(t *testing.T) {
 	}
 }
 
+func TestEnsurePortAvailablePropagatesQueryErrors(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+
+	tx, err := store.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// A failed count must surface the underlying error, not be silently treated
+	// as "port occupied" (which previously masked DB/context failures).
+	err = ensurePortAvailable(canceled, tx, 40000)
+	if err == nil {
+		t.Fatal("ensurePortAvailable returned nil for a canceled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error not propagated: got %v, want context.Canceled", err)
+	}
+	if strings.Contains(err.Error(), "already active") {
+		t.Fatalf("query error masked as occupied port: %v", err)
+	}
+}
+
+func TestConcurrentRememberRejectsDuplicateActivePort(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	const port = 43210
+
+	routeIdent := testIdentityForKind(t, identity.KindRoute)
+	portIdent := testIdentityForKind(t, identity.KindPort)
+
+	const n = 16
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := range n {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ident := routeIdent
+			if i%2 == 1 {
+				ident = portIdent
+			}
+			errs[i] = store.Remember(ctx, ident, port)
+		}(i)
+	}
+	wg.Wait()
+
+	// The first writer to win the port succeeds; every later writer of the other
+	// kind must fail the cross-table availability check. Regardless of
+	// interleaving, exactly one active row may hold the port across both tables.
+	succeeded := false
+	for _, err := range errs {
+		if err == nil {
+			succeeded = true
+		}
+	}
+	if !succeeded {
+		t.Fatalf("no Remember succeeded: %v", errs)
+	}
+	got := countRows(t, store.db, `select
+	(select count(*) from leases where port=? and state=?) +
+	(select count(*) from ports where port=? and state=?)`, port, StateActive, port, StateActive)
+	if got != 1 {
+		t.Fatalf("active rows holding port %d = %d, want 1 (cross-table collision)", port, got)
+	}
+}
+
+func TestConcurrentMovePathToSameDestinationKeepsOneRoute(t *testing.T) {
+	store := openTestStore(t)
+	defer store.Close()
+	ctx := context.Background()
+
+	srcA := testIdentity(t, "a.audit.lewp", identity.KindRoute)
+	srcA.Name, srcA.NormalizedName = "a", "a"
+	srcB := testIdentity(t, "b.audit.lewp", identity.KindRoute)
+	srcB.Name, srcB.NormalizedName = "b", "b"
+	if _, err := store.Lease(ctx, srcA, PortRange{Start: 41000, End: 41010}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Lease(ctx, srcB, PortRange{Start: 41011, End: 41020}); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, errs[0] = store.MovePath(ctx, srcA.Path, dest, identity.KindRoute)
+	}()
+	go func() {
+		defer wg.Done()
+		_, errs[1] = store.MovePath(ctx, srcB.Path, dest, identity.KindRoute)
+	}()
+	wg.Wait()
+
+	successes := 0
+	for _, err := range errs {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful moves = %d, want exactly 1 (errs=%v)", successes, errs)
+	}
+	if got := countRows(t, store.db, `select count(*) from routes r join leases l on l.route_id=r.id where r.path=? and l.state=?`, dest, StateActive); got != 1 {
+		t.Fatalf("active routes at destination = %d, want 1", got)
+	}
+	if got := countRows(t, store.db, `select count(*) from routes where path=?`, dest); got != 1 {
+		t.Fatalf("route rows at destination = %d, want 1", got)
+	}
+}
+
 func TestMovePathAllowsReleasedDestinationHistory(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()

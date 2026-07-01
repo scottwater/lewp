@@ -22,6 +22,14 @@ func (s *Store) MovePath(ctx context.Context, fromPath, toPath string, kind iden
 	if fromPath == toPath {
 		return nil, fmt.Errorf("source and destination are the same directory")
 	}
+	// MovePath relocates active routes (and the ports their leases hold) between
+	// paths and clears the destination, so it serializes with every active-port
+	// writer (allocMu) and route-host mutator (hostMu). Acquire allocMu before
+	// hostMu to match the lock order used by Lease and Remember.
+	s.allocMu.Lock()
+	defer s.allocMu.Unlock()
+	s.hostMu.Lock()
+	defer s.hostMu.Unlock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
