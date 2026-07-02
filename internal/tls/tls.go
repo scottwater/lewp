@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/scottwater/lewp/internal/suffix"
 )
 
 // CACommonName is the subject and keychain identity of the Lewp local CA.
@@ -33,6 +35,7 @@ type CA struct {
 
 type Manager struct {
 	ca         *CA
+	allowed    []string
 	mu         sync.Mutex
 	cache      map[string]*gotls.Certificate
 	cacheOrder []string
@@ -213,6 +216,17 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpPath, path)
 }
 
+// hostPermitted mirrors X.509 DNS name-constraint matching: a permitted entry
+// covers itself and any subdomain.
+func hostPermitted(host string, permitted []string) bool {
+	for _, p := range permitted {
+		if host == p || strings.HasSuffix(host, "."+p) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *CA) Leaf(host string) (*gotls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -238,24 +252,32 @@ func (c *CA) Leaf(host string) (*gotls.Certificate, error) {
 	return &gotls.Certificate{Certificate: [][]byte{der, c.CertDER}, PrivateKey: key}, nil
 }
 
-func NewManager(ca *CA) *Manager {
-	return &Manager{ca: ca, cache: map[string]*gotls.Certificate{}, cacheLimit: 128}
+// NewManager builds a minting manager limited to allowedSuffixes: the built-in
+// lewp suffix plus configured safe-subtree suffixes. Domain-mirror suffixes
+// must never be passed — minting a real registrable apex domain is the one
+// thing Lewp stays cryptographically unable to do.
+func NewManager(ca *CA, allowedSuffixes []string) *Manager {
+	return &Manager{ca: ca, allowed: append([]string(nil), allowedSuffixes...), cache: map[string]*gotls.Certificate{}, cacheLimit: 128}
 }
 
 // GetCertificate mints (and caches) a leaf certificate for the TLS SNI host.
 //
-// TLS is deliberately limited to the built-in .lewp suffix. Configured custom
-// public suffixes and domain mirrors are HTTP-only in V1 (see README and
-// DOCUMENTATION: "Lewp mints certificates only for .lewp SNI names") — the
-// daemon routes them over HTTP/DNS but never issues certificates for them, so
-// their handshake is refused here rather than served an untrusted leaf.
+// Minting is limited to the manager's allowlist (lewp + safe-subtree custom
+// suffixes; never domain mirrors). When the CA carries name constraints that
+// do not cover the host — a configured suffix whose CA rotation has not run —
+// the handshake is refused with a setup-pointing error instead of serving a
+// cert the browser would reject as a constraint violation.
 func (m *Manager) GetCertificate(hello *gotls.ClientHelloInfo) (*gotls.Certificate, error) {
 	host := hello.ServerName
 	if host == "" {
 		return nil, errors.New("missing TLS SNI host")
 	}
-	if !strings.HasSuffix(strings.TrimSuffix(strings.ToLower(host), "."), ".lewp") {
-		return nil, fmt.Errorf("TLS SNI host %q must be inside .lewp", host)
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if !suffix.HostInManagedSuffix(host, m.allowed) {
+		return nil, fmt.Errorf("TLS SNI host %q is outside the TLS-enabled suffixes %v", host, m.allowed)
+	}
+	if m.ca.HasNameConstraints() && !hostPermitted(host, m.ca.Certificate.PermittedDNSDomains) {
+		return nil, fmt.Errorf("local CA name constraints do not cover %q; re-run lewp setup to rotate the CA", host)
 	}
 
 	// Hold m.mu only for cache reads and writes, never across leaf generation.

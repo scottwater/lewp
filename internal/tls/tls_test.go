@@ -8,6 +8,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestManagerCachesSNILeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(ca)
+	manager := NewManager(ca, []string{"lewp"})
 	first, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: "feature-1.audit.lewp"})
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +177,7 @@ func TestManagerEvictsOldSNILeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(ca)
+	manager := NewManager(ca, []string{"lewp"})
 	manager.cacheLimit = 2
 	for _, host := range []string{"a.test.lewp", "b.test.lewp"} {
 		if _, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: host}); err != nil {
@@ -202,25 +203,75 @@ func TestManagerRejectsNonLewpSNI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(ca)
+	manager := NewManager(ca, []string{"lewp"})
 	if _, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: "example.com"}); err == nil {
 		t.Fatal("accepted non-.lewp SNI")
 	}
 }
 
-// TestManagerRejectsConfiguredCustomSuffixSNI locks the documented V1 contract:
-// custom public suffixes and domain mirrors are HTTP-only, so even a host under
-// a suffix the daemon routes for HTTP/DNS must be refused a leaf certificate.
-// See README/DOCUMENTATION ("Lewp mints certificates only for .lewp SNI names").
-func TestManagerRejectsConfiguredCustomSuffixSNI(t *testing.T) {
+func TestManagerMintsForAllowedCustomSuffix(t *testing.T) {
+	ca, err := NewCA(CACommonName, []string{"lewp", "local.todoordie.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(ca, []string{"lewp", "local.todoordie.com"})
+	leaf, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: "app.local.todoordie.com"})
+	if err != nil {
+		t.Fatalf("refused allowed custom-suffix host: %v", err)
+	}
+	cert, err := x509.ParseCertificate(leaf.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cert.DNSNames) != 1 || cert.DNSNames[0] != "app.local.todoordie.com" {
+		t.Fatalf("DNSNames=%v", cert.DNSNames)
+	}
+}
+
+func TestManagerRejectsUnlistedSuffixes(t *testing.T) {
 	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(ca)
-	for _, host := range []string{"app.local.todoordie.com", "app.localkickofflabs.com"} {
+	// Domain mirrors and unmanaged names never appear in allowedSuffixes, so
+	// the allowlist refuses them regardless of routing or DNS state.
+	manager := NewManager(ca, []string{"lewp"})
+	for _, host := range []string{"example.com", "app.localkickofflabs.com", "app.local.todoordie.com"} {
 		if _, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: host}); err == nil {
-			t.Fatalf("issued a leaf for custom-suffix host %q; custom suffixes are HTTP-only in V1", host)
+			t.Fatalf("issued a leaf for unlisted host %q", host)
+		}
+	}
+}
+
+// TestManagerRefusesWhenCAConstraintsLagConfig: suffix configured but the CA
+// was not rotated — refuse with a setup-pointing error instead of minting a
+// cert the browser will reject with a scarier constraint-violation error.
+func TestManagerRefusesWhenCAConstraintsLagConfig(t *testing.T) {
+	ca, err := NewCA(CACommonName, []string{"lewp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(ca, []string{"lewp", "local.todoordie.com"})
+	_, err = manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: "app.local.todoordie.com"})
+	if err == nil {
+		t.Fatal("minted despite CA constraints not covering the host")
+	}
+	if !strings.Contains(err.Error(), "lewp setup") {
+		t.Fatalf("stale-CA error does not point at lewp setup: %v", err)
+	}
+}
+
+// TestManagerLegacyUnconstrainedCAStillMints: during migration an existing
+// unconstrained CA keeps working (doctor flags it); minting is not blocked.
+func TestManagerLegacyUnconstrainedCAStillMints(t *testing.T) {
+	ca, err := NewCA(CACommonName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(ca, []string{"lewp", "local.todoordie.com"})
+	for _, host := range []string{"feature-1.audit.lewp", "app.local.todoordie.com"} {
+		if _, err := manager.GetCertificate(&gotls.ClientHelloInfo{ServerName: host}); err != nil {
+			t.Fatalf("legacy CA refused %q: %v", host, err)
 		}
 	}
 }
@@ -234,7 +285,7 @@ func TestManagerConcurrentSameHostConverges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewManager(ca)
+	manager := NewManager(ca, []string{"lewp"})
 
 	const goroutines = 16
 	var wg sync.WaitGroup

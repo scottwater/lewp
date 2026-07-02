@@ -57,7 +57,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		tlsConfig = localtls.NewManager(ca).TLSConfig()
+		tlsConfig = localtls.NewManager(ca, []string{"lewp"}).TLSConfig()
 	}
 
 	var wg sync.WaitGroup
