@@ -118,6 +118,16 @@ func TestResolveInfersGitWorktree(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsEmptyWorkDir(t *testing.T) {
+	_, err := Resolve(context.Background(), Options{})
+	if err == nil {
+		t.Fatal("Resolve accepted an empty WorkDir instead of rejecting it")
+	}
+	if !strings.Contains(err.Error(), "working directory") {
+		t.Fatalf("error should mention the missing working directory: %v", err)
+	}
+}
+
 func TestResolveRejectsUnknownConfigKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ConfigFileName), []byte("root = \"audit\"\nnaem = \"typo\"\n"), 0o600); err != nil {

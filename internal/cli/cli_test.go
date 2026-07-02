@@ -41,6 +41,26 @@ func TestRunAddReportsDaemonNotRunning(t *testing.T) {
 	}
 }
 
+// TestRunGetwdFailureIsFatal confirms that when the current directory cannot be
+// determined (e.g. it was deleted out from under the shell), Run exits non-zero
+// with deleted-directory guidance instead of leaving WorkDir empty — which would
+// make the daemon resolve identity against its own launchd cwd of "/".
+func TestRunGetwdFailureIsFatal(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:   []string{"add"},
+		Stdout: &stdout,
+		Stderr: &stderr,
+		Getwd:  func() (string, error) { return "", errors.New("getwd: no such file or directory") },
+	})
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "cannot determine the current directory") {
+		t.Fatalf("stderr missing deleted-directory guidance: %q", stderr.String())
+	}
+}
+
 func TestRunSystemStartPrintsLaunchdPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var ran []string

@@ -156,9 +156,8 @@ func canonicalManagedSuffixes(managed []string) []string {
 }
 
 // requestEnv normalizes a request's forwarded environment to a non-nil map.
-// identity.Resolve falls back to the *daemon* process environment when handed a
-// nil map; passing an empty (non-nil) map instead guarantees the daemon never
-// honors its own LEWP_* variables — only values the client explicitly forwarded.
+// Passing an empty map guarantees the daemon never honors its own LEWP_*
+// variables; only values the client explicitly forwarded can affect identity.
 func requestEnv(env map[string]string) map[string]string {
 	if env == nil {
 		return map[string]string{}
@@ -405,13 +404,14 @@ func (s *Service) Move(ctx context.Context, req MoveRequest) ([]ListEntry, error
 	return entries, nil
 }
 
+// absWorkDir absolutizes a request's working directory. An empty WorkDir is
+// rejected rather than defaulted to os.Getwd(): the daemon runs under launchd
+// with cwd `/`, so substituting its own directory would resolve requests against
+// the wrong path (info/move/release against `/`). The client always forwards its
+// directory, so an empty value here means a broken request.
 func absWorkDir(workDir string) (string, error) {
 	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return "", err
-		}
+		return "", errors.New("request has no working directory")
 	}
 	return filepath.Abs(workDir)
 }

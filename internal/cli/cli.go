@@ -69,6 +69,10 @@ type Config struct {
 	// actually honoring /etc/resolver/lewp — the one thing LookupLewp cannot see;
 	// tests inject a fake.
 	SystemResolve func(ctx context.Context, host string) ([]net.IP, error)
+	// Getwd reports the client's current directory when WorkDir is unset. Run
+	// populates it from os.Getwd when nil; tests inject a fake to exercise the
+	// fatal deleted-directory path (os.Getwd can still succeed on a removed cwd).
+	Getwd func() (string, error)
 }
 
 func Run(cfg Config) int {
@@ -81,8 +85,23 @@ func Run(cfg Config) int {
 	if cfg.Stdin == nil {
 		cfg.Stdin = os.Stdin
 	}
+	if cfg.Getwd == nil {
+		cfg.Getwd = os.Getwd
+	}
 	if cfg.WorkDir == "" {
-		cfg.WorkDir, _ = os.Getwd()
+		// Fail loudly rather than leaving WorkDir empty: an empty WorkDir makes the
+		// daemon fall back to ITS OWN cwd (`/` under launchd), which resolves a
+		// bogus identity — `lewp add` dies with `root "/" is unusable` and `lewp
+		// release` reports "no active route" while the real route stays live. This
+		// happens when the current directory has been deleted out from under the
+		// shell (routine with worktrees), so point the user at the fix directly.
+		wd, err := cfg.Getwd()
+		if err != nil {
+			fmt.Fprintln(cfg.Stderr, "lewp: cannot determine the current directory (was it deleted?)")
+			fmt.Fprintln(cfg.Stderr, "cd out of and back into the directory (or into an existing one), then re-run.")
+			return 1
+		}
+		cfg.WorkDir = wd
 	}
 	if cfg.Env == nil {
 		cfg.Env = clientEnv()

@@ -8,6 +8,41 @@ import (
 	"github.com/scottwater/lewp/internal/registry"
 )
 
+// TestServiceRejectsEmptyWorkDir confirms the daemon rejects requests with no
+// working directory rather than substituting its own launchd cwd ("/"). A client
+// that forwarded an empty WorkDir would otherwise lease/inspect/release routes
+// and aliases against the wrong path.
+func TestServiceRejectsEmptyWorkDir(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+
+	cases := map[string]func() error{
+		"lease":   func() error { _, err := svc.Lease(ctx, LeaseRequest{}); return err },
+		"port":    func() error { _, err := svc.Port(ctx, PortRequest{Name: "vite"}); return err },
+		"info":    func() error { _, err := svc.Info(ctx, InfoRequest{}); return err },
+		"move":    func() error { _, err := svc.Move(ctx, MoveRequest{From: t.TempDir()}); return err },
+		"release": func() error { _, err := svc.Release(ctx, ReleaseRequest{}); return err },
+		"alias add": func() error {
+			_, err := svc.AliasAdd(ctx, AliasRequest{Host: "tags.app.lewp"})
+			return err
+		},
+		"alias list": func() error {
+			_, err := svc.AliasList(ctx, AliasRequest{})
+			return err
+		},
+		"alias remove": func() error {
+			_, err := svc.AliasRemove(ctx, AliasRequest{Host: "tags.app.lewp"})
+			return err
+		},
+	}
+	for name, call := range cases {
+		if err := call(); err == nil {
+			t.Errorf("%s accepted an empty WorkDir instead of rejecting it", name)
+		}
+	}
+}
+
 func TestServiceInfoReturnsActiveRouteForDir(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})

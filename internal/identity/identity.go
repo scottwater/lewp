@@ -95,13 +95,13 @@ var unsafeLabel = regexp.MustCompile(`[^a-z0-9]+`)
 // side it is the control dispatch context, so a slow or dead network mount
 // cannot pin a handler goroutine past the request deadline.
 func Resolve(ctx context.Context, opts Options) (Result, error) {
+	// Reject an empty WorkDir instead of falling back to os.Getwd(). On the daemon
+	// side that fallback would resolve identity against the daemon's OWN cwd (`/`
+	// under launchd), silently producing a bogus route; the client is responsible
+	// for supplying the directory it wants resolved.
 	workDir := opts.WorkDir
 	if workDir == "" {
-		var err error
-		workDir, err = os.Getwd()
-		if err != nil {
-			return Result{}, err
-		}
+		return Result{}, errors.New("no working directory provided")
 	}
 	abs, err := filepath.Abs(workDir)
 	if err != nil {
