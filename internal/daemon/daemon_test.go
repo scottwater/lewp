@@ -202,6 +202,53 @@ func TestServeShutdownLetsInFlightRequestFinish(t *testing.T) {
 	}
 }
 
+// TestServeMintsForConfiguredTLSSuffix drives a real TLS handshake through the
+// daemon's HTTPS listener for a custom safe-subtree host and checks the served
+// leaf, proving the TLSSuffixes plumbing end to end.
+func TestServeMintsForConfiguredTLSSuffix(t *testing.T) {
+	dir := t.TempDir()
+	ln := listenLocal(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, Config{
+			RegistryPath:    dir + "/registry.sqlite",
+			HTTPSListeners:  []net.Listener{ln},
+			ManagedSuffixes: []string{"lewp", "local.todoordie.com"},
+			TLSSuffixes:     []string{"lewp", "local.todoordie.com"},
+			CAPath:          dir + "/ca.pem",
+			CAKeyPath:       dir + "/ca-key.pem",
+		})
+	}()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Serve: %v", err)
+		}
+	}()
+
+	var conn *tls.Conn
+	var err error
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+		conn, err = tls.Dial("tcp", ln.Addr().String(), &tls.Config{
+			ServerName:         "app.local.todoordie.com",
+			InsecureSkipVerify: true,
+		})
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("handshake for custom-suffix host failed: %v", err)
+	}
+	defer conn.Close()
+	leaf := conn.ConnectionState().PeerCertificates[0]
+	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "app.local.todoordie.com" {
+		t.Fatalf("served leaf DNSNames=%v", leaf.DNSNames)
+	}
+}
+
 func listenLocal(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

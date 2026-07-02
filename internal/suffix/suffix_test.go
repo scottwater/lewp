@@ -96,6 +96,24 @@ func TestHostInManagedSuffix(t *testing.T) {
 	}
 }
 
+func TestTLSEligibleFiltersDomainMirrors(t *testing.T) {
+	entries := []Entry{
+		{Name: "localkickofflabs.com", Mode: ModeDomainMirror},
+		{Name: "local.todoordie.com", Mode: ModeSafeSubtree},
+	}
+	got := TLSEligible(entries)
+	want := []string{"lewp", "local.todoordie.com"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("TLSEligible=%v want %v", got, want)
+	}
+}
+
+func TestTLSEligibleEmptyConfig(t *testing.T) {
+	if got := TLSEligible(nil); !reflect.DeepEqual(got, []string{"lewp"}) {
+		t.Fatalf("TLSEligible(nil)=%v", got)
+	}
+}
+
 func TestLoadSaveAddRemoveRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "suffixes.toml")
 

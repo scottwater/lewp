@@ -111,6 +111,32 @@ func Managed(custom []Entry) []string {
 	return append([]string{BuiltIn}, normalized...)
 }
 
+// TLSEligible returns the suffixes the local CA may be constrained to and the
+// TLS manager may mint for: the built-in lewp suffix plus every valid
+// safe-subtree custom suffix. Domain mirrors are excluded by design — Lewp
+// must stay cryptographically unable to issue certificates for a real
+// registrable apex domain.
+func TLSEligible(custom []Entry) []string {
+	seen := map[string]struct{}{BuiltIn: {}}
+	normalized := make([]string, 0, len(custom))
+	for _, entry := range custom {
+		if entry.Mode != ModeSafeSubtree {
+			continue
+		}
+		s, err := ValidateCustom(entry.Name, entry.Mode)
+		if err != nil {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		normalized = append(normalized, s)
+	}
+	sort.Strings(normalized)
+	return append([]string{BuiltIn}, normalized...)
+}
+
 func Names(entries []Entry) []string {
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {

@@ -22,9 +22,13 @@ type Config struct {
 	HTTPListeners   []net.Listener
 	HTTPSListeners  []net.Listener
 	ManagedSuffixes []string
-	TLSConfig       *gotls.Config
-	CAPath          string
-	CAKeyPath       string
+	// TLSSuffixes lists the suffixes the TLS manager may mint leaves for and
+	// the CA (when created here) is constrained to: lewp + safe-subtree custom
+	// suffixes, never domain mirrors. Empty means lewp only.
+	TLSSuffixes []string
+	TLSConfig   *gotls.Config
+	CAPath      string
+	CAKeyPath   string
 	// RequestLog receives one line per proxied request. When nil it defaults to
 	// os.Stdout, which launchd routes to the daemon's StandardOutPath log file.
 	RequestLog io.Writer
@@ -47,17 +51,23 @@ func Serve(ctx context.Context, cfg Config) error {
 	handler.Logger = log.New(requestLog, "", log.LstdFlags|log.LUTC)
 	tlsConfig := cfg.TLSConfig
 	if tlsConfig == nil && len(cfg.HTTPSListeners) > 0 {
+		tlsSuffixes := cfg.TLSSuffixes
+		if len(tlsSuffixes) == 0 {
+			tlsSuffixes = []string{"lewp"}
+		}
 		var ca *localtls.CA
 		var err error
 		if cfg.CAPath != "" && cfg.CAKeyPath != "" {
-			ca, err = localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, []string{"lewp"})
+			// Create-if-missing only: rotation of an existing CA is setup's
+			// job because only setup owns keychain prompts.
+			ca, err = localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, tlsSuffixes)
 		} else {
-			ca, err = localtls.NewCA(localtls.CACommonName, []string{"lewp"})
+			ca, err = localtls.NewCA(localtls.CACommonName, tlsSuffixes)
 		}
 		if err != nil {
 			return err
 		}
-		tlsConfig = localtls.NewManager(ca, []string{"lewp"}).TLSConfig()
+		tlsConfig = localtls.NewManager(ca, tlsSuffixes).TLSConfig()
 	}
 
 	var wg sync.WaitGroup

@@ -282,6 +282,7 @@ func runDaemon(cfg Config) int {
 			HTTPListeners:   httpListeners,
 			HTTPSListeners:  httpsListeners,
 			ManagedSuffixes: managedSuffixes,
+			TLSSuffixes:     suffix.TLSEligible(suffixCfg.Suffixes),
 			CAPath:          cfg.CAPath,
 			CAKeyPath:       cfg.CAKeyPath,
 		})
