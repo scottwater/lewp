@@ -357,7 +357,7 @@ func runSetup(cfg Config) int {
 	// before the sudo resolver write and the keychain prompt avoids leaving the
 	// system half-configured if CA generation fails after the user has already
 	// authenticated.
-	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, "Lewp Local Development CA"); err != nil {
+	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, []string{suffix.BuiltIn}); err != nil {
 		fmt.Fprintf(cfg.Stderr, "create CA: %v\n", err)
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.CAPath)
 		return 1

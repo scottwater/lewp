@@ -50,9 +50,9 @@ func Serve(ctx context.Context, cfg Config) error {
 		var ca *localtls.CA
 		var err error
 		if cfg.CAPath != "" && cfg.CAKeyPath != "" {
-			ca, err = localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, "Lewp Local Development CA")
+			ca, err = localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, []string{"lewp"})
 		} else {
-			ca, err = localtls.NewCA("Lewp Local Development CA")
+			ca, err = localtls.NewCA(localtls.CACommonName, []string{"lewp"})
 		}
 		if err != nil {
 			return err

@@ -6,12 +6,15 @@ import (
 	"crypto/x509"
 	"errors"
 	"os"
+	"reflect"
+	"sort"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestCreateCAAndLeafCertificate(t *testing.T) {
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +36,7 @@ func TestCreateCAAndLeafCertificate(t *testing.T) {
 }
 
 func TestManagerCachesSNILeaves(t *testing.T) {
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,11 +62,11 @@ func TestEnsureCALoadsPersistedCA(t *testing.T) {
 	dir := t.TempDir()
 	certPath := dir + "/ca.pem"
 	keyPath := dir + "/ca-key.pem"
-	first, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA")
+	first, err := EnsureCA(certPath, keyPath, CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA")
+	second, err := EnsureCA(certPath, keyPath, CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +89,7 @@ func TestEnsureCADoesNotOverwriteCorruptCA(t *testing.T) {
 	if err := os.WriteFile(keyPath, corrupt, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA"); err == nil {
+	if _, err := EnsureCA(certPath, keyPath, CACommonName, []string{"lewp"}); err == nil {
 		t.Fatal("EnsureCA succeeded over corrupt CA material")
 	}
 	got, err := os.ReadFile(certPath)
@@ -109,7 +112,7 @@ func TestEnsureCARecoversCertOnlyPartialSave(t *testing.T) {
 	dir := t.TempDir()
 	certPath := dir + "/ca.pem"
 	keyPath := dir + "/ca-key.pem"
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +126,7 @@ func TestEnsureCARecoversCertOnlyPartialSave(t *testing.T) {
 	if err := os.Remove(keyPath); err != nil {
 		t.Fatal(err)
 	}
-	recovered, err := EnsureCA(certPath, keyPath, "Lewp Local Development CA")
+	recovered, err := EnsureCA(certPath, keyPath, CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +172,7 @@ func (failingReader) Read([]byte) (int, error) {
 }
 
 func TestManagerEvictsOldSNILeaves(t *testing.T) {
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +198,7 @@ func TestManagerEvictsOldSNILeaves(t *testing.T) {
 }
 
 func TestManagerRejectsNonLewpSNI(t *testing.T) {
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +213,7 @@ func TestManagerRejectsNonLewpSNI(t *testing.T) {
 // a suffix the daemon routes for HTTP/DNS must be refused a leaf certificate.
 // See README/DOCUMENTATION ("Lewp mints certificates only for .lewp SNI names").
 func TestManagerRejectsConfiguredCustomSuffixSNI(t *testing.T) {
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +230,7 @@ func TestManagerRejectsConfiguredCustomSuffixSNI(t *testing.T) {
 // one host must converge on a single cached certificate and not corrupt the LRU
 // bookkeeping. Run with -race to catch cache/order data races.
 func TestManagerConcurrentSameHostConverges(t *testing.T) {
-	ca, err := NewCA("Lewp Local Development CA")
+	ca, err := NewCA(CACommonName, []string{"lewp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +260,102 @@ func TestManagerConcurrentSameHostConverges(t *testing.T) {
 	}
 	if len(manager.cacheOrder) != 1 || manager.cache["feature-1.audit.lewp"] == nil {
 		t.Fatalf("cache did not converge on one leaf: order=%v", manager.cacheOrder)
+	}
+}
+
+// TestNewCASetsNameConstraints is the regression test for the 2026-07 security
+// review finding: the trusted root must be cryptographically limited to its
+// configured suffixes so a stolen CA key cannot sign arbitrary domains.
+func TestNewCASetsNameConstraints(t *testing.T) {
+	ca, err := NewCA(CACommonName, []string{"lewp", "local.todoordie.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert := ca.Certificate
+	want := []string{"lewp", "local.todoordie.com"}
+	got := append([]string(nil), cert.PermittedDNSDomains...)
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PermittedDNSDomains=%v want %v", got, want)
+	}
+	if !cert.PermittedDNSDomainsCritical {
+		t.Fatal("name constraints are not critical")
+	}
+	if len(cert.ExcludedIPRanges) != 2 {
+		t.Fatalf("ExcludedIPRanges=%v, want all of IPv4+IPv6 excluded", cert.ExcludedIPRanges)
+	}
+	if !cert.MaxPathLenZero {
+		t.Fatal("CA can mint sub-CAs (MaxPathLenZero unset)")
+	}
+	if !ca.HasNameConstraints() {
+		t.Fatal("HasNameConstraints=false for constrained CA")
+	}
+}
+
+func TestNewCANilDomainsIsUnconstrained(t *testing.T) {
+	ca, err := NewCA(CACommonName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.HasNameConstraints() {
+		t.Fatal("nil domain list produced constraints")
+	}
+}
+
+// TestConstrainedCARejectsOutOfScopeLeaf simulates the stolen-key forgery:
+// a leaf for a public domain signed with the CA key must fail chain
+// verification against the constrained root, while an in-scope leaf passes.
+func TestConstrainedCARejectsOutOfScopeLeaf(t *testing.T) {
+	ca, err := NewCA(CACommonName, []string{"lewp", "local.todoordie.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Certificate)
+	verify := func(host string) error {
+		leaf, err := ca.Leaf(host)
+		if err != nil {
+			return err
+		}
+		cert, err := x509.ParseCertificate(leaf.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = cert.Verify(x509.VerifyOptions{Roots: roots, DNSName: host, CurrentTime: time.Now()})
+		return err
+	}
+	for _, host := range []string{"feature-1.audit.lewp", "app.local.todoordie.com"} {
+		if err := verify(host); err != nil {
+			t.Fatalf("in-scope host %q failed verification: %v", host, err)
+		}
+	}
+	for _, host := range []string{"github.com", "login.example.com"} {
+		if err := verify(host); err == nil {
+			t.Fatalf("out-of-scope forged leaf for %q verified against constrained root", host)
+		}
+	}
+}
+
+func TestConstraintsMatch(t *testing.T) {
+	ca, err := NewCA(CACommonName, []string{"lewp", "local.todoordie.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ConstraintsMatch(ca, []string{"local.todoordie.com", "lewp"}) {
+		t.Fatal("order-insensitive match failed")
+	}
+	if ConstraintsMatch(ca, []string{"lewp"}) {
+		t.Fatal("matched despite extra constraint")
+	}
+	if ConstraintsMatch(ca, []string{"lewp", "local.todoordie.com", "local.other.com"}) {
+		t.Fatal("matched despite missing constraint")
+	}
+	legacy, err := NewCA(CACommonName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ConstraintsMatch(legacy, []string{"lewp"}) {
+		t.Fatal("legacy unconstrained CA reported as matching")
 	}
 }
 

@@ -13,12 +13,17 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 )
+
+// CACommonName is the subject and keychain identity of the Lewp local CA.
+const CACommonName = "Lewp Local Development CA"
 
 type CA struct {
 	Certificate *x509.Certificate
@@ -34,7 +39,12 @@ type Manager struct {
 	cacheLimit int
 }
 
-func NewCA(commonName string) (*CA, error) {
+// NewCA mints a self-signed root. permittedDNSDomains become critical X.509
+// name constraints: browsers refuse any leaf outside them no matter who holds
+// the CA key, so a stolen key cannot forge certificates for public domains.
+// An empty list creates an unconstrained CA and is reserved for tests that
+// simulate pre-constraint CAs.
+func NewCA(commonName string, permittedDNSDomains []string) (*CA, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, err
@@ -52,6 +62,17 @@ func NewCA(commonName string) (*CA, error) {
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 	}
+	if len(permittedDNSDomains) > 0 {
+		tmpl.PermittedDNSDomains = append([]string(nil), permittedDNSDomains...)
+		tmpl.PermittedDNSDomainsCritical = true
+		// No IP-SAN leaves ever: exclude the entire IPv4 and IPv6 space.
+		tmpl.ExcludedIPRanges = []*net.IPNet{
+			{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+			{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
+		}
+		// No sub-CAs: constraints cannot be laundered through an intermediate.
+		tmpl.MaxPathLenZero = true
+	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
 		return nil, err
@@ -63,7 +84,37 @@ func NewCA(commonName string) (*CA, error) {
 	return &CA{Certificate: cert, Key: key, CertDER: der}, nil
 }
 
-func EnsureCA(certPath, keyPath, commonName string) (*CA, error) {
+// HasNameConstraints reports whether the CA certificate carries DNS name
+// constraints. False means a legacy (pre-constraint) CA that can sign any
+// domain; doctor treats that as a failure.
+func (c *CA) HasNameConstraints() bool {
+	return len(c.Certificate.PermittedDNSDomains) > 0
+}
+
+// ConstraintsMatch reports whether the CA's permitted-DNS set is exactly the
+// desired suffix set (order-insensitive) with the constraint marked critical.
+// setup uses it to decide rotation; doctor uses it to flag drift.
+func ConstraintsMatch(ca *CA, desired []string) bool {
+	cert := ca.Certificate
+	if !cert.PermittedDNSDomainsCritical || len(cert.ExcludedIPRanges) == 0 {
+		return false
+	}
+	if len(cert.PermittedDNSDomains) != len(desired) {
+		return false
+	}
+	got := append([]string(nil), cert.PermittedDNSDomains...)
+	want := append([]string(nil), desired...)
+	sort.Strings(got)
+	sort.Strings(want)
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func EnsureCA(certPath, keyPath, commonName string, permittedDNSDomains []string) (*CA, error) {
 	ca, err := LoadCA(certPath, keyPath)
 	if err == nil {
 		return ca, nil
@@ -83,7 +134,7 @@ func EnsureCA(certPath, keyPath, commonName string) (*CA, error) {
 	if fileExists(certPath) || fileExists(keyPath) {
 		return nil, err
 	}
-	ca, err = NewCA(commonName)
+	ca, err = NewCA(commonName, permittedDNSDomains)
 	if err != nil {
 		return nil, err
 	}
