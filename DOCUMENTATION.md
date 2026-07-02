@@ -65,8 +65,14 @@ error) plus a `Next:` line describing how to recover — for example the precise
 
 `.lewp` is built in and is always installed. `--suffix S` additively installs a
 resolver for an owned public dev suffix, useful when an OAuth provider rejects
-private TLDs. Custom public suffix and domain-mirror routing is HTTP-only in V1;
-Lewp's local TLS certificate issuance is limited to `.lewp` hosts.
+private TLDs.
+
+Lewp's local TLS certificate issuance covers `.lewp` hosts and configured
+safe-subtree custom suffixes; domain-mirror suffixes are HTTP-only. The CA is
+name-constrained to exactly that set and `lewp setup` rotates it (untrust,
+regenerate, re-trust — one keychain prompt) whenever the set changes. `lewp
+doctor` fails on a legacy unconstrained CA and warns when constraints drift
+from the suffix config.
 
 By default, custom suffixes use safe-subtree mode:
 
@@ -226,10 +232,10 @@ HOST_KIND=instance
 ```
 
 `URL` is always `http://<host>` and `HTTPS_URL` is always `https://<host>`; both
-are emitted whenever the lease has a routable host. For `.lewp` hosts, the
-`HTTPS_URL` line is usable after `lewp setup` trusts the local CA. For configured
-custom public suffixes and domain mirrors, routing is HTTP-only in V1 unless TLS
-support is expanded; see [Browser URLs](#browser-urls).
+are emitted whenever the lease has a routable host. The `HTTPS_URL` line is
+usable for `.lewp` hosts and configured safe-subtree custom suffix hosts once
+`lewp setup` has trusted the local CA for that suffix. Domain-mirror hosts stay
+HTTP-only; see [Browser URLs](#browser-urls).
 `STATE` is `new`, `reused`, or `conflict-renamed`, and `HOST_KIND` is
 `instance`, `apex`, or `custom`. Because `.lewp` names resolve only to loopback,
 the human output also prints a `# <host> is local-only (resolves to 127.0.0.1)`
@@ -700,7 +706,7 @@ For routed leases, open:
 
 ```text
 http://<host>
-https://<host>   # .lewp hosts only
+https://<host>   # .lewp and safe-subtree custom suffix hosts
 ```
 
 DNS resolves all `.lewp` names and configured custom suffixes to loopback. The
@@ -708,10 +714,12 @@ proxy routes by full registered host. Different primary routes can point to
 different local ports, while route aliases let multiple hostnames point to one
 route and port. Wildcard aliases match one label only.
 
-HTTPS uses Lewp's local CA, created and trusted by `lewp setup`. Browser support
-in V1 is `.lewp`-only: Lewp mints certificates only for `.lewp` SNI names.
-Configured custom public suffixes and domain mirrors route over HTTP unless TLS
-support is expanded.
+HTTPS uses Lewp's local CA, created and trusted by `lewp setup`. Lewp mints
+certificates for `.lewp` SNI names and configured safe-subtree custom suffixes;
+the CA carries critical X.509 name constraints limited to exactly that set, and
+`lewp setup` rotates the CA whenever the configured suffix set changes.
+Domain-mirror suffixes always route over HTTP — Lewp's CA is cryptographically
+unable to sign a real registrable domain.
 
 - **Safari and Chromium browsers** (Chrome, Brave, Arc, Edge, Helium) trust the
   macOS system keychain, so `https://<host>` works as soon as `lewp setup` has

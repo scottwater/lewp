@@ -32,6 +32,11 @@ read-only guides, not dependencies — this is a fresh binary.
    (Chrome/Brave/Arc/Edge/Helium). Firefox/NSS deferred to vNext (purely additive `certutil` step).
 5. **Worktrees: first-class git detection.** Derive `root` from the main repo, `instance` from the
    worktree branch/dir, regardless of physical layout.
+6. **Local CA carries critical X.509 name constraints** (`lewp` + safe-subtree custom suffixes,
+   never domain mirrors), so a stolen CA key cannot sign certificates outside Lewp's scope. `lewp
+   setup` rotates the CA when the constraint set drifts from the suffix config; the daemon never
+   rotates (keychain prompts are setup-only). Decided 2026-07-01 after the deep security review;
+   spec at docs/superpowers/specs/2026-07-01-custom-suffix-tls-design.md.
 
 ## Architecture
 

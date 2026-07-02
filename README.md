@@ -79,9 +79,10 @@ HOST_KIND=instance
 ```
 
 `add` always prints both the HTTP `URL` and the `HTTPS_URL` whenever the lease
-has a host. For `.lewp` hosts, whether the browser accepts the HTTPS one depends
-on `lewp setup` having trusted the local CA (see [HTTPS](#https)); custom public
-suffix routes are HTTP-only in V1. `STATE` and `HOST_KIND` are descriptive; use
+has a host. Whether the browser accepts the HTTPS one depends on `lewp setup`
+having trusted the local CA (see [HTTPS](#https)): `.lewp` hosts and configured
+safe-subtree custom suffixes both get browser-trusted certificates; domain-mirror
+suffixes stay HTTP-only. `STATE` and `HOST_KIND` are descriptive; use
 `--shell` for clean `export` lines (which omit them) when you want
 `eval "$(lewp add --shell)"`.
 
@@ -190,8 +191,10 @@ then attach any same-app hostnames with `lewp alias add`. After adding a suffix,
 run `lewp system start` (or `lewp setup --suffix localkickofflabs.com --allow-domain-mirror --start`)
 so the daemon kickstarts and loads the updated suffix list.
 
-Custom public suffix and domain-mirror routes are HTTP-only in V1. `.lewp`
-hosts still support HTTPS through Lewp's local CA.
+Safe-subtree custom suffixes support HTTPS through Lewp's local CA, the same as
+`.lewp` hosts, once `lewp setup` has run for that suffix. Domain-mirror
+suffixes stay HTTP-only — Lewp's CA is cryptographically unable to sign a real
+registrable domain.
 
 ## Route aliases
 
@@ -260,6 +263,18 @@ lewp move --from ~/scratch/wt/atlas-login-fix  # same host, aliases, and port
 keychain, so every `.lewp` host is reachable over `https://` with a certificate
 the browser accepts. Lewp mints per-host leaf certificates on demand from that
 CA; there is no per-project TLS config.
+
+Safe-subtree custom suffixes (for example `local.mycompany.com`) get the same
+treatment: Lewp mints browser-trusted certificates for hosts under them, which
+satisfies OAuth providers that require a real TLD. Domain-mirror suffixes stay
+HTTP-only — Lewp's CA is cryptographically unable to sign a real registrable
+domain.
+
+The CA certificate carries critical X.509 name constraints limited to `.lewp`
+plus your configured safe-subtree suffixes. Even if the CA key is stolen, a
+forged certificate for any other domain is rejected by the browser. Adding or
+removing a safe-subtree suffix rotates the CA on the next `lewp setup` (one
+keychain prompt); restart the daemon afterwards so HTTPS re-mints leaves.
 
 Browser support in V1:
 
