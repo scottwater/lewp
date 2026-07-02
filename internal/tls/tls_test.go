@@ -2,9 +2,13 @@ package tls
 
 import (
 	"crypto/rand"
+	"crypto/rsa"
 	gotls "crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"math/big"
+	"net"
 	"os"
 	"reflect"
 	"sort"
@@ -407,6 +411,50 @@ func TestConstraintsMatch(t *testing.T) {
 	}
 	if ConstraintsMatch(legacy, []string{"lewp"}) {
 		t.Fatal("legacy unconstrained CA reported as matching")
+	}
+}
+
+// TestConstraintsMatchRequiresMaxPathLenZero: MaxPathLenZero is one of the
+// security-critical properties NewCA always sets alongside the DNS/IP
+// constraints (no sub-CAs, so the constraints cannot be laundered through an
+// intermediate). NewCA can't produce a CA with this property unset, so this
+// test crafts and self-signs an x509 template directly to simulate a future
+// refactor that drops MaxPathLenZero while leaving the other constraints
+// intact — ConstraintsMatch must still refuse it.
+func TestConstraintsMatchRequiresMaxPathLenZero(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := []string{"lewp", "local.todoordie.com"}
+	tmpl := &x509.Certificate{
+		SerialNumber:                big.NewInt(1),
+		Subject:                     pkix.Name{CommonName: CACommonName},
+		NotBefore:                   time.Now().Add(-time.Hour),
+		NotAfter:                    time.Now().AddDate(10, 0, 0),
+		KeyUsage:                    x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid:       true,
+		IsCA:                        true,
+		PermittedDNSDomains:         append([]string(nil), desired...),
+		PermittedDNSDomainsCritical: true,
+		ExcludedIPRanges: []*net.IPNet{
+			{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+			{IP: net.IPv6zero, Mask: net.CIDRMask(0, 128)},
+		},
+		// Deliberately left false: this is the property under test.
+		MaxPathLenZero: false,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &CA{Certificate: cert, Key: key, CertDER: der}
+	if ConstraintsMatch(ca, desired) {
+		t.Fatal("ConstraintsMatch reported a match despite MaxPathLenZero being unset")
 	}
 }
 

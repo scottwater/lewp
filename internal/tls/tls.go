@@ -99,7 +99,7 @@ func (c *CA) HasNameConstraints() bool {
 // setup uses it to decide rotation; doctor uses it to flag drift.
 func ConstraintsMatch(ca *CA, desired []string) bool {
 	cert := ca.Certificate
-	if !cert.PermittedDNSDomainsCritical || len(cert.ExcludedIPRanges) == 0 {
+	if !cert.PermittedDNSDomainsCritical || len(cert.ExcludedIPRanges) == 0 || !cert.MaxPathLenZero {
 		return false
 	}
 	if len(cert.PermittedDNSDomains) != len(desired) {
@@ -217,7 +217,8 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 }
 
 // hostPermitted mirrors X.509 DNS name-constraint matching: a permitted entry
-// covers itself and any subdomain.
+// covers itself and any subdomain. Entries in permitted are assumed already
+// normalized (lowercase, no trailing dot) by the caller.
 func hostPermitted(host string, permitted []string) bool {
 	for _, p := range permitted {
 		if host == p || strings.HasSuffix(host, "."+p) {
