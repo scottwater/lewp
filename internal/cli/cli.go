@@ -64,6 +64,11 @@ type Config struct {
 	// A record. doctor uses it to confirm the daemon answers .lewp with
 	// loopback; tests inject a fake.
 	LookupLewp func(ctx context.Context, server, host string) (net.IP, error)
+	// SystemResolve resolves host through the macOS system resolver path (rather
+	// than the responder's own port). doctor uses it to confirm mDNSResponder is
+	// actually honoring /etc/resolver/lewp — the one thing LookupLewp cannot see;
+	// tests inject a fake.
+	SystemResolve func(ctx context.Context, host string) ([]net.IP, error)
 }
 
 func Run(cfg Config) int {
@@ -117,6 +122,9 @@ func Run(cfg Config) int {
 	}
 	if cfg.LookupLewp == nil {
 		cfg.LookupLewp = dns.Lookup
+	}
+	if cfg.SystemResolve == nil {
+		cfg.SystemResolve = systemResolve
 	}
 	if cfg.Version == "" {
 		cfg.Version = defaultVersion()
@@ -1070,6 +1078,43 @@ func runCommandOutput(ctx context.Context, argv []string) (string, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// systemResolve resolves host through the macOS system resolver path via
+// dscacheutil, so doctor can confirm mDNSResponder actually honors
+// /etc/resolver/lewp — not merely that the responder answers on its own port.
+// dscacheutil consults the same resolver machinery browsers use, so a failure
+// here maps directly to a browser that cannot reach .lewp.
+func systemResolve(ctx context.Context, host string) ([]net.IP, error) {
+	out, err := runCommandOutput(ctx, []string{"dscacheutil", "-q", "host", "-a", "name", host})
+	if err != nil {
+		return nil, fmt.Errorf("dscacheutil: %w: %s", err, strings.TrimSpace(out))
+	}
+	ips := parseDscacheutilIPs(out)
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no address for %s", host)
+	}
+	return ips, nil
+}
+
+// parseDscacheutilIPs extracts the ip_address/ipv6_address lines from
+// `dscacheutil -q host` output, which repeats a block per answer:
+//
+//	name: probe.lewp
+//	ip_address: 127.0.0.1
+func parseDscacheutilIPs(out string) []net.IP {
+	var ips []net.IP
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range []string{"ip_address:", "ipv6_address:"} {
+			if strings.HasPrefix(line, prefix) {
+				if ip := net.ParseIP(strings.TrimSpace(strings.TrimPrefix(line, prefix))); ip != nil {
+					ips = append(ips, ip)
+				}
+			}
+		}
+	}
+	return ips
 }
 
 // clientEnv collects the identity environment variables Lewp honors from the

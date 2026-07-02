@@ -613,6 +613,15 @@ The V1 doctor contract also tracks resolver file state, `.lewp` lookup, proxy
 port binding, registry readability, current-folder identity inference, current
 target port state, and hostname conflicts.
 
+When the daemon is up, `doctor` additionally resolves `probe.lewp` through the
+macOS system resolver (`dscacheutil`) rather than the responder's own port. The
+direct `.lewp` lookup can pass while `mDNSResponder` has not picked up
+`/etc/resolver/lewp` (a stale cache or resolver-file quirk), which leaves every
+other check green while browsers still cannot resolve `.lewp`. This probe
+exercises the same path browsers use: it warns when the name does not resolve
+(with `sudo killall -HUP mDNSResponder` as the recovery hint) and fails when it
+resolves to a non-loopback address.
+
 `doctor` also prints an informational `browser trust` line restating the V1
 HTTPS browser boundary: Safari and Chromium browsers trust the macOS keychain,
 while Firefox uses its own NSS store and is not supported in V1 (use `http://`

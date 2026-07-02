@@ -333,6 +333,125 @@ func TestDoctorChecksCustomSuffixDNS(t *testing.T) {
 	}
 }
 
+// TestDoctorSystemResolverProbeOK proves doctor confirms .lewp resolves through
+// the macOS system resolver path (not just the responder directly).
+func TestDoctorSystemResolverProbeOK(t *testing.T) {
+	var probed string
+	check := systemResolverCheck(Config{
+		SystemResolve: func(_ context.Context, host string) ([]net.IP, error) {
+			probed = host
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		},
+	})
+	if check.Status != statusOK {
+		t.Fatalf("system resolver check should be ok, got %+v", check)
+	}
+	if !strings.HasSuffix(probed, ".lewp") {
+		t.Fatalf("probe host %q should be a .lewp name", probed)
+	}
+}
+
+func TestRunDoctorPrintsSystemResolverWhenDaemonUp(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+	resolverPath := dir + "/resolver/lewp"
+	if err := dns.WriteResolverFile(resolverPath, dns.DefaultPort); err != nil {
+		t.Fatal(err)
+	}
+	if err := suffix.Save(dir+"/suffixes.toml", suffix.Config{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	var probed string
+	Run(Config{
+		Args:         []string{"doctor"},
+		WorkDir:      dir,
+		SocketPath:   socketPath,
+		ProgramPath:  dir + "/lewp",
+		PlistPath:    dir + "/missing.plist",
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: resolverPath,
+		SuffixesPath: dir + "/suffixes.toml",
+		LogDir:       dir + "/Logs",
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		RunCommand:   func(context.Context, []string) error { return errors.New("not trusted") },
+		DialAddr:     func(string, string) error { return nil },
+		LookupLewp: func(context.Context, string, string) (net.IP, error) {
+			return net.ParseIP("127.0.0.1"), nil
+		},
+		SystemResolve: func(_ context.Context, host string) ([]net.IP, error) {
+			probed = host
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		},
+	})
+
+	if probed != "probe.lewp" {
+		t.Fatalf("system resolver probe host=%q", probed)
+	}
+	if !strings.Contains(stdout.String(), "[ ok ] system resolver:") {
+		t.Fatalf("doctor output missing system resolver check:\n%s", stdout.String())
+	}
+}
+
+// TestDoctorSystemResolverProbeWarnsWhenSystemNotUsingResolver proves the case
+// the direct-responder probe cannot see: the responder answers on its own port,
+// but macOS is not routing .lewp through /etc/resolver, so browsers still fail.
+func TestDoctorSystemResolverProbeWarnsWhenSystemNotUsingResolver(t *testing.T) {
+	check := systemResolverCheck(Config{
+		SystemResolve: func(_ context.Context, _ string) ([]net.IP, error) {
+			return nil, errors.New("no answer")
+		},
+	})
+	if check.Status != statusWarn {
+		t.Fatalf("system resolver check should warn, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "system resolver") {
+		t.Fatalf("detail should name the system resolver path, got %q", check.Detail)
+	}
+	if !strings.Contains(check.Detail, "no answer") {
+		t.Fatalf("detail should include the resolver error, got %q", check.Detail)
+	}
+	if check.Inspect == "" || !strings.Contains(check.Inspect, "dscacheutil") {
+		t.Fatalf("check should suggest a dscacheutil inspect command, got %q", check.Inspect)
+	}
+}
+
+// TestDoctorSystemResolverProbeFailsOnNonLoopback proves a .lewp name answered
+// by something other than the loopback responder (e.g. a hijacking upstream) is
+// surfaced as a hard failure, distinct from the not-resolving warning.
+func TestDoctorSystemResolverProbeFailsOnNonLoopback(t *testing.T) {
+	check := systemResolverCheck(Config{
+		SystemResolve: func(_ context.Context, _ string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("93.184.216.34")}, nil
+		},
+	})
+	if check.Status != statusFail {
+		t.Fatalf("non-loopback system resolution should fail, got %+v", check)
+	}
+}
+
+func TestParseDscacheutilIPs(t *testing.T) {
+	out := `name: probe.lewp
+ip_address: 127.0.0.1
+
+name: probe.lewp
+ipv6_address: ::1
+`
+	ips := parseDscacheutilIPs(out)
+	if len(ips) != 2 {
+		t.Fatalf("expected 2 addresses, got %v", ips)
+	}
+	if !ips[0].Equal(net.ParseIP("127.0.0.1")) || !ips[1].Equal(net.ParseIP("::1")) {
+		t.Fatalf("parsed addresses=%v", ips)
+	}
+	if got := parseDscacheutilIPs("name: probe.lewp\n"); len(got) != 0 {
+		t.Fatalf("expected no addresses for empty result, got %v", got)
+	}
+}
+
 // TestDoctorInferenceUsesConfiguredSuffixes proves doctor's current-folder
 // inference honors configured custom suffixes the same way `lewp add` does: a
 // directory whose .lewp.local.toml pins a custom-suffix host must resolve OK,

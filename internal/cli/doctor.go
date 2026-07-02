@@ -78,6 +78,7 @@ func collectDoctorChecks(cfg Config) []doctorCheck {
 		checks = append(checks, daemonReportedChecks(resp.Checks)...)
 		checks = append(checks, proxyBindCheck(cfg))
 		checks = append(checks, dnsResolutionChecks(cfg)...)
+		checks = append(checks, systemResolverCheck(cfg))
 	}
 
 	checks = append(checks, inferenceCheck(cfg))
@@ -352,6 +353,50 @@ func dnsResolutionCheck(name, host, label string, cfg Config) doctorCheck {
 	}
 	c.Status = statusOK
 	c.Detail = fmt.Sprintf("%s -> %s via %s", label, ip, server)
+	return c
+}
+
+// systemResolverCheck resolves a .lewp name through the macOS system resolver
+// (dscacheutil) instead of querying the responder directly. It closes the gap
+// dnsResolutionChecks leaves open: those target 127.0.0.1:15353 and pass even
+// when mDNSResponder has not picked up /etc/resolver/lewp (stale cache, a
+// resolver-file quirk), so every other check is green while browsers still
+// cannot resolve .lewp. This check exercises the same path browsers use.
+//
+// It runs only when the daemon is up (see collectDoctorChecks): with no
+// responder answering, a not-resolving result would be expected rather than a
+// misconfiguration. A not-resolving result is a warn — dscacheutil caching can
+// lag a just-started daemon and severity policy is otherwise deferred to the
+// doctor-severity work — while a non-loopback answer is a hard fail, since
+// something other than the local responder is claiming .lewp.
+func systemResolverCheck(cfg Config) doctorCheck {
+	const probe = "probe.lewp"
+	c := doctorCheck{Name: "system resolver"}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	ips, err := cfg.SystemResolve(ctx, probe)
+	if err != nil || len(ips) == 0 {
+		c.Status = statusWarn
+		reason := "lookup returned no addresses"
+		if err != nil {
+			reason = err.Error()
+		}
+		c.Detail = fmt.Sprintf("%s does not resolve through the macOS system resolver (%s); the responder answers directly but mDNSResponder is not using /etc/resolver, so browsers cannot resolve .lewp", probe, reason)
+		c.Run = "sudo killall -HUP mDNSResponder"
+		c.Inspect = "dscacheutil -q host -a name " + probe
+		return c
+	}
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			c.Status = statusFail
+			c.Detail = fmt.Sprintf("%s resolved to %s through the system resolver, expected loopback", probe, ip)
+			c.Run = "lewp setup"
+			c.Inspect = "dscacheutil -q host -a name " + probe
+			return c
+		}
+	}
+	c.Status = statusOK
+	c.Detail = fmt.Sprintf("macOS resolves %s to %s via /etc/resolver", probe, ips[0])
 	return c
 }
 
