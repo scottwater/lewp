@@ -92,9 +92,14 @@ Actions:
   status     Report whether the daemon is responding
   uninstall  Remove the launchd, resolver, and keychain-trust integration
 
+Flags:
+  --yes, -y  Skip the confirmation prompt for uninstall (required to uninstall
+             non-interactively, e.g. in a script)
+
 Examples:
   lewp system start
   lewp system status
+  lewp system uninstall --yes
 `
 
 	addHelp = `lewp add — register a stable port and host for this directory

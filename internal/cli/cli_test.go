@@ -858,7 +858,7 @@ func TestRunSystemUninstallPrintsKeychainCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := Run(Config{
-		Args:         []string{"system", "uninstall"},
+		Args:         []string{"system", "uninstall", "--yes"},
 		WorkDir:      t.TempDir(),
 		PlistPath:    plistPath,
 		ResolverPath: resolverPath,
@@ -945,7 +945,7 @@ func TestRunSystemUninstallPrintsAffectedSummaryFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := Run(Config{
-		Args:         []string{"system", "uninstall"},
+		Args:         []string{"system", "uninstall", "--yes"},
 		WorkDir:      t.TempDir(),
 		PlistPath:    plistPath,
 		ResolverPath: resolverPath,
@@ -992,7 +992,7 @@ func TestRunSystemUninstallContinuesAfterLaunchctlFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := Run(Config{
-		Args:         []string{"system", "uninstall"},
+		Args:         []string{"system", "uninstall", "--yes"},
 		WorkDir:      t.TempDir(),
 		PlistPath:    plistPath,
 		ResolverPath: resolverPath,
@@ -1043,7 +1043,7 @@ func TestRunSystemUninstallTreatsNotLoadedAsSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := Run(Config{
-		Args:         []string{"system", "uninstall"},
+		Args:         []string{"system", "uninstall", "--yes"},
 		WorkDir:      t.TempDir(),
 		PlistPath:    plistPath,
 		ResolverPath: resolverPath,
@@ -1122,7 +1122,7 @@ func TestRunSystemUninstallKeepsAndReportsCAFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	code := Run(Config{
-		Args:         []string{"system", "uninstall"},
+		Args:         []string{"system", "uninstall", "--yes"},
 		WorkDir:      t.TempDir(),
 		PlistPath:    plistPath,
 		ResolverPath: resolverPath,
@@ -1154,6 +1154,176 @@ func TestRunSystemUninstallKeepsAndReportsCAFiles(t *testing.T) {
 	// Guard against a regression to the unsafe unquoted form.
 	if strings.Contains(got, "rm "+caPath+" ") {
 		t.Fatalf("uninstall printed unsafe unquoted rm command:\n%s", got)
+	}
+}
+
+// TestRunSystemUninstallRefusesNonInteractiveWithoutYes proves an unattended
+// uninstall (non-terminal stdin, no --yes) refuses: it exits non-zero, tells the
+// user to pass --yes, and removes nothing. The affected-file summary still
+// prints so the scope is visible.
+func TestRunSystemUninstallRefusesNonInteractiveWithoutYes(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var ran []string
+	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	resolverPath := dir + "/resolver/lewp"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolverPath, []byte("nameserver 127.0.0.1\nport 15353\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"system", "uninstall"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    plistPath,
+		ResolverPath: resolverPath,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		// A bytes.Buffer stdin is not a terminal, so this is the non-interactive
+		// path.
+		Stdin: &bytes.Buffer{},
+		RunCommand: func(_ context.Context, argv []string) error {
+			ran = append(ran, strings.Join(argv, " "))
+			return nil
+		},
+	})
+	if code == 0 {
+		t.Fatalf("expected non-zero exit when refusing uninstall, code=%d", code)
+	}
+	if !strings.Contains(stderr.String(), "--yes") {
+		t.Fatalf("stderr missing --yes guidance: %q", stderr.String())
+	}
+	// The affected-file summary must still be printed before refusing.
+	if !strings.Contains(stdout.String(), "uninstall will affect:") {
+		t.Fatalf("stdout missing affected-file summary before refusal:\n%s", stdout.String())
+	}
+	// Nothing destructive may have run, and no files removed.
+	if len(ran) != 0 {
+		t.Fatalf("uninstall ran commands despite refusing: %v", ran)
+	}
+	if _, err := os.Stat(plistPath); err != nil {
+		t.Fatalf("plist must be retained when uninstall is refused: %v", err)
+	}
+	if _, err := os.Stat(resolverPath); err != nil {
+		t.Fatalf("resolver must be retained when uninstall is refused: %v", err)
+	}
+}
+
+func TestRunSystemUninstallRejectsUnexpectedArgs(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	var ran []string
+	dir := t.TempDir()
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	resolverPath := dir + "/resolver/lewp"
+	if err := os.WriteFile(plistPath, []byte("dev.lewp.daemon"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+"/resolver", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolverPath, []byte("nameserver 127.0.0.1\nport 15353\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"system", "uninstall", "--yes", "extra"},
+		WorkDir:      t.TempDir(),
+		PlistPath:    plistPath,
+		ResolverPath: resolverPath,
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		Stdin:        &bytes.Buffer{},
+		RunCommand: func(_ context.Context, argv []string) error {
+			ran = append(ran, strings.Join(argv, " "))
+			return nil
+		},
+	})
+	if code != 2 {
+		t.Fatalf("expected usage error for extra arg, code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unexpected argument: extra") {
+		t.Fatalf("stderr missing unexpected arg: %q", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unexpected stdout before arg rejection: %q", stdout.String())
+	}
+	if len(ran) != 0 {
+		t.Fatalf("uninstall ran commands despite arg rejection: %v", ran)
+	}
+	if _, err := os.Stat(plistPath); err != nil {
+		t.Fatalf("plist must be retained when args are invalid: %v", err)
+	}
+	if _, err := os.Stat(resolverPath); err != nil {
+		t.Fatalf("resolver must be retained when args are invalid: %v", err)
+	}
+}
+
+// TestConfirmUninstall covers the confirmation gate directly, including the
+// interactive prompt path that a bytes.Buffer stdin cannot reach through Run
+// (isTerminal is false for buffers).
+func TestConfirmUninstall(t *testing.T) {
+	cases := []struct {
+		name        string
+		assumeYes   bool
+		interactive bool
+		input       string
+		want        bool
+		wantPrompt  bool
+	}{
+		{name: "yes flag skips prompt", assumeYes: true, interactive: false, want: true, wantPrompt: false},
+		{name: "yes flag skips prompt even interactively", assumeYes: true, interactive: true, want: true, wantPrompt: false},
+		{name: "non-interactive without flag refuses", assumeYes: false, interactive: false, want: false, wantPrompt: false},
+		{name: "interactive y proceeds", assumeYes: false, interactive: true, input: "y\n", want: true, wantPrompt: true},
+		{name: "interactive yes proceeds", assumeYes: false, interactive: true, input: "yes\n", want: true, wantPrompt: true},
+		{name: "interactive empty aborts", assumeYes: false, interactive: true, input: "\n", want: false, wantPrompt: true},
+		{name: "interactive n aborts", assumeYes: false, interactive: true, input: "n\n", want: false, wantPrompt: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			cfg := Config{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(tc.input)}
+			got := confirmUninstall(cfg, tc.assumeYes, tc.interactive)
+			if got != tc.want {
+				t.Fatalf("confirmUninstall=%v want %v", got, tc.want)
+			}
+			if tc.wantPrompt && !strings.Contains(stdout.String(), "Proceed with uninstall?") {
+				t.Fatalf("expected prompt, stdout=%q", stdout.String())
+			}
+			if !tc.wantPrompt && strings.Contains(stdout.String(), "Proceed with uninstall?") {
+				t.Fatalf("unexpected prompt, stdout=%q", stdout.String())
+			}
+			if !tc.assumeYes && !tc.interactive && !strings.Contains(stderr.String(), "--yes") {
+				t.Fatalf("non-interactive refusal missing --yes guidance: %q", stderr.String())
+			}
+		})
+	}
+}
+
+// TestShellQuoteIfNeeded proves only arguments with shell-significant
+// characters are quoted, so printed recovery commands stay both safe and
+// readable.
+func TestShellQuoteIfNeeded(t *testing.T) {
+	cases := map[string]string{
+		"security":                         "security",
+		"/etc/resolver/lewp":               "/etc/resolver/lewp",
+		"login.keychain":                   "login.keychain",
+		"/Application Support/lewp/ca.pem": "'/Application Support/lewp/ca.pem'",
+		"":                                 "''",
+	}
+	for in, want := range cases {
+		if got := shellQuoteIfNeeded(in); got != want {
+			t.Fatalf("shellQuoteIfNeeded(%q)=%q want %q", in, got, want)
+		}
+	}
+	// A path with a space inside a full argv must round-trip to a single quoted
+	// token while the safe tokens stay bare.
+	argv := []string{"security", "add-trusted-cert", "-k", "login.keychain", "/Application Support/lewp/ca.pem"}
+	want := "security add-trusted-cert -k login.keychain '/Application Support/lewp/ca.pem'"
+	if got := shellJoin(argv); got != want {
+		t.Fatalf("shellJoin=%q want %q", got, want)
 	}
 }
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -31,10 +32,15 @@ type Config struct {
 	// LEWP_HOST) read from the user's process. The CLI forwards these to the
 	// daemon, which ignores its own environment; Run populates it from the OS
 	// when nil. Tests inject it directly.
-	Env          map[string]string
-	SocketPath   string
-	Stdout       io.Writer
-	Stderr       io.Writer
+	Env        map[string]string
+	SocketPath string
+	Stdout     io.Writer
+	Stderr     io.Writer
+	// Stdin is read for interactive confirmations (e.g. the uninstall prompt).
+	// Run populates it from os.Stdin when nil; tests inject a reader. Whether a
+	// prompt is shown at all is gated on isTerminal(Stdin), so a piped or
+	// redirected stdin is treated as non-interactive.
+	Stdin        io.Reader
 	CAPath       string
 	CAKeyPath    string
 	ResolverPath string
@@ -66,6 +72,9 @@ func Run(cfg Config) int {
 	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = os.Stderr
+	}
+	if cfg.Stdin == nil {
+		cfg.Stdin = os.Stdin
 	}
 	if cfg.WorkDir == "" {
 		cfg.WorkDir, _ = os.Getwd()
@@ -408,7 +417,7 @@ func runSetup(cfg Config) int {
 	trust := localtls.TrustCommand(cfg.CAPath)
 	if err := cfg.RunCommand(context.Background(), trust); err != nil {
 		fmt.Fprintf(cfg.Stderr, "trust CA: %v\n", err)
-		fmt.Fprintf(cfg.Stderr, "Next: trust the CA manually by running:\n  %s\n", strings.Join(trust, " "))
+		fmt.Fprintf(cfg.Stderr, "Next: trust the CA manually by running:\n  %s\n", shellJoin(trust))
 		return 1
 	}
 	fmt.Fprintln(cfg.Stdout, "DNS=resolver-file")
@@ -428,7 +437,7 @@ func runSetup(cfg Config) int {
 		fmt.Fprintf(cfg.Stdout, "CA=%s\n", cfg.CAPath)
 	}
 	fmt.Fprintf(cfg.Stdout, "LOGS=%s\n", cfg.LogDir)
-	fmt.Fprintln(cfg.Stdout, strings.Join(trust, " "))
+	fmt.Fprintln(cfg.Stdout, shellJoin(trust))
 
 	warnBinarySkew(cfg)
 
@@ -631,6 +640,7 @@ func warnBinarySkew(cfg Config) {
 func runSystem(cfg Config) int {
 	if len(cfg.Args) < 2 {
 		fmt.Fprintln(cfg.Stderr, "usage: lewp system start|stop|status|restart|uninstall")
+		fmt.Fprintln(cfg.Stderr, "usage: lewp system uninstall [--yes]")
 		return 2
 	}
 	switch cfg.Args[1] {
@@ -673,15 +683,34 @@ func runSystem(cfg Config) int {
 // any step failed. An already-unloaded launchd service is treated as success,
 // since uninstall's goal (the service gone) is already met.
 func runUninstall(cfg Config) int {
+	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
+	fs.SetOutput(cfg.Stderr)
+	assumeYes := fs.Bool("yes", false, "")
+	fs.BoolVar(assumeYes, "y", false, "")
+	if fs.Parse(cfg.Args[2:]) != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(cfg.Stderr, "uninstall: unexpected argument: %s\n", fs.Arg(0))
+		return 2
+	}
+
 	plan, err := launchd.Plan("uninstall", launchd.Config{Label: launchd.DefaultLabel, PlistPath: cfg.PlistPath})
 	if err != nil {
 		fmt.Fprintln(cfg.Stderr, err)
 		return 2
 	}
 	// Print the full affected-file summary up front so the scope is visible
-	// before any removal happens, not inferred from the trailing "removed X"
-	// lines.
+	// before the confirmation gate and before any removal happens, not inferred
+	// from the trailing "removed X" lines.
 	reportUninstallPlan(cfg)
+
+	// Gate the destructive work: --yes proceeds; a TTY prompts; a non-interactive
+	// stdin without --yes refuses so an unattended run cannot silently delete the
+	// launchd service, resolver files, and keychain trust.
+	if !confirmUninstall(cfg, *assumeYes, isTerminal(cfg.Stdin)) {
+		return 1
+	}
 
 	failures := 0
 	fail := func(format string, args ...any) {
@@ -754,12 +783,52 @@ func uninstallRemovalItems(cfg Config) []uninstallRemovalItem {
 	return items
 }
 
+// confirmUninstall decides whether the destructive uninstall may proceed after
+// the affected-file summary has been printed. With --yes it always proceeds.
+// When stdin is a terminal it prompts and proceeds only on an explicit yes.
+// Non-interactively without --yes it refuses and points the user at --yes, so a
+// scripted or piped `lewp system uninstall` cannot silently tear down the
+// launchd service, resolver files, and keychain trust.
+func confirmUninstall(cfg Config, assumeYes, interactive bool) bool {
+	if assumeYes {
+		return true
+	}
+	if !interactive {
+		fmt.Fprintln(cfg.Stderr, "uninstall: refusing to remove files without confirmation")
+		fmt.Fprintln(cfg.Stderr, "Re-run with --yes to proceed (required for non-interactive use)")
+		return false
+	}
+	fmt.Fprint(cfg.Stdout, "Proceed with uninstall? [y/N] ")
+	line, _ := bufio.NewReader(cfg.Stdin).ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		fmt.Fprintln(cfg.Stdout, "uninstall aborted")
+		return false
+	}
+}
+
+// isTerminal reports whether r is an interactive terminal, so a prompt only
+// appears when a human is present. It is true only for a char-device *os.File;
+// pipes, regular files, and the *bytes.Buffer tests inject all read as
+// non-interactive.
+func isTerminal(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
 // reportUninstallPlan prints the affected-file/scope summary before uninstall
 // touches anything, so the user sees exactly what will be booted out, untrusted,
-// and removed. It is informational and does not gate the action: there is no
-// interactive-confirmation pattern elsewhere in the CLI, so introducing a
-// stdin/--yes prompt here is left for a follow-up rather than changing the
-// established non-interactive contract.
+// and removed. It runs ahead of the confirmUninstall gate so the full scope is
+// visible when the user is asked to confirm.
 func reportUninstallPlan(cfg Config) {
 	fmt.Fprintln(cfg.Stdout, "uninstall will affect:")
 	fmt.Fprintf(cfg.Stdout, "  launchd: bootout %s and remove %s\n", launchd.DefaultLabel, cfg.PlistPath)
@@ -820,6 +889,35 @@ func reportRetainedCA(cfg Config) {
 // '\” sequence. It is used for the safe-removal guidance printed on uninstall.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shellJoin renders argv as a copy-pasteable POSIX command line, single-quoting
+// only the arguments that need it (e.g. the space in "~/Library/Application
+// Support/lewp/ca.pem"). Already-safe tokens like "security" stay bare so the
+// printed command remains readable. It is used for the recovery and
+// confirmation commands setup echoes, which a user may paste back into a shell.
+func shellJoin(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, arg := range argv {
+		parts[i] = shellQuoteIfNeeded(arg)
+	}
+	return strings.Join(parts, " ")
+}
+
+// shellQuoteIfNeeded quotes s only when it contains characters outside a
+// conservative shell-safe set, mirroring the whitelist used by shlex.quote.
+func shellQuoteIfNeeded(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for _, r := range s {
+		safe := r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' ||
+			strings.ContainsRune("@%_+=:,./-", r)
+		if !safe {
+			return shellQuote(s)
+		}
+	}
+	return s
 }
 
 func runSystemStart(cfg Config) int {

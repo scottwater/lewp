@@ -26,7 +26,8 @@ install.
 
 ```sh
 lewp setup [--suffix S] [--allow-domain-mirror]
-lewp system start|stop|status|restart|uninstall
+lewp system start|stop|status|restart
+lewp system uninstall [--yes]
 lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--reset] [--json|--shell]
 lewp alias add <host> [--json]
 lewp alias remove <host>
@@ -162,6 +163,16 @@ uninstall will affect:
   resolver: remove /etc/resolver/local.todoordie.com (custom suffix local.todoordie.com; may prompt for sudo)
   suffix config: remove ~/Library/Application Support/lewp/suffixes.toml
   kept: ~/Library/Application Support/lewp/ca.pem (CA material; a later lewp setup reuses it)
+```
+
+Because it is destructive, `uninstall` then asks for confirmation. In an
+interactive terminal it prompts `Proceed with uninstall? [y/N]` and only removes
+anything on an explicit `y`/`yes`. Run non-interactively (piped, redirected, or
+from a script), it refuses unless you pass `--yes` (or `-y`), so an unattended
+`lewp system uninstall` can never silently tear down the integration:
+
+```sh
+lewp system uninstall --yes
 ```
 
 When `start` (or the kickstart fallback) fails for any other reason, it prints
