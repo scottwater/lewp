@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -28,8 +29,17 @@ const (
 
 const schemaVersion = 2
 
+// resetLog receives the loud warning emitted before Migrate wipes a
+// schema-mismatched registry. It defaults to stderr (which the launchd daemon
+// captures in daemon.err.log) and is overridable in tests.
+var resetLog io.Writer = os.Stderr
+var backupNow = func() time.Time { return time.Now().UTC() }
+
 type Store struct {
 	db *sql.DB
+	// path is the on-disk location of the SQLite registry, retained so Migrate
+	// can copy it to a timestamped backup before a destructive schema reset.
+	path string
 	// allocMu serializes every writer that claims or relocates an active port so
 	// concurrent callers cannot SELECT the same free port (or both pass the
 	// cross-table active-port check) before either commits and then collide on
@@ -115,7 +125,7 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, path: path}
 	migrateMu.Lock()
 	defer migrateMu.Unlock()
 	if err := store.Migrate(context.Background()); err != nil {
@@ -146,17 +156,49 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
+	var version int
+	if err := s.db.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
+		return err
+	}
+
+	// Refuse to open a registry written by a newer binary. Wiping on mismatch is
+	// acceptable pre-release policy for an *upgrade* (old data, new binary), but a
+	// downgrade - a stale launchd binary pointed at a newer DB - would silently
+	// destroy routes and leases the running binary simply doesn't understand yet.
+	// Fail loudly instead so the operator can upgrade or move the registry aside.
+	if version > schemaVersion {
+		return fmt.Errorf(
+			"lewp registry %s has schema version %d, newer than this binary supports (%d); refusing to open so a downgrade cannot wipe your routes and leases - upgrade lewp or move the registry aside to start fresh",
+			s.path, version, schemaVersion,
+		)
+	}
+
+	// A version below the current schema means the on-disk data cannot be used as
+	// is. Pre-release policy is to reset rather than migrate, but never silently:
+	// back the registry up and log the wipe loudly first so it is recoverable and
+	// observable. A brand-new registry reports version 0 and has nothing to save.
+	reset := version != schemaVersion
+	if reset && version != 0 {
+		backupPath, err := s.backupBeforeReset()
+		if err != nil {
+			return fmt.Errorf(
+				"lewp registry %s needs a schema reset (on-disk version %d, binary version %d) but backing it up first failed: %w",
+				s.path, version, schemaVersion, err,
+			)
+		}
+		fmt.Fprintf(resetLog,
+			"lewp registry: on-disk schema version %d does not match this binary's version %d; RESETTING the registry at %s - all pinned ports, hostnames, leases, and events will be dropped. A backup of the previous registry was saved to %s\n",
+			version, schemaVersion, s.path, backupPath,
+		)
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	var version int
-	if err := tx.QueryRowContext(ctx, `pragma user_version`).Scan(&version); err != nil {
-		return err
-	}
-	if version != schemaVersion {
+	if reset {
 		for _, stmt := range []string{
 			`drop table if exists events`,
 			`drop table if exists leases`,
@@ -238,6 +280,57 @@ create table if not exists events (
 		return err
 	}
 	return tx.Commit()
+}
+
+// backupBeforeReset copies the current registry to a timestamped ".bak" file
+// next to it and returns the backup path. It first folds the write-ahead log
+// into the main database file so a copy of that single file is a complete,
+// independently openable snapshot of the pre-reset registry.
+func (s *Store) backupBeforeReset() (string, error) {
+	if _, err := s.db.Exec(`pragma wal_checkpoint(TRUNCATE)`); err != nil {
+		return "", fmt.Errorf("checkpoint before backup: %w", err)
+	}
+	stamp := backupNow().UTC().Format("20060102T150405Z")
+	for attempt := 0; ; attempt++ {
+		backupPath := backupPathForAttempt(s.path, stamp, attempt)
+		if err := copyFile(s.path, backupPath); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", err
+		}
+		return backupPath, nil
+	}
+}
+
+func backupPathForAttempt(path, stamp string, attempt int) string {
+	if attempt == 0 {
+		return fmt.Sprintf("%s.%s.bak", path, stamp)
+	}
+	return fmt.Sprintf("%s.%s.%d.bak", path, stamp, attempt)
+}
+
+// copyFile copies src to dst, refusing to overwrite an existing dst so a backup
+// can never clobber an earlier one.
+func copyFile(src, dst string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := out.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+	if _, err = io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Sync()
 }
 
 func (s *Store) Lease(ctx context.Context, ident identity.Result, portRange PortRange) (Lease, error) {

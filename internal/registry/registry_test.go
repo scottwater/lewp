@@ -1,14 +1,20 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/scottwater/lewp/internal/identity"
 )
@@ -87,6 +93,176 @@ pragma user_version=1;
 		assertTableExists(t, reopened.db, table)
 	}
 	assertUserVersion(t, reopened.db, schemaVersion)
+}
+
+func TestMigrateBacksUpAndLogsBeforeReset(t *testing.T) {
+	path := t.TempDir() + "/registry.sqlite"
+
+	// Populate a current-schema registry with a real route + lease.
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident := testIdentity(t, "feature.audit.lewp", identity.KindRoute)
+	if _, err := store.Lease(context.Background(), ident, PortRange{Start: 42000, End: 42010}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a schema bump / stale binary: an on-disk version below the binary.
+	setUserVersionOnDisk(t, path, schemaVersion-1)
+
+	var logBuf bytes.Buffer
+	defer swapResetLog(&logBuf)()
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+
+	// The live registry was wiped...
+	if got := countRows(t, reopened.db, "select count(*) from routes"); got != 0 {
+		t.Fatalf("routes after reset = %d, want 0", got)
+	}
+
+	// ...but exactly one timestamped backup was written next to it...
+	backups, err := filepath.Glob(path + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("backup files = %v, want exactly 1", backups)
+	}
+
+	// ...and that backup is an openable snapshot still holding the pre-reset route.
+	backupDB, err := sql.Open("sqlite", dataSourceName(backups[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backupDB.Close()
+	if got := countRows(t, backupDB, "select count(*) from routes"); got != 1 {
+		t.Fatalf("routes in backup = %d, want 1", got)
+	}
+	assertUserVersion(t, backupDB, schemaVersion-1)
+
+	// The reset was logged loudly and points at the backup.
+	logged := logBuf.String()
+	if !strings.Contains(logged, "RESETTING") {
+		t.Fatalf("reset log missing loud warning: %q", logged)
+	}
+	if !strings.Contains(logged, backups[0]) {
+		t.Fatalf("reset log %q does not mention backup path %q", logged, backups[0])
+	}
+}
+
+func TestBackupBeforeResetDoesNotClobberExistingTimestampBackup(t *testing.T) {
+	const stamp = "20260702T120000Z"
+	path := t.TempDir() + "/registry.sqlite"
+	firstBackup := backupPathForAttempt(path, stamp, 0)
+	secondBackup := backupPathForAttempt(path, stamp, 1)
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if err := os.WriteFile(firstBackup, []byte("previous backup"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer swapBackupNow(func() time.Time {
+		return time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	})()
+
+	gotBackup, err := store.backupBeforeReset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBackup != secondBackup {
+		t.Fatalf("backup path = %q, want %q", gotBackup, secondBackup)
+	}
+	if got := string(mustReadFile(t, firstBackup)); got != "previous backup" {
+		t.Fatalf("first backup was clobbered: %q", got)
+	}
+	if _, err := os.Stat(secondBackup); err != nil {
+		t.Fatalf("second backup missing: %v", err)
+	}
+}
+
+func TestMigrateRefusesNewerSchemaRegistry(t *testing.T) {
+	path := t.TempDir() + "/registry.sqlite"
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident := testIdentity(t, "feature.audit.lewp", identity.KindRoute)
+	if _, err := store.Lease(context.Background(), ident, PortRange{Start: 42000, End: 42010}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A newer binary wrote this registry; the current binary must refuse it
+	// rather than wipe data it does not understand (a downgrade).
+	setUserVersionOnDisk(t, path, schemaVersion+1)
+
+	var logBuf bytes.Buffer
+	defer swapResetLog(&logBuf)()
+
+	if _, err := Open(path); err == nil {
+		t.Fatal("Open succeeded on a newer-versioned registry; want refusal")
+	} else if !strings.Contains(err.Error(), "newer") {
+		t.Fatalf("error = %v, want mention of newer schema", err)
+	}
+
+	// Refusing must neither wipe, back up, nor log a reset.
+	if logBuf.Len() != 0 {
+		t.Fatalf("reset log wrote on refusal: %q", logBuf.String())
+	}
+	backups, err := filepath.Glob(path + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("backup files on refusal = %v, want none", backups)
+	}
+	raw, err := sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if got := countRows(t, raw, "select count(*) from routes"); got != 1 {
+		t.Fatalf("routes after refusal = %d, want 1 (data preserved)", got)
+	}
+}
+
+func TestMigrateFreshRegistryDoesNotBackUpOrLog(t *testing.T) {
+	path := t.TempDir() + "/registry.sqlite"
+
+	var logBuf bytes.Buffer
+	defer swapResetLog(&logBuf)()
+
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if logBuf.Len() != 0 {
+		t.Fatalf("fresh Open logged a reset: %q", logBuf.String())
+	}
+	backups, err := filepath.Glob(path + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("fresh Open created backups: %v", backups)
+	}
 }
 
 func TestSQLiteForeignKeysEnabled(t *testing.T) {
@@ -995,6 +1171,38 @@ func openTestStore(t *testing.T) *Store {
 	return store
 }
 
+// setUserVersionOnDisk rewrites the registry's schema version through a raw
+// connection, simulating a schema bump or a stale/newer binary having written
+// the file.
+func setUserVersionOnDisk(t *testing.T, path string, version int) {
+	t.Helper()
+	db, err := sql.Open("sqlite", dataSourceName(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("pragma user_version=%d", version)); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// swapResetLog redirects the package reset warning to w and returns a function
+// that restores the previous destination.
+func swapResetLog(w io.Writer) func() {
+	prev := resetLog
+	resetLog = w
+	return func() { resetLog = prev }
+}
+
+func swapBackupNow(now func() time.Time) func() {
+	prev := backupNow
+	backupNow = now
+	return func() { backupNow = prev }
+}
+
 func assertTableExists(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var name string
@@ -1031,6 +1239,15 @@ func countRows(t *testing.T, db *sql.DB, query string, args ...any) int {
 		t.Fatal(err)
 	}
 	return got
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func assertColumn(t *testing.T, db *sql.DB, table, column string) {
