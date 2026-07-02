@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,6 +248,111 @@ func TestServeMintsForConfiguredTLSSuffix(t *testing.T) {
 	if len(leaf.DNSNames) != 1 || leaf.DNSNames[0] != "app.local.todoordie.com" {
 		t.Fatalf("served leaf DNSNames=%v", leaf.DNSNames)
 	}
+}
+
+func TestServeRequestLogRespectsLogAllRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		logAll      bool
+		wantSuccess bool
+	}{
+		{name: "errors-only default", logAll: false, wantSuccess: false},
+		{name: "log all requests", logAll: true, wantSuccess: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})}
+			upstreamLn := listenLocal(t)
+			go func() { _ = upstream.Serve(upstreamLn) }()
+			t.Cleanup(func() { _ = upstream.Close() })
+
+			registryPath := t.TempDir() + "/registry.sqlite"
+			store, err := registry.Open(registryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = store.Remember(context.Background(), identity.Result{
+				Root:           "audit",
+				Name:           "feature-1",
+				NormalizedRoot: "audit",
+				NormalizedName: "feature-1",
+				Host:           "feature-1.audit.lewp",
+				HostKind:       identity.HostKindInstance,
+				HostSource:     identity.SourceInferred,
+				Path:           t.TempDir(),
+				Kind:           identity.KindRoute,
+			}, upstreamLn.Addr().(*net.TCPAddr).Port)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = store.Close()
+
+			httpLn := listenLocal(t)
+			var logs lockedBuffer
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go func() {
+				_ = Serve(ctx, Config{
+					RegistryPath:   registryPath,
+					HTTPListeners:  []net.Listener{httpLn},
+					RequestLog:     &logs,
+					LogAllRequests: tc.logAll,
+				})
+			}()
+
+			req, err := http.NewRequest(http.MethodGet, "http://"+httpLn.Addr().String()+"/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Host = "feature-1.audit.lewp"
+			var resp *http.Response
+			for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); {
+				resp, err = http.DefaultClient.Do(req)
+				if err == nil {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+
+			logged := func() bool { return strings.Contains(logs.String(), "status=200") }
+			if tc.wantSuccess {
+				for deadline := time.Now().Add(time.Second); time.Now().Before(deadline) && !logged(); {
+					time.Sleep(10 * time.Millisecond)
+				}
+				if !logged() {
+					t.Fatalf("expected a success request line, got:\n%s", logs.String())
+				}
+			} else {
+				// Give the daemon a moment to (not) log before asserting silence.
+				time.Sleep(50 * time.Millisecond)
+				if logged() {
+					t.Fatalf("errors-only default logged a successful request:\n%s", logs.String())
+				}
+			}
+		})
+	}
+}
+
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func listenLocal(t *testing.T) net.Listener {

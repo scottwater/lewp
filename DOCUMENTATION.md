@@ -25,7 +25,7 @@ install.
 ## Commands
 
 ```sh
-lewp setup [--suffix S] [--allow-domain-mirror]
+lewp setup [--suffix S] [--allow-domain-mirror] [--log-requests errors|all]
 lewp system start|stop|status|restart
 lewp system uninstall [--yes]
 lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--reset] [--json|--shell]
@@ -104,6 +104,14 @@ mirror mode is explicitly allowed. Setup is additive: re-running with another
 `--suffix` keeps previously configured suffixes. After adding a suffix, run
 `lewp system start` (or pass `--start` to setup) so launchd starts or kickstarts
 the daemon and it loads the updated suffix list.
+
+`--log-requests errors|all` sets how much request traffic the daemon logs
+(persisted in the launchd plist). The default, `errors`, logs only failed
+requests (a proxy error or an HTTP status ≥ 400) so a steady stream of
+successful HMR/SSE/websocket traffic cannot grow `daemon.out.log` without bound.
+`--log-requests=all` logs one line per proxied request; re-running `lewp setup`
+without the flag returns to the errors-only default. Restart the daemon (`lewp
+system restart`, or `--start`) for a change to take effect.
 
 Output:
 
@@ -646,9 +654,12 @@ mismatch: launchd runs /old/bin/lewp but this CLI is /usr/local/bin/lewp — run
 Show or tail the launchd-managed daemon's logs. launchd writes the daemon's
 stdout and stderr to `daemon.out.log` and `daemon.err.log` under
 `~/Library/Logs/lewp` (set as `StandardOutPath` / `StandardErrorPath` in the
-plist). The daemon's stdout carries one request line per proxied request
-(host, method, scheme, upstream target, status, and any proxy error); startup
-failures land on stderr.
+plist). By default the daemon's stdout carries a request line only for failed
+requests (a proxy error or an HTTP status ≥ 400); startup failures land on
+stderr. This errors-only default keeps the log from growing without bound under
+a steady stream of successful HMR/SSE/websocket traffic. To log every proxied
+request (host, method, scheme, upstream target, status, and any proxy error),
+run `lewp setup --log-requests=all` (see [`lewp setup`](#lewp-setup)).
 
 ```sh
 lewp logs                  # last 200 lines of each log, with a header per file
@@ -722,9 +733,11 @@ The daemon owns:
 - HTTPS proxy listeners from launchd
 - SNI certificate minting from the persisted local CA
 
-The daemon logs one line per proxied request to stdout (captured in
-`daemon.out.log`); inspect it with `lewp logs`. Startup errors are written to
-stderr (`daemon.err.log`).
+The daemon logs failed requests (proxy errors and statuses ≥ 400) to stdout
+(captured in `daemon.out.log`); inspect it with `lewp logs`. Pass
+`--log-requests=all` (normally persisted by `lewp setup --log-requests=all`) to
+log every proxied request instead. Startup errors are written to stderr
+(`daemon.err.log`).
 
 ## `.lewp` error pages
 

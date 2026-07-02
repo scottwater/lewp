@@ -18,6 +18,10 @@ type Config struct {
 	PlistPath  string
 	StdoutPath string
 	StderrPath string
+	// ExtraDaemonArgs are appended to the daemon's ProgramArguments after the
+	// "daemon" subcommand (e.g. "--log-requests=all"). They let setup persist
+	// daemon options in the plist without the daemon honoring its own env.
+	ExtraDaemonArgs []string
 }
 
 // Plist renders the launchd agent definition for the daemon.
@@ -37,6 +41,10 @@ func Plist(cfg Config) string {
 	}
 	label := xmlEscape(cfg.Label)
 	program := xmlEscape(cfg.Program)
+	daemonArgs := "    <string>daemon</string>\n"
+	for _, arg := range cfg.ExtraDaemonArgs {
+		daemonArgs += fmt.Sprintf("    <string>%s</string>\n", xmlEscape(arg))
+	}
 	logPaths := ""
 	if cfg.StdoutPath != "" {
 		logPaths += fmt.Sprintf("  <key>StandardOutPath</key>\n  <string>%s</string>\n", xmlEscape(cfg.StdoutPath))
@@ -53,8 +61,7 @@ func Plist(cfg Config) string {
   <key>ProgramArguments</key>
   <array>
     <string>%s</string>
-    <string>daemon</string>
-  </array>
+%s  </array>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -95,7 +102,7 @@ func Plist(cfg Config) string {
   </dict>
 </dict>
 </plist>
-`, label, program, logPaths)
+`, label, program, daemonArgs, logPaths)
 }
 
 func xmlEscape(s string) string {

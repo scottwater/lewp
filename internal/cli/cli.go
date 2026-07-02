@@ -246,7 +246,42 @@ func Run(cfg Config) int {
 	}
 }
 
+// Request-log modes for the daemon's --log-requests flag (and lewp setup's).
+// "errors" (the default) logs only failed requests so a steady stream of
+// successful HMR/SSE traffic cannot grow the daemon log without bound; "all"
+// restores logging one line per proxied request.
+const (
+	logRequestsErrors = "errors"
+	logRequestsAll    = "all"
+)
+
+// parseLogRequests maps a --log-requests value to whether every request should
+// be logged. Unknown values are rejected so a typo cannot silently fall back to
+// a mode the user did not intend.
+func parseLogRequests(mode string) (bool, error) {
+	switch mode {
+	case logRequestsErrors:
+		return false, nil
+	case logRequestsAll:
+		return true, nil
+	default:
+		return false, fmt.Errorf("invalid --log-requests %q: want %q or %q", mode, logRequestsErrors, logRequestsAll)
+	}
+}
+
 func runDaemon(cfg Config) int {
+	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
+	fs.SetOutput(cfg.Stderr)
+	logRequests := fs.String("log-requests", logRequestsErrors, "")
+	if fs.Parse(cfg.Args[1:]) != nil {
+		return 2
+	}
+	logAllRequests, err := parseLogRequests(*logRequests)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "%v\n", err)
+		return 2
+	}
+
 	httpListeners, err := launchd.ActivatedListeners("HTTP")
 	if err != nil {
 		fmt.Fprintf(cfg.Stderr, "activate HTTP listener: %v\n", err)
@@ -302,6 +337,7 @@ func runDaemon(cfg Config) int {
 			TLSSuffixes:     suffix.TLSEligible(suffixCfg.Suffixes),
 			CAPath:          cfg.CAPath,
 			CAKeyPath:       cfg.CAKeyPath,
+			LogAllRequests:  logAllRequests,
 		})
 	}()
 
@@ -327,9 +363,15 @@ func runSetup(cfg Config) int {
 	fs.SetOutput(cfg.Stderr)
 	start := fs.Bool("start", false, "")
 	allowDomainMirror := fs.Bool("allow-domain-mirror", false, "")
+	logRequests := fs.String("log-requests", logRequestsErrors, "")
 	var suffixFlags stringListFlag
 	fs.Var(&suffixFlags, "suffix", "")
 	if fs.Parse(cfg.Args[1:]) != nil {
+		return 2
+	}
+	logAllRequests, err := parseLogRequests(*logRequests)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "%v\n", err)
 		return 2
 	}
 
@@ -391,11 +433,16 @@ func runSetup(cfg Config) int {
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.LogDir)
 		return 1
 	}
+	var extraDaemonArgs []string
+	if logAllRequests {
+		extraDaemonArgs = []string{"--log-requests=" + logRequestsAll}
+	}
 	if err := launchd.WritePlist(cfg.PlistPath, launchd.Config{
-		Label:      launchd.DefaultLabel,
-		Program:    cfg.ProgramPath,
-		StdoutPath: cfg.LogDir + "/daemon.out.log",
-		StderrPath: cfg.LogDir + "/daemon.err.log",
+		Label:           launchd.DefaultLabel,
+		Program:         cfg.ProgramPath,
+		StdoutPath:      cfg.LogDir + "/daemon.out.log",
+		StderrPath:      cfg.LogDir + "/daemon.err.log",
+		ExtraDaemonArgs: extraDaemonArgs,
 	}); err != nil {
 		fmt.Fprintf(cfg.Stderr, "write launchd plist: %v\n", err)
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.PlistPath)

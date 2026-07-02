@@ -277,6 +277,7 @@ func TestProxyLogsRequestDetails(t *testing.T) {
 	store := openProxyStore(t)
 	registerRoute(t, store, "feature-1.audit.lewp", port)
 	handler := New(store)
+	handler.LogAll = true
 	var logs bytes.Buffer
 	handler.Logger = log.New(&logs, "", 0)
 
@@ -298,6 +299,48 @@ func TestProxyLogsRequestDetails(t *testing.T) {
 	}
 }
 
+func TestProxyErrorsOnlyDefaultSkipsSuccessfulRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+
+	store := openProxyStore(t)
+	registerRoute(t, store, "feature-1.audit.lewp", port)
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-1.audit.lewp/", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got := logs.String(); got != "" {
+		t.Fatalf("errors-only default should not log a successful request, got:\n%s", got)
+	}
+}
+
+func TestProxyErrorsOnlyDefaultLogsFailedStatus(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+
+	store := openProxyStore(t)
+	registerRoute(t, store, "feature-1.audit.lewp", port)
+	handler := New(store)
+	var logs bytes.Buffer
+	handler.Logger = log.New(&logs, "", 0)
+
+	req := httptest.NewRequest(http.MethodGet, "http://feature-1.audit.lewp/boom", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if got := logs.String(); !strings.Contains(got, "status=500") {
+		t.Fatalf("errors-only default should log a >= 400 status, got:\n%s", got)
+	}
+}
+
 func TestProxyLogsDefaultOKForHeaderlessResponse(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer upstream.Close()
@@ -306,6 +349,7 @@ func TestProxyLogsDefaultOKForHeaderlessResponse(t *testing.T) {
 	store := openProxyStore(t)
 	registerRoute(t, store, "feature-1.audit.lewp", port)
 	handler := New(store)
+	handler.LogAll = true
 	var logs bytes.Buffer
 	handler.Logger = log.New(&logs, "", 0)
 
@@ -364,6 +408,7 @@ func TestProxyLoggingPreservesWebSocketUpgrade(t *testing.T) {
 	store := openProxyStore(t)
 	registerRoute(t, store, "feature-1.audit.lewp", port)
 	handler := New(store)
+	handler.LogAll = true
 	var logs lockedBuffer
 	handler.Logger = log.New(&logs, "", 0)
 	proxyServer := httptest.NewServer(handler)

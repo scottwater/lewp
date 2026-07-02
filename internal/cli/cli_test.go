@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"reflect"
@@ -287,6 +288,74 @@ func TestRunSetupCreatesPrivateLogDir(t *testing.T) {
 	if got := info.Mode().Perm(); got != 0o700 {
 		t.Fatalf("log dir mode=%#o, want 0700", got)
 	}
+}
+
+func TestRunSetupPersistsLogRequestsMode(t *testing.T) {
+	setupCfg := func(dir string, args []string) Config {
+		return Config{
+			Args:         args,
+			WorkDir:      t.TempDir(),
+			PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+			ResolverPath: dir + "/resolver/lewp",
+			SuffixesPath: dir + "/suffixes.toml",
+			CAPath:       dir + "/ca.pem",
+			CAKeyPath:    dir + "/ca-key.pem",
+			LogDir:       dir + "/Logs/lewp",
+			ProgramPath:  dir + "/bin/lewp",
+			Stdout:       io.Discard,
+			Stderr:       io.Discard,
+			RunCommand:   func(context.Context, []string) error { return nil },
+			RunCommandOutput: func(context.Context, []string) (string, error) {
+				return dir + "/bin/lewp\n", nil
+			},
+		}
+	}
+
+	t.Run("default is errors-only", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := setupCfg(dir, []string{"setup"})
+		if code := Run(cfg); code != 0 {
+			t.Fatalf("code=%d", code)
+		}
+		plist, err := os.ReadFile(cfg.PlistPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(plist), "--log-requests") {
+			t.Fatalf("default setup should not add --log-requests:\n%s", plist)
+		}
+	})
+
+	t.Run("all persists flag into plist", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := setupCfg(dir, []string{"setup", "--log-requests=all"})
+		if code := Run(cfg); code != 0 {
+			t.Fatalf("code=%d", code)
+		}
+		plist, err := os.ReadFile(cfg.PlistPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(plist), "<string>--log-requests=all</string>") {
+			t.Fatalf("setup --log-requests=all should persist the flag:\n%s", plist)
+		}
+	})
+
+	t.Run("invalid value is rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		var stderr bytes.Buffer
+		cfg := setupCfg(dir, []string{"setup", "--log-requests=loud"})
+		cfg.Stderr = &stderr
+		if code := Run(cfg); code != 2 {
+			t.Fatalf("code=%d, want 2", code)
+		}
+		if !strings.Contains(stderr.String(), "invalid --log-requests") {
+			t.Fatalf("stderr=%q", stderr.String())
+		}
+		if _, err := os.Stat(cfg.PlistPath); !os.IsNotExist(err) {
+			t.Fatalf("invalid setup should not write a plist: err=%v", err)
+		}
+	})
 }
 
 func TestDoctorReportsCustomSuffixResolvers(t *testing.T) {

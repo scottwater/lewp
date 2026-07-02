@@ -26,10 +26,15 @@ type Proxy struct {
 	lastSeen        map[int64]time.Time
 	managedSuffixes []string
 	mu              sync.Mutex
-	// Logger, when set, receives one line per proxied request with the host,
-	// method, scheme, upstream target, and resulting status (or error). It is
-	// left nil in tests so request logging stays quiet unless asserted.
+	// Logger, when set, receives request log lines with the host, method,
+	// scheme, upstream target, and resulting status (or error). It is left nil
+	// in tests so request logging stays quiet unless asserted.
 	Logger *log.Logger
+	// LogAll controls request-log volume. When false (the default), only
+	// requests that failed — a proxy error or a status >= 400 — are logged, so a
+	// steady stream of successful HMR/SSE/websocket traffic cannot grow the
+	// daemon log without bound. When true, every proxied request is logged.
+	LogAll bool
 }
 
 func New(store *registry.Store) *Proxy {
@@ -128,8 +133,13 @@ func proxyHostInManagedSuffix(host string, managed []string) bool {
 
 // logRequest emits a single structured request line when a logger is attached.
 // It never panics on a missing logger so callers can invoke it unconditionally.
+// By default it stays quiet for successful requests (errors-only) so the daemon
+// log does not grow without bound; LogAll opts into logging every request.
 func (p *Proxy) logRequest(r *http.Request, host, target string, status int, err error) {
 	if p.Logger == nil {
+		return
+	}
+	if !p.LogAll && err == nil && status < 400 {
 		return
 	}
 	fields := fmt.Sprintf("request host=%s method=%s proto=%s path=%s status=%d",

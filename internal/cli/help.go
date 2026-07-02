@@ -64,10 +64,16 @@ macOS may prompt you to trust the local development CA in your keychain.
 
 Usage:
   lewp setup [--suffix <suffix>] [--allow-domain-mirror] [--start]
+             [--log-requests errors|all]
 
 It writes /etc/resolver/lewp (via sudo when needed), creates the local CA under
 ~/Library/Application Support/lewp/, installs the launchd plist, and trusts the
 CA with the macOS "security" tool. Run "lewp system start" afterward.
+
+--log-requests controls how much request traffic the daemon logs (persisted in
+the launchd plist). The default "errors" logs only failed requests (a proxy
+error or an HTTP status >= 400), so successful HMR/SSE/websocket traffic cannot
+grow daemon.out.log without bound. Use "all" to log every proxied request.
 
 Custom public dev suffixes default to safe-subtree mode:
   lewp setup --suffix local.todoordie.com
@@ -383,10 +389,15 @@ Examples:
 	daemonHelp = `lewp daemon — run the daemon in the foreground
 
 Usage:
-  lewp daemon
+  lewp daemon [--log-requests errors|all]
 
 Normally launchd starts this command. It owns the registry, .lewp DNS responder,
 HTTP/HTTPS proxy, and local control socket.
+
+--log-requests controls request-log volume. The default "errors" logs only
+failed requests (a proxy error or an HTTP status >= 400); "all" logs every
+proxied request. Prefer "lewp setup --log-requests=all" so the choice persists
+in the launchd plist.
 `
 )
 

@@ -39,6 +39,32 @@ func TestPlistUsesLoopbackSocketsForHTTPAndHTTPS(t *testing.T) {
 	}
 }
 
+func TestPlistDefaultsToBareDaemonSubcommand(t *testing.T) {
+	got := Plist(Config{Label: "dev.lewp.daemon", Program: "/usr/local/bin/lewp"})
+	if !strings.Contains(got, "<string>daemon</string>") {
+		t.Fatalf("plist missing daemon subcommand:\n%s", got)
+	}
+	if strings.Contains(got, "--log-requests") {
+		t.Fatalf("plist should not add daemon flags by default:\n%s", got)
+	}
+}
+
+func TestPlistAppendsExtraDaemonArgs(t *testing.T) {
+	got := Plist(Config{
+		Label:           "dev.lewp.daemon",
+		Program:         "/usr/local/bin/lewp",
+		ExtraDaemonArgs: []string{"--log-requests=all"},
+	})
+	daemon := strings.Index(got, "<string>daemon</string>")
+	arg := strings.Index(got, "<string>--log-requests=all</string>")
+	if daemon < 0 || arg < 0 {
+		t.Fatalf("plist missing daemon args:\n%s", got)
+	}
+	if arg < daemon {
+		t.Fatalf("extra daemon args must follow the daemon subcommand:\n%s", got)
+	}
+}
+
 func TestPlistKeepsDaemonAliveOnAbnormalExit(t *testing.T) {
 	got := Plist(Config{Label: "dev.lewp.daemon", Program: "/usr/local/bin/lewp"})
 	value, ok := plistDictBool(t, got, "KeepAlive", "SuccessfulExit")

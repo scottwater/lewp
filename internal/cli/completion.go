@@ -71,6 +71,7 @@ _lewp() {
     return 0
   fi
   case "${COMP_WORDS[1]}" in
+    setup)  COMPREPLY=( $(compgen -W "--suffix --allow-domain-mirror --start --log-requests --help" -- "$cur") ) ;;
     system) COMPREPLY=( $(compgen -W "start stop status restart uninstall --help" -- "$cur") ) ;;
     add)    COMPREPLY=( $(compgen -W "--root --name --host --auto-suffix --reset --json --shell --help" -- "$cur") ) ;;
     alias)  COMPREPLY=( $(compgen -W "add remove list --json --help" -- "$cur") ) ;;
@@ -100,6 +101,7 @@ func zshCompletion() string {
 	b.WriteString("    _describe -t commands 'lewp command' commands\n")
 	b.WriteString("  else\n")
 	b.WriteString("    case \"${words[2]}\" in\n")
+	b.WriteString("      setup) _values 'setup options' --suffix --allow-domain-mirror --start --log-requests --help ;;\n")
 	b.WriteString("      system) _values 'action' start stop status restart uninstall ;;\n")
 	b.WriteString("      add) _values 'add options' --root --name --host --auto-suffix --reset --json --shell --help ;;\n")
 	b.WriteString("      alias) _values 'alias subcommand/options' add remove list --json --help ;;\n")
@@ -122,6 +124,10 @@ func fishCompletion() string {
 	for _, c := range completionCommands {
 		fmt.Fprintf(&b, "complete -c lewp -n __fish_use_subcommand -a %s -d '%s'\n", c.name, c.desc)
 	}
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from setup' -l suffix -r -d 'Add a managed suffix'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from setup' -l allow-domain-mirror -d 'Allow exact public-domain mirror suffixes'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from setup' -l start -d 'Start or restart the daemon after setup'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from setup' -l log-requests -r -d 'Set daemon request logging mode'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from system' -a 'start stop status restart uninstall'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l root -r -d 'Override root segment'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l name -r -d 'Override instance segment'\n")

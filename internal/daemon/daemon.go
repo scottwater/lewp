@@ -29,9 +29,13 @@ type Config struct {
 	TLSConfig   *gotls.Config
 	CAPath      string
 	CAKeyPath   string
-	// RequestLog receives one line per proxied request. When nil it defaults to
-	// os.Stdout, which launchd routes to the daemon's StandardOutPath log file.
+	// RequestLog receives request log lines. When nil it defaults to os.Stdout,
+	// which launchd routes to the daemon's StandardOutPath log file.
 	RequestLog io.Writer
+	// LogAllRequests logs every proxied request instead of the errors-only
+	// default. The default keeps the launchd-captured daemon log from growing
+	// without bound under a steady stream of successful HMR/SSE traffic.
+	LogAllRequests bool
 }
 
 func Serve(ctx context.Context, cfg Config) error {
@@ -49,6 +53,7 @@ func Serve(ctx context.Context, cfg Config) error {
 		requestLog = os.Stdout
 	}
 	handler.Logger = log.New(requestLog, "", log.LstdFlags|log.LUTC)
+	handler.LogAll = cfg.LogAllRequests
 	tlsConfig := cfg.TLSConfig
 	if tlsConfig == nil && len(cfg.HTTPSListeners) > 0 {
 		tlsSuffixes := cfg.TLSSuffixes
