@@ -302,11 +302,14 @@ func splitCheckLine(line string) (string, string) {
 
 // proxyBindCheck confirms the daemon is actually serving HTTP on loopback port
 // 80. The control socket can be up while socket activation failed to hand off
-// port 80, so this is a distinct check.
+// port 80, so this is a distinct check. It runs only when the daemon is up (see
+// collectDoctorChecks), so a dead proxy here is daemon-up-but-proxy-dead: every
+// .lewp host is dead in the browser. That is a core-function failure, not a
+// warning, so it fails doctor.
 func proxyBindCheck(cfg Config) doctorCheck {
 	c := doctorCheck{Name: "proxy port 80"}
 	if err := cfg.DialAddr("tcp", "127.0.0.1:80"); err != nil {
-		c.Status = statusWarn
+		c.Status = statusFail
 		c.Detail = "not accepting connections on 127.0.0.1:80"
 		c.Run = "lewp system restart"
 		c.Inspect = "lewp logs --lines 200"
@@ -319,7 +322,10 @@ func proxyBindCheck(cfg Config) doctorCheck {
 
 // dnsResolutionChecks query the responder directly and confirm managed suffixes
 // answer with loopback. They target the daemon's responder port, not the system
-// resolver, so they work before /etc/resolver caches settle.
+// resolver, so they work before /etc/resolver caches settle. They run only when
+// the daemon is up (see collectDoctorChecks), so a responder that does not
+// answer here is daemon-up-but-DNS-dead: no .lewp host resolves. That is a
+// core-function failure, so the not-answering case fails doctor.
 func dnsResolutionChecks(cfg Config) []doctorCheck {
 	checks := []doctorCheck{dnsResolutionCheck(".lewp resolution", "doctor.lewp", "doctor.lewp", cfg)}
 	suffixCfg, err := suffix.Load(cfg.SuffixesPath)
@@ -340,7 +346,7 @@ func dnsResolutionCheck(name, host, label string, cfg Config) doctorCheck {
 	server := fmt.Sprintf("127.0.0.1:%d", dns.DefaultPort)
 	ip, err := cfg.LookupLewp(ctx, server, host)
 	if err != nil {
-		c.Status = statusWarn
+		c.Status = statusFail
 		c.Detail = fmt.Sprintf("responder at %s did not answer (%v)", server, err)
 		c.Run = "lewp system restart"
 		return c
@@ -365,10 +371,11 @@ func dnsResolutionCheck(name, host, label string, cfg Config) doctorCheck {
 //
 // It runs only when the daemon is up (see collectDoctorChecks): with no
 // responder answering, a not-resolving result would be expected rather than a
-// misconfiguration. A not-resolving result is a warn — dscacheutil caching can
-// lag a just-started daemon and severity policy is otherwise deferred to the
-// doctor-severity work — while a non-loopback answer is a hard fail, since
-// something other than the local responder is claiming .lewp.
+// misconfiguration. A not-resolving result stays a warn — unlike the direct
+// responder probe (which fails hard when the daemon's DNS is dead), dscacheutil
+// caching can lag a just-started daemon, so a green responder with a not-yet-warm
+// system cache is transient rather than broken. A non-loopback answer is a hard
+// fail, since something other than the local responder is claiming .lewp.
 func systemResolverCheck(cfg Config) doctorCheck {
 	const probe = "probe.lewp"
 	c := doctorCheck{Name: "system resolver"}

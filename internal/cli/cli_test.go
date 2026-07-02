@@ -562,6 +562,177 @@ func TestDoctorSystemResolverProbeFailsOnNonLoopback(t *testing.T) {
 	}
 }
 
+// TestDoctorProxyBindCheckFailsWhenProxyDead proves a daemon-up-but-proxy-dead
+// state (socket-activation handoff failed, so 127.0.0.1:80 is not accepting) is
+// a hard failure, not a warning: every .lewp host is dead in the browser, and a
+// warn would let doctor exit 0 on a core-function outage.
+func TestDoctorProxyBindCheckFailsWhenProxyDead(t *testing.T) {
+	check := proxyBindCheck(Config{
+		DialAddr: func(string, string) error { return errors.New("connection refused") },
+	})
+	if check.Status != statusFail {
+		t.Fatalf("dead proxy should fail, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "127.0.0.1:80") {
+		t.Fatalf("detail should name the loopback proxy address, got %q", check.Detail)
+	}
+}
+
+func TestDoctorProxyBindCheckOKWhenListening(t *testing.T) {
+	check := proxyBindCheck(Config{DialAddr: func(string, string) error { return nil }})
+	if check.Status != statusOK {
+		t.Fatalf("listening proxy should be ok, got %+v", check)
+	}
+}
+
+func healthyDoctorConfig(t *testing.T, dir, socketPath string, args []string) Config {
+	t.Helper()
+
+	programPath := dir + "/lewp"
+	if err := os.WriteFile(programPath, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	resolverPath := dir + "/resolver/lewp"
+	if err := dns.WriteResolverFile(resolverPath, dns.DefaultPort); err != nil {
+		t.Fatal(err)
+	}
+	suffixesPath := dir + "/suffixes.toml"
+	if err := suffix.Save(suffixesPath, suffix.Config{}); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := localtls.NewCA(localtls.CACommonName, []string{suffix.BuiltIn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPath := dir + "/ca.pem"
+	caKeyPath := dir + "/ca-key.pem"
+	if err := ca.Save(caPath, caKeyPath); err != nil {
+		t.Fatal(err)
+	}
+	plistPath := dir + "/dev.lewp.daemon.plist"
+	if err := launchd.WritePlist(plistPath, launchd.Config{Label: "dev.lewp.daemon", Program: programPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	return Config{
+		Args:         args,
+		WorkDir:      dir,
+		SocketPath:   socketPath,
+		ProgramPath:  programPath,
+		PlistPath:    plistPath,
+		CAPath:       caPath,
+		CAKeyPath:    caKeyPath,
+		ResolverPath: resolverPath,
+		SuffixesPath: suffixesPath,
+		LogDir:       dir + "/Logs",
+		Version:      "test",
+		RunCommand:   func(context.Context, []string) error { return nil },
+		RunCommandOutput: func(context.Context, []string) (string, error) {
+			return "lewp version test\n", nil
+		},
+		DialAddr: func(string, string) error { return nil },
+		LookupLewp: func(context.Context, string, string) (net.IP, error) {
+			return net.ParseIP("127.0.0.1"), nil
+		},
+		SystemResolve: func(context.Context, string) ([]net.IP, error) {
+			return []net.IP{net.ParseIP("127.0.0.1")}, nil
+		},
+	}
+}
+
+// TestDoctorDNSResolutionFailsWhenResponderSilent proves a daemon-up-but-DNS-dead
+// state (the responder does not answer on its own port) is a hard failure: no
+// .lewp host resolves, so it must fail doctor rather than warn.
+func TestDoctorDNSResolutionFailsWhenResponderSilent(t *testing.T) {
+	check := dnsResolutionCheck(".lewp resolution", "doctor.lewp", "doctor.lewp", Config{
+		LookupLewp: func(context.Context, string, string) (net.IP, error) {
+			return nil, errors.New("no answer")
+		},
+	})
+	if check.Status != statusFail {
+		t.Fatalf("silent responder should fail, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "did not answer") {
+		t.Fatalf("detail should explain the responder did not answer, got %q", check.Detail)
+	}
+}
+
+// TestRunDoctorFailsWhenDaemonUpButProxyDead is the end-to-end regression: the
+// control socket answers (daemon up) but the proxy is not accepting on port 80.
+// doctor must exit nonzero rather than exiting 0 on a dead proxy.
+func TestRunDoctorFailsWhenDaemonUpButProxyDead(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	cfg := healthyDoctorConfig(t, dir, socketPath, []string{"doctor"})
+	cfg.Stdout = &stdout
+	cfg.Stderr = &stderr
+	// Proxy is dead: socket activation never handed off port 80.
+	cfg.DialAddr = func(string, string) error { return errors.New("connection refused") }
+	code := Run(cfg)
+
+	if code != 1 {
+		t.Fatalf("doctor with a dead proxy should exit 1, got %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "[fail] proxy port 80") {
+		t.Fatalf("doctor output should mark the proxy as failed:\n%s", stdout.String())
+	}
+	if got := strings.Count(stdout.String(), "[fail]"); got != 1 {
+		t.Fatalf("proxy should be the only failing check, got %d failures:\n%s", got, stdout.String())
+	}
+}
+
+func TestRunDoctorJSONFailsWhenDaemonUpButDNSResponderDead(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	cfg := healthyDoctorConfig(t, dir, socketPath, []string{"doctor", "--json"})
+	cfg.Stdout = &stdout
+	cfg.Stderr = &stderr
+	cfg.LookupLewp = func(context.Context, string, string) (net.IP, error) {
+		return nil, errors.New("no answer")
+	}
+	code := Run(cfg)
+
+	if code != 1 {
+		t.Fatalf("doctor with a dead DNS responder should exit 1, got %d\n%s", code, stdout.String())
+	}
+	var parsed struct {
+		OK     bool `json:"ok"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		t.Fatalf("doctor --json not valid JSON: %v\n%s", err, stdout.String())
+	}
+	if parsed.OK {
+		t.Fatalf("expected ok=false with dead DNS responder: %s", stdout.String())
+	}
+	failures := 0
+	foundResolution := false
+	for _, check := range parsed.Checks {
+		if check.Status == string(statusFail) {
+			failures++
+		}
+		if check.Name == ".lewp resolution" {
+			foundResolution = true
+			if check.Status != string(statusFail) {
+				t.Fatalf(".lewp resolution should fail, got %+v", check)
+			}
+		}
+	}
+	if !foundResolution {
+		t.Fatalf("doctor JSON missing .lewp resolution check: %s", stdout.String())
+	}
+	if failures != 1 {
+		t.Fatalf(".lewp resolution should be the only failing check, got %d failures: %s", failures, stdout.String())
+	}
+}
+
 func TestParseDscacheutilIPs(t *testing.T) {
 	out := `name: probe.lewp
 ip_address: 127.0.0.1
