@@ -37,6 +37,11 @@ type LeaseRequest struct {
 	// AutoSuffix opts an explicit --host into the deterministic-suffix conflict
 	// behavior instead of failing when the host is already taken.
 	AutoSuffix bool
+	// Reset discards any remembered identity override (host/root/name) for this
+	// directory and re-resolves from flags, env, config, and inference. The fresh
+	// identity is persisted in place, so the active lease (port) and event history
+	// survive — unlike release --forget, which deletes the whole route.
+	Reset bool
 }
 
 // HostConflictError is returned when an explicitly requested host (--host, env,
@@ -174,23 +179,37 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 	if err != nil {
 		return LeaseResponse{}, err
 	}
-	if req.Root == "" && req.Name == "" && req.Host == "" &&
-		resolved.RootSource == identity.SourceInferred &&
-		resolved.NameSource == identity.SourceInferred &&
-		resolved.HostSource == identity.SourceInferred {
+	if req.Reset {
+		// --reset re-resolves purely from flags/env/config/inference: skip both
+		// remembered-identity restorations below so the persisted override does not
+		// come back. Report which override is being cleared so the user sees that
+		// the reset took effect (leasing below overwrites the route/host in place).
 		if remembered, ok, err := s.store.RememberedPathIdentity(ctx, resolved.Path, identity.KindRoute); err != nil {
 			return LeaseResponse{}, err
 		} else if ok {
-			resolved = remembered
+			if warning, changed := describeReset(remembered, resolved); changed {
+				resolved.Warnings = append(resolved.Warnings, warning)
+			}
 		}
-	}
-	if resolved.HostSource == identity.SourceInferred {
-		if remembered, ok, err := s.store.RememberedIdentity(ctx, resolved.Path, identity.KindRoute, resolved.NormalizedName); err != nil {
-			return LeaseResponse{}, err
-		} else if ok && remembered.Host != "" && remembered.HostSource != identity.SourceInferred {
-			resolved.Host = remembered.Host
-			resolved.HostKind = remembered.HostKind
-			resolved.HostSource = remembered.HostSource
+	} else {
+		if req.Root == "" && req.Name == "" && req.Host == "" &&
+			resolved.RootSource == identity.SourceInferred &&
+			resolved.NameSource == identity.SourceInferred &&
+			resolved.HostSource == identity.SourceInferred {
+			if remembered, ok, err := s.store.RememberedPathIdentity(ctx, resolved.Path, identity.KindRoute); err != nil {
+				return LeaseResponse{}, err
+			} else if ok {
+				resolved = remembered
+			}
+		}
+		if resolved.HostSource == identity.SourceInferred {
+			if remembered, ok, err := s.store.RememberedIdentity(ctx, resolved.Path, identity.KindRoute, resolved.NormalizedName); err != nil {
+				return LeaseResponse{}, err
+			} else if ok && remembered.Host != "" && remembered.HostSource != identity.SourceInferred {
+				resolved.Host = remembered.Host
+				resolved.HostKind = remembered.HostKind
+				resolved.HostSource = remembered.HostSource
+			}
 		}
 	}
 	conflictRenamed := false
@@ -290,6 +309,28 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 		return ReleaseResponse{}, err
 	}
 	return ReleaseResponse{Routes: routes, Ports: ports}, nil
+}
+
+// describeReset compares the previously remembered identity for a directory
+// against the freshly re-resolved one and, when --reset actually changes a
+// remembered host/root/name, returns a single warning naming each cleared field
+// as "old -> new". It returns changed=false when the reset is a no-op (nothing
+// was overridden), so no spurious warning is printed.
+func describeReset(remembered, resolved identity.Result) (string, bool) {
+	var parts []string
+	if remembered.Host != resolved.Host && remembered.Host != "" {
+		parts = append(parts, fmt.Sprintf("host %s -> %s", remembered.Host, resolved.Host))
+	}
+	if remembered.Root != resolved.Root && remembered.Root != "" {
+		parts = append(parts, fmt.Sprintf("root %s -> %s", remembered.Root, resolved.Root))
+	}
+	if remembered.Name != resolved.Name && remembered.Name != "" {
+		parts = append(parts, fmt.Sprintf("name %s -> %s", remembered.Name, resolved.Name))
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return "reset remembered identity: " + strings.Join(parts, ", "), true
 }
 
 // leaseState maps a freshly returned lease to the user-facing new/reused state,

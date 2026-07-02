@@ -140,6 +140,15 @@ LEWP_ROOT=atlas LEWP_NAME=feature-1 lewp add
 export LEWP_HOST=sso.atlas.lewp     # pin an explicit host for this shell
 ```
 
+Passing `--root`, `--name`, or `--host` to `lewp add` is remembered for that
+directory. Use `lewp add --reset` to clear those remembered route overrides and
+re-resolve from flags, environment, config, and inference while keeping the same
+port, aliases, and route history. Combine it with a flag to keep one value:
+
+```sh
+lewp add --reset --root atlas
+```
+
 For a stable, path-independent identity, write a `.lewp.local.toml` with
 `lewp init`:
 

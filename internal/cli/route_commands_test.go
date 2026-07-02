@@ -239,6 +239,39 @@ func TestRunAddForwardsClientEnv(t *testing.T) {
 	}
 }
 
+func TestRunAddResetClearsRememberedOverride(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+
+	// Remember a host override for this directory.
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"add", "--root", "audit", "--name", "feature-1", "--host", "custom.lewp"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "HOST=custom.lewp") {
+		t.Fatalf("override add missing host: %q", stdout.String())
+	}
+
+	// --reset re-resolves from flags: the override is dropped and a stderr note
+	// reports what was cleared, while stdout keeps clean env lines.
+	stdout.Reset()
+	stderr.Reset()
+	code = Run(Config{Args: []string{"add", "--reset", "--root", "audit", "--name", "feature-1"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 {
+		t.Fatalf("add --reset code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "HOST=feature-1.audit.lewp") {
+		t.Fatalf("reset did not clear host override: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "custom.lewp") {
+		t.Fatalf("reset warning leaked into stdout: %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "reset remembered identity") || !strings.Contains(stderr.String(), "custom.lewp") {
+		t.Fatalf("reset note missing on stderr: %q", stderr.String())
+	}
+}
+
 func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	socketPath := startTestDaemon(t)
 	srcDir := t.TempDir()

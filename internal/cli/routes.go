@@ -21,10 +21,11 @@ func runAdd(cfg Config) int {
 	jsonOut := fs.Bool("json", false, "")
 	shell := fs.Bool("shell", false, "")
 	autoSuffix := fs.Bool("auto-suffix", false, "")
+	reset := fs.Bool("reset", false, "")
 	if !parseFlags(cfg, fs, "add") {
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix, Env: cfg.Env}})
+	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix, Reset: *reset, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}

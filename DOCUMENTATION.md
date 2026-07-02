@@ -27,7 +27,7 @@ install.
 ```sh
 lewp setup [--suffix S] [--allow-domain-mirror]
 lewp system start|stop|status|restart|uninstall
-lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--json|--shell]
+lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--reset] [--json|--shell]
 lewp alias add <host> [--json]
 lewp alias remove <host>
 lewp alias list [--json]
@@ -290,6 +290,30 @@ By default an inferred host that collides with another folder's is given a
 deterministic suffix (the original owner is kept). An explicit `--host` that
 collides fails with the conflicting path and cleanup guidance; pass
 `--auto-suffix` to take a deterministic suffix instead of failing.
+
+### Clearing a remembered override with `--reset`
+
+Once you pass `--root`, `--name`, or `--host`, Lewp remembers that value for the
+directory and reuses it on later plain `lewp add` calls. To undo a bad override
+without losing the folder's port or history, pass `--reset`:
+
+```sh
+lewp add --reset
+```
+
+`--reset` ignores the remembered identity and re-resolves from flags, env,
+config, and inference, then persists the fresh result in place. The active port
+and event history are kept — unlike [`lewp release --forget`](#lewp-release),
+which deletes the route entirely. When a reset actually changes a remembered
+value, a `# reset remembered identity: host old -> new` note is printed on
+stderr. Combine `--reset` with a flag to keep one value while clearing the rest:
+
+```sh
+lewp add --reset --root atlas   # re-infer name and host, but keep root=atlas
+```
+
+Only the current directory's primary host and root/name are reset; its aliases
+and wildcard hosts are left untouched.
 
 ## `lewp alias`
 

@@ -109,7 +109,7 @@ inference. Inferred values and warnings are printed to stderr so --shell and
 $(...) capture only the clean env lines.
 
 Usage:
-  lewp add [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--json] [--shell]
+  lewp add [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset] [--json] [--shell]
 
 Flags:
   --root <root>   Override the inferred root segment of the hostname
@@ -117,6 +117,9 @@ Flags:
   --host <host>   Register an explicit .lewp or managed custom-suffix host
   --auto-suffix   On an explicit --host conflict, append a deterministic suffix
                   instead of failing
+  --reset         Discard the remembered host/root/name override for this
+                  directory and re-resolve from flags and inference, keeping the
+                  same port and history
   --json          Emit the route as a JSON object
   --shell         Emit shell "export" lines for use with eval
 
@@ -124,9 +127,16 @@ An explicit --host that is already assigned to another directory fails by
 default with the conflicting path and cleanup guidance. An inferred host that
 conflicts is given a stable deterministic suffix automatically.
 
+Once you pass --root, --name, or --host, that value is remembered and reused by
+later plain "lewp add" calls. Use --reset to clear a bad override without
+throwing away the port or history the way "lewp release --forget" would. Combine
+it with a flag to keep one value while clearing the rest, e.g.
+"lewp add --reset --root atlas" re-infers the name and host but keeps root.
+
 Examples:
   lewp add
   lewp add --root atlas --name feature-1
+  lewp add --reset
   eval "$(lewp add --shell)"
 `
 

@@ -3,6 +3,8 @@ package control
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -308,6 +310,117 @@ func TestServiceRemembersExplicitNameOnPlainLease(t *testing.T) {
 	}
 	if again.Name != first.Name || again.Host != first.Host {
 		t.Fatalf("explicit name not remembered: first=%+v again=%+v", first, again)
+	}
+}
+
+func TestServiceResetClearsRememberedOverrideKeepingPort(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Set a host override, then confirm it is remembered by a later plain lease.
+	first, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1", Host: "custom.lewp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remembered, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remembered.Host != "custom.lewp" {
+		t.Fatalf("override not remembered before reset: host=%q", remembered.Host)
+	}
+
+	// --reset re-resolves from flags/inference: the custom host is cleared back to
+	// the deterministic default, the same port is kept (lease reused, not recreated),
+	// and a warning names the cleared override.
+	reset, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1", Reset: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.Host != "feature-1.audit.lewp" {
+		t.Fatalf("reset did not clear host override: host=%q", reset.Host)
+	}
+	if reset.Port != first.Port {
+		t.Fatalf("reset changed the port: first=%d reset=%d", first.Port, reset.Port)
+	}
+	if reset.LeaseState != "reused" {
+		t.Fatalf("reset recreated the lease instead of reusing it: state=%q", reset.LeaseState)
+	}
+	if len(reset.Warnings) == 0 || !strings.Contains(strings.Join(reset.Warnings, " "), "custom.lewp") {
+		t.Fatalf("reset warning missing cleared override: %+v", reset.Warnings)
+	}
+
+	// A later plain lease must NOT resurrect the old override: it is gone for good.
+	after, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Host != "feature-1.audit.lewp" {
+		t.Fatalf("override came back after reset: host=%q", after.Host)
+	}
+	if after.Port != first.Port {
+		t.Fatalf("port not stable after reset: first=%d after=%d", first.Port, after.Port)
+	}
+}
+
+func TestServiceResetClearsRememberedRootAndName(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	root := t.TempDir()
+	dir := filepath.Join(root, "audit", "feature-1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "custom-root", Name: "custom-name"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	remembered, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remembered.Host != "custom-name.custom-root.lewp" {
+		t.Fatalf("root/name override not remembered before reset: host=%q", remembered.Host)
+	}
+
+	reset, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Reset: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reset.Root != "audit" || reset.Name != "feature-1" || reset.Host != "feature-1.audit.lewp" {
+		t.Fatalf("reset did not clear root/name override: %+v", reset)
+	}
+	if reset.Port != first.Port {
+		t.Fatalf("reset changed the port: first=%d reset=%d", first.Port, reset.Port)
+	}
+	warnings := strings.Join(reset.Warnings, " ")
+	if !strings.Contains(warnings, "root custom-root -> audit") || !strings.Contains(warnings, "name custom-name -> feature-1") {
+		t.Fatalf("reset warning missing cleared root/name: %+v", reset.Warnings)
+	}
+}
+
+func TestServiceResetOnCleanDirectoryIsSilentNoOp(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Reset with nothing remembered leases normally and prints no reset warning.
+	lease, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "audit", Name: "feature-1", Reset: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Host != "feature-1.audit.lewp" || lease.Port == 0 {
+		t.Fatalf("reset on clean dir produced bad lease: %+v", lease)
+	}
+	for _, w := range lease.Warnings {
+		if strings.Contains(w, "reset remembered identity") {
+			t.Fatalf("reset on clean dir emitted a spurious reset warning: %q", w)
+		}
 	}
 }
 
