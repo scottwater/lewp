@@ -43,7 +43,7 @@ func TestRunAddReportsDaemonNotRunning(t *testing.T) {
 
 // TestRunGetwdFailureIsFatal confirms that when the current directory cannot be
 // determined (e.g. it was deleted out from under the shell), Run exits non-zero
-// with deleted-directory guidance instead of leaving WorkDir empty — which would
+// with deleted-directory guidance instead of leaving WorkDir empty, which would
 // make the daemon resolve identity against its own launchd cwd of "/".
 func TestRunGetwdFailureIsFatal(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -58,6 +58,46 @@ func TestRunGetwdFailureIsFatal(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "cannot determine the current directory") {
 		t.Fatalf("stderr missing deleted-directory guidance: %q", stderr.String())
+	}
+}
+
+// TestRunFailsWithoutHomeDirectory confirms that when the home directory cannot
+// be determined, Run fails loudly instead of falling back to cwd-relative
+// default paths.
+func TestRunFailsWithoutHomeDirectory(t *testing.T) {
+	t.Setenv("HOME", "")
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:    []string{"add"},
+		WorkDir: t.TempDir(),
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+	})
+	if code != 1 {
+		t.Fatalf("code=%d, want 1; stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "cannot determine home directory") {
+		t.Fatalf("stderr missing home-directory guidance: %q", stderr.String())
+	}
+}
+
+func TestDefaultCLIPathsFailWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	for name, fn := range map[string]func() (string, error){
+		"defaultPlistPath":    defaultPlistPath,
+		"defaultLogDir":       defaultLogDir,
+		"defaultSuffixesPath": defaultSuffixesPath,
+	} {
+		got, err := fn()
+		if err == nil {
+			t.Fatalf("%s returned %q, want error when home is unavailable", name, got)
+		}
+		if got != "" {
+			t.Fatalf("%s returned non-empty path %q alongside error", name, got)
+		}
+		if !strings.Contains(err.Error(), "cannot determine home directory") {
+			t.Fatalf("%s error = %q, want it to mention home directory", name, err)
+		}
 	}
 }
 

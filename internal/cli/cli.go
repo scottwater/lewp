@@ -106,26 +106,32 @@ func Run(cfg Config) int {
 	if cfg.Env == nil {
 		cfg.Env = clientEnv()
 	}
-	if cfg.SocketPath == "" {
-		cfg.SocketPath = control.DefaultSocketPath()
-	}
-	if cfg.CAPath == "" {
-		cfg.CAPath = defaultCAPath()
-	}
-	if cfg.CAKeyPath == "" {
-		cfg.CAKeyPath = defaultCAKeyPath()
+	// Every default below lives under the user's home directory. If the home
+	// directory cannot be determined, fail before falling back to cwd-relative
+	// files that would desynchronize the CLI and daemon.
+	for _, d := range []struct {
+		field *string
+		fn    func() (string, error)
+	}{
+		{&cfg.SocketPath, control.DefaultSocketPath},
+		{&cfg.CAPath, defaultCAPath},
+		{&cfg.CAKeyPath, defaultCAKeyPath},
+		{&cfg.SuffixesPath, defaultSuffixesPath},
+		{&cfg.PlistPath, defaultPlistPath},
+		{&cfg.LogDir, defaultLogDir},
+	} {
+		if *d.field != "" {
+			continue
+		}
+		value, err := d.fn()
+		if err != nil {
+			fmt.Fprintf(cfg.Stderr, "lewp: %v\n", err)
+			return 1
+		}
+		*d.field = value
 	}
 	if cfg.ResolverPath == "" {
 		cfg.ResolverPath = defaultResolverPath()
-	}
-	if cfg.SuffixesPath == "" {
-		cfg.SuffixesPath = defaultSuffixesPath()
-	}
-	if cfg.PlistPath == "" {
-		cfg.PlistPath = defaultPlistPath()
-	}
-	if cfg.LogDir == "" {
-		cfg.LogDir = defaultLogDir()
 	}
 	if cfg.ProgramPath == "" {
 		cfg.ProgramPath = defaultProgramPath()
@@ -301,6 +307,12 @@ func runDaemon(cfg Config) int {
 		return 2
 	}
 
+	registryPath, err := control.DefaultRegistryPath()
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp: %v\n", err)
+		return 1
+	}
+
 	httpListeners, err := launchd.ActivatedListeners("HTTP")
 	if err != nil {
 		fmt.Fprintf(cfg.Stderr, "activate HTTP listener: %v\n", err)
@@ -342,14 +354,14 @@ func runDaemon(cfg Config) int {
 	const subservers = 3
 	errs := make(chan error, subservers)
 	go func() {
-		errs <- control.ServeWithSuffixes(ctx, cfg.SocketPath, control.DefaultRegistryPath(), registry.PortRange{Start: 41000, End: 49999}, managedSuffixes)
+		errs <- control.ServeWithSuffixes(ctx, cfg.SocketPath, registryPath, registry.PortRange{Start: 41000, End: 49999}, managedSuffixes)
 	}()
 	go func() {
 		errs <- dns.ServeWithSuffixes(ctx, fmt.Sprintf("127.0.0.1:%d", dns.DefaultPort), managedSuffixes)
 	}()
 	go func() {
 		errs <- daemon.Serve(ctx, daemon.Config{
-			RegistryPath:    control.DefaultRegistryPath(),
+			RegistryPath:    registryPath,
 			HTTPListeners:   httpListeners,
 			HTTPSListeners:  httpsListeners,
 			ManagedSuffixes: managedSuffixes,
@@ -1240,20 +1252,20 @@ func isDaemonDown(err error) bool {
 	return errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
 }
 
-func defaultPlistPath() string {
+func defaultPlistPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "dev.lewp.daemon.plist"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return home + "/Library/LaunchAgents/dev.lewp.daemon.plist"
+	return home + "/Library/LaunchAgents/dev.lewp.daemon.plist", nil
 }
 
-func defaultLogDir() string {
+func defaultLogDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "logs"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return home + "/Library/Logs/lewp"
+	return home + "/Library/Logs/lewp", nil
 }
 
 func defaultProgramPath() string {
@@ -1264,11 +1276,11 @@ func defaultProgramPath() string {
 	return path
 }
 
-func defaultCAPath() string {
+func defaultCAPath() (string, error) {
 	return localtls.DefaultCAPath()
 }
 
-func defaultCAKeyPath() string {
+func defaultCAKeyPath() (string, error) {
 	return localtls.DefaultCAKeyPath()
 }
 
@@ -1276,10 +1288,10 @@ func defaultResolverPath() string {
 	return "/etc/resolver/lewp"
 }
 
-func defaultSuffixesPath() string {
+func defaultSuffixesPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "suffixes.toml"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return home + "/Library/Application Support/lewp/suffixes.toml"
+	return home + "/Library/Application Support/lewp/suffixes.toml", nil
 }

@@ -499,3 +499,26 @@ func openStore(t *testing.T) *registry.Store {
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
+
+// TestDefaultPathsFailWithoutHome confirms the registry and socket default
+// paths return an error rather than a cwd-relative fallback ("registry.sqlite")
+// when the home directory cannot be determined, so a relative registry path cannot
+// let the CLI and daemon operate on different SQLite files.
+func TestDefaultPathsFailWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	for name, fn := range map[string]func() (string, error){
+		"DefaultRegistryPath": DefaultRegistryPath,
+		"DefaultSocketPath":   DefaultSocketPath,
+	} {
+		got, err := fn()
+		if err == nil {
+			t.Fatalf("%s returned %q, want error when home is unavailable", name, got)
+		}
+		if got != "" {
+			t.Fatalf("%s returned non-empty path %q alongside error", name, got)
+		}
+		if !strings.Contains(err.Error(), "cannot determine home directory") {
+			t.Fatalf("%s error = %q, want it to mention home directory", name, err)
+		}
+	}
+}

@@ -483,3 +483,26 @@ func join(parts []string) string {
 	}
 	return out
 }
+
+// TestDefaultCAPathsFailWithoutHome confirms the CA default paths return an
+// error rather than a cwd-relative fallback ("lewp-ca.pem") when the home
+// directory cannot be determined, so a relative CA path cannot let the CLI and
+// daemon read/write different certificate files.
+func TestDefaultCAPathsFailWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	for name, fn := range map[string]func() (string, error){
+		"DefaultCAPath":    DefaultCAPath,
+		"DefaultCAKeyPath": DefaultCAKeyPath,
+	} {
+		got, err := fn()
+		if err == nil {
+			t.Fatalf("%s returned %q, want error when home is unavailable", name, got)
+		}
+		if got != "" {
+			t.Fatalf("%s returned non-empty path %q alongside error", name, got)
+		}
+		if !strings.Contains(err.Error(), "cannot determine home directory") {
+			t.Fatalf("%s error = %q, want it to mention home directory", name, err)
+		}
+	}
+}

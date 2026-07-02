@@ -427,8 +427,12 @@ func (s *Service) Doctor(ctx context.Context) []string {
 		checks = append(checks, "registry: readable")
 	}
 	https := "https: not configured (run lewp setup)"
-	if _, err := localtls.LoadCA(localtls.DefaultCAPath(), localtls.DefaultCAKeyPath()); err == nil {
-		https = "https: configured (local CA present)"
+	caPath, caPathErr := localtls.DefaultCAPath()
+	caKeyPath, caKeyErr := localtls.DefaultCAKeyPath()
+	if caPathErr == nil && caKeyErr == nil {
+		if _, err := localtls.LoadCA(caPath, caKeyPath); err == nil {
+			https = "https: configured (local CA present)"
+		}
 	}
 	checks = append(checks, https)
 	return checks
@@ -502,14 +506,18 @@ func recordState(record registry.Record) string {
 	return "up"
 }
 
-func DefaultRegistryPath() string {
+func DefaultRegistryPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "registry.sqlite"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, "Library", "Application Support", "lewp", "registry.sqlite")
+	return filepath.Join(home, "Library", "Application Support", "lewp", "registry.sqlite"), nil
 }
 
-func DefaultSocketPath() string {
-	return filepath.Join(filepath.Dir(DefaultRegistryPath()), "control.sock")
+func DefaultSocketPath() (string, error) {
+	registryPath, err := DefaultRegistryPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(registryPath), "control.sock"), nil
 }

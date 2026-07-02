@@ -342,20 +342,20 @@ func TrustCheckCommand(certPath string) []string {
 	return []string{"security", "verify-cert", "-c", certPath, "-p", "ssl"}
 }
 
-func DefaultCAPath() string {
+func DefaultCAPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "lewp-ca.pem"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, "Library", "Application Support", "lewp", "ca.pem")
+	return filepath.Join(home, "Library", "Application Support", "lewp", "ca.pem"), nil
 }
 
-func DefaultCAKeyPath() string {
+func DefaultCAKeyPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "lewp-ca-key.pem"
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, "Library", "Application Support", "lewp", "ca-key.pem")
+	return filepath.Join(home, "Library", "Application Support", "lewp", "ca-key.pem"), nil
 }
 
 func serial(r io.Reader) (*big.Int, error) {
