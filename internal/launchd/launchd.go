@@ -20,6 +20,17 @@ type Config struct {
 	StderrPath string
 }
 
+// Plist renders the launchd agent definition for the daemon.
+//
+// KeepAlive with SuccessfulExit=false makes launchd relaunch the daemon after
+// any abnormal exit (a subserver error exits the process non-zero) without
+// waiting for traffic. Socket activation alone cannot self-heal a crash: the
+// daemon owns the .lewp DNS responder on 127.0.0.1:15353, so once it is dead
+// names never resolve, the browser never opens a connection to the
+// launchd-held 80/443 sockets, and activation never fires; the daemon stays
+// wedged until a manual restart. A clean exit (exit 0, e.g. the SIGTERM from
+// `lewp system stop`/bootout) is left alone, so stopping the daemon does not
+// trigger an immediate relaunch.
 func Plist(cfg Config) string {
 	if cfg.Label == "" {
 		cfg.Label = DefaultLabel
@@ -46,6 +57,11 @@ func Plist(cfg Config) string {
   </array>
   <key>RunAtLoad</key>
   <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
 %s  <key>Sockets</key>
   <dict>
     <key>HTTP</key>

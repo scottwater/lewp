@@ -1,6 +1,8 @@
 package launchd
 
 import (
+	"encoding/xml"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +36,106 @@ func TestPlistUsesLoopbackSocketsForHTTPAndHTTPS(t *testing.T) {
 	}
 	if strings.Contains(got, "0.0.0.0") {
 		t.Fatalf("plist exposes LAN:\n%s", got)
+	}
+}
+
+func TestPlistKeepsDaemonAliveOnAbnormalExit(t *testing.T) {
+	got := Plist(Config{Label: "dev.lewp.daemon", Program: "/usr/local/bin/lewp"})
+	value, ok := plistDictBool(t, got, "KeepAlive", "SuccessfulExit")
+	if !ok || value {
+		t.Fatalf("SuccessfulExit must be false so clean stops are not relaunched:\n%s", got)
+	}
+}
+
+func plistDictBool(t *testing.T, body, dictKey, boolKey string) (bool, bool) {
+	t.Helper()
+	dec := xml.NewDecoder(strings.NewReader(body))
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return false, false
+		}
+		if err != nil {
+			t.Fatalf("decode plist: %v", err)
+		}
+		start, ok := tok.(xml.StartElement)
+		if !ok || start.Name.Local != "key" {
+			continue
+		}
+		var key string
+		if err := dec.DecodeElement(&key, &start); err != nil {
+			t.Fatalf("decode plist key: %v", err)
+		}
+		if key != dictKey {
+			nextStart(t, dec)
+			if err := dec.Skip(); err != nil {
+				t.Fatalf("skip plist value: %v", err)
+			}
+			continue
+		}
+		value := nextStart(t, dec)
+		if value.Name.Local != "dict" {
+			return false, false
+		}
+		return plistBoolInCurrentDict(t, dec, boolKey)
+	}
+}
+
+func plistBoolInCurrentDict(t *testing.T, dec *xml.Decoder, boolKey string) (bool, bool) {
+	t.Helper()
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			return false, false
+		}
+		if err != nil {
+			t.Fatalf("decode plist dict: %v", err)
+		}
+		switch tok := tok.(type) {
+		case xml.EndElement:
+			if tok.Name.Local == "dict" {
+				return false, false
+			}
+		case xml.StartElement:
+			if tok.Name.Local != "key" {
+				if err := dec.Skip(); err != nil {
+					t.Fatalf("skip plist value: %v", err)
+				}
+				continue
+			}
+			var key string
+			if err := dec.DecodeElement(&key, &tok); err != nil {
+				t.Fatalf("decode plist key: %v", err)
+			}
+			value := nextStart(t, dec)
+			if key != boolKey {
+				if err := dec.Skip(); err != nil {
+					t.Fatalf("skip plist value: %v", err)
+				}
+				continue
+			}
+			switch value.Name.Local {
+			case "false":
+				return false, true
+			case "true":
+				return true, true
+			default:
+				return false, false
+			}
+		}
+	}
+}
+
+func nextStart(t *testing.T, dec *xml.Decoder) xml.StartElement {
+	t.Helper()
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			t.Fatalf("decode plist value: %v", err)
+		}
+		if start, ok := tok.(xml.StartElement); ok {
+			return start
+		}
 	}
 }
 
