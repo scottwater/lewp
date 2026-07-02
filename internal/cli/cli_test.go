@@ -1505,3 +1505,75 @@ func TestSuffixRemovePrintsSetupHint(t *testing.T) {
 		t.Fatalf("suffix remove output missing setup hint:\n%s", stdout.String())
 	}
 }
+
+func TestDoctorFailsUnconstrainedCA(t *testing.T) {
+	dir := t.TempDir()
+	legacy, err := localtls.NewCA(localtls.CACommonName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Save(dir+"/ca.pem", dir+"/ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		PlistPath:    dir + "/none.plist",
+		SuffixesPath: dir + "/suffixes.toml",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	}
+	check := findCheck(t, setupArtifactChecks(cfg), "local CA")
+	if check.Status != statusFail || check.Run != "lewp setup" {
+		t.Fatalf("unconstrained CA check=%+v, want fail with lewp setup", check)
+	}
+	if !strings.Contains(check.Detail, "name constraints") {
+		t.Fatalf("detail does not explain the problem: %q", check.Detail)
+	}
+}
+
+func TestDoctorWarnsOnConstraintDrift(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := localtls.NewCA(localtls.CACommonName, []string{"lewp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ca.Save(dir+"/ca.pem", dir+"/ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := suffix.Save(dir+"/suffixes.toml", suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		PlistPath:    dir + "/none.plist",
+		SuffixesPath: dir + "/suffixes.toml",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	}
+	check := findCheck(t, setupArtifactChecks(cfg), "local CA")
+	if check.Status != statusWarn || check.Run != "lewp setup" {
+		t.Fatalf("drifted CA check=%+v, want warn with lewp setup", check)
+	}
+}
+
+func TestDoctorPassesMatchingConstrainedCA(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := localtls.NewCA(localtls.CACommonName, []string{"lewp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ca.Save(dir+"/ca.pem", dir+"/ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		PlistPath:    dir + "/none.plist",
+		SuffixesPath: dir + "/suffixes.toml",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	}
+	check := findCheck(t, setupArtifactChecks(cfg), "local CA")
+	if check.Status != statusOK {
+		t.Fatalf("matching CA check=%+v, want ok", check)
+	}
+}

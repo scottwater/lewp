@@ -165,12 +165,32 @@ func setupArtifactChecks(cfg Config) []doctorCheck {
 	checks = append(checks, plist)
 
 	ca := doctorCheck{Name: "local CA"}
-	if _, err := localtls.LoadCA(cfg.CAPath, cfg.CAKeyPath); err != nil {
+	// Compare against the TLS-eligible suffixes from config; a load failure
+	// falls back to lewp-only so a broken suffixes.toml does not mask CA state.
+	desiredTLS := []string{suffix.BuiltIn}
+	if suffixCfg, err := suffix.Load(cfg.SuffixesPath); err == nil {
+		desiredTLS = suffix.TLSEligible(suffixCfg.Suffixes)
+	}
+	loadedCA, err := localtls.LoadCA(cfg.CAPath, cfg.CAKeyPath)
+	switch {
+	case err != nil:
 		ca.Status = statusFail
 		ca.Detail = "not present or unreadable"
 		ca.Run = "lewp setup"
 		ca.Inspect = cfg.CAPath
-	} else {
+	case !loadedCA.HasNameConstraints():
+		// Pre-constraint CA: trusted in the keychain but able to sign ANY
+		// domain, so a stolen key forges public sites. Security posture
+		// failure, not a functional warning.
+		ca.Status = statusFail
+		ca.Detail = "CA has no name constraints (a stolen key could sign certificates for any domain)"
+		ca.Run = "lewp setup"
+		ca.Inspect = cfg.CAPath
+	case !localtls.ConstraintsMatch(loadedCA, desiredTLS):
+		ca.Status = statusWarn
+		ca.Detail = fmt.Sprintf("CA constraints %v do not match configured suffixes %v; HTTPS for uncovered suffixes will fail", loadedCA.Certificate.PermittedDNSDomains, desiredTLS)
+		ca.Run = "lewp setup"
+	default:
 		ca.Status = statusOK
 		ca.Detail = cfg.CAPath
 	}
