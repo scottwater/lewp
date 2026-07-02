@@ -354,11 +354,13 @@ func runSetup(cfg Config) int {
 			return 1
 		}
 	}
-	// Create the local CA first. It is local and needs no sudo, so doing it
-	// before the sudo resolver write and the keychain prompt avoids leaving the
-	// system half-configured if CA generation fails after the user has already
-	// authenticated.
-	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, []string{suffix.BuiltIn}); err != nil {
+	// Create or rotate the local CA first. It is local and needs no sudo, so
+	// doing it before the sudo resolver write and the keychain prompt avoids
+	// leaving the system half-configured if CA generation fails after the user
+	// has already authenticated.
+	desiredTLS := suffix.TLSEligible(suffixCfg.Suffixes)
+	rotatedCA, err := ensureConstrainedCA(cfg, desiredTLS)
+	if err != nil {
 		fmt.Fprintf(cfg.Stderr, "create CA: %v\n", err)
 		fmt.Fprintf(cfg.Stderr, "Next: ensure %s is writable, then re-run: lewp setup\n", cfg.CAPath)
 		return 1
@@ -419,7 +421,12 @@ func runSetup(cfg Config) int {
 			fmt.Fprintf(cfg.Stdout, "# warning: domain mirror %s shadows public DNS for this suffix and its subdomains on this Mac\n", s)
 		}
 	}
-	fmt.Fprintf(cfg.Stdout, "CA=%s\n", cfg.CAPath)
+	if rotatedCA {
+		fmt.Fprintf(cfg.Stdout, "CA=%s (rotated: constraints now %s)\n", cfg.CAPath, strings.Join(desiredTLS, ", "))
+		fmt.Fprintln(cfg.Stdout, "# CA rotated: restart the daemon (lewp system restart) so HTTPS re-mints leaf certificates")
+	} else {
+		fmt.Fprintf(cfg.Stdout, "CA=%s\n", cfg.CAPath)
+	}
 	fmt.Fprintf(cfg.Stdout, "LOGS=%s\n", cfg.LogDir)
 	fmt.Fprintln(cfg.Stdout, strings.Join(trust, " "))
 
@@ -438,6 +445,37 @@ func runSetup(cfg Config) int {
 	}
 	fmt.Fprintln(cfg.Stdout, "Next: lewp system start && lewp doctor")
 	return 0
+}
+
+// ensureConstrainedCA loads-or-creates the local CA and rotates it when its
+// name constraints do not match the TLS-eligible suffixes: untrust the old
+// certificate, regenerate with the desired constraints, and let setup's later
+// trust step re-add it — one keychain prompt total. Rotation lives here, not
+// in the daemon, because only setup may touch the keychain.
+func ensureConstrainedCA(cfg Config, desired []string) (bool, error) {
+	ca, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, desired)
+	if err != nil {
+		return false, err
+	}
+	if localtls.ConstraintsMatch(ca, desired) {
+		return false, nil
+	}
+	fmt.Fprintf(cfg.Stdout, "# rotating local CA: name constraints change to %s\n", strings.Join(desired, ", "))
+	if err := cfg.RunCommand(context.Background(), localtls.UntrustCommand(localtls.CACommonName)); err != nil {
+		// The certificate may already be absent from the keychain; the later
+		// add-trusted-cert step still installs the new one either way.
+		fmt.Fprintf(cfg.Stderr, "# warning: could not remove old CA from keychain: %v\n", err)
+	}
+	if err := os.Remove(cfg.CAPath); err != nil {
+		return false, err
+	}
+	if err := os.Remove(cfg.CAKeyPath); err != nil {
+		return false, err
+	}
+	if _, err := localtls.EnsureCA(cfg.CAPath, cfg.CAKeyPath, localtls.CACommonName, desired); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func setupRerunCommand(suffixFlags []string, allowDomainMirror bool) string {
@@ -520,6 +558,7 @@ func runSuffixRemove(cfg Config) int {
 	}
 	fmt.Fprintf(cfg.Stdout, "removed suffix %s\n", removedSuffix)
 	fmt.Fprintf(cfg.Stdout, "removed resolver %s\n", resolverPath)
+	fmt.Fprintln(cfg.Stdout, "Next: lewp setup  # narrows the CA name constraints and refreshes resolver files")
 	return 0
 }
 

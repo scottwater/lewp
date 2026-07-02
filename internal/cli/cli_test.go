@@ -16,6 +16,7 @@ import (
 	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/launchd"
 	"github.com/scottwater/lewp/internal/suffix"
+	localtls "github.com/scottwater/lewp/internal/tls"
 )
 
 func TestRunAddReportsDaemonNotRunning(t *testing.T) {
@@ -1345,5 +1346,162 @@ func TestRunSetupTrustFailureShowsExactCommandAndNextStep(t *testing.T) {
 	got := stderr.String()
 	if !strings.Contains(got, "trust CA:") || !strings.Contains(got, "Next: trust the CA manually") || !strings.Contains(got, "security add-trusted-cert") {
 		t.Fatalf("trust failure missing exact command/next step: %q", got)
+	}
+}
+
+// TestRunSetupRotatesLegacyUnconstrainedCA: an existing CA without name
+// constraints (pre-2026-07 install) must be untrusted, regenerated with
+// constraints, and re-trusted by setup.
+func TestRunSetupRotatesLegacyUnconstrainedCA(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	legacy, err := localtls.NewCA(localtls.CACommonName, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Save(dir+"/ca.pem", dir+"/ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+	var commands []string
+	code := Run(Config{
+		Args:         []string{"setup"},
+		WorkDir:      t.TempDir(),
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand: func(_ context.Context, argv []string) error {
+			commands = append(commands, strings.Join(argv, " "))
+			return nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	rotated, err := localtls.LoadCA(dir+"/ca.pem", dir+"/ca-key.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rotated.HasNameConstraints() {
+		t.Fatal("setup left an unconstrained CA in place")
+	}
+	if rotated.Certificate.SerialNumber.Cmp(legacy.Certificate.SerialNumber) == 0 {
+		t.Fatal("setup kept the legacy CA certificate")
+	}
+	joined := strings.Join(commands, "\n")
+	untrust := strings.Index(joined, "security delete-certificate -c "+localtls.CACommonName)
+	trust := strings.Index(joined, "security add-trusted-cert")
+	if untrust == -1 || trust == -1 || untrust > trust {
+		t.Fatalf("expected untrust before re-trust, got:\n%s", joined)
+	}
+	if got := stdout.String(); !strings.Contains(got, "rotating local CA") {
+		t.Fatalf("setup output missing rotation notice:\n%s", got)
+	}
+}
+
+// TestRunSetupRotatesCAWhenSuffixAdded: adding a safe-subtree suffix to an
+// install whose CA only covers lewp must rotate the CA to cover the suffix.
+func TestRunSetupRotatesCAWhenSuffixAdded(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	existing, err := localtls.NewCA(localtls.CACommonName, []string{"lewp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := existing.Save(dir+"/ca.pem", dir+"/ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"setup", "--suffix", "local.todoordie.com"},
+		WorkDir:      t.TempDir(),
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	rotated, err := localtls.LoadCA(dir+"/ca.pem", dir+"/ca-key.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !localtls.ConstraintsMatch(rotated, []string{"lewp", "local.todoordie.com"}) {
+		t.Fatalf("rotated CA constraints=%v", rotated.Certificate.PermittedDNSDomains)
+	}
+}
+
+// TestRunSetupKeepsMatchingCA: a CA whose constraints already match must not
+// be rotated (same serial before and after).
+func TestRunSetupKeepsMatchingCA(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	existing, err := localtls.NewCA(localtls.CACommonName, []string{"lewp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := existing.Save(dir+"/ca.pem", dir+"/ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"setup"},
+		WorkDir:      t.TempDir(),
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		CAPath:       dir + "/ca.pem",
+		CAKeyPath:    dir + "/ca-key.pem",
+		ResolverPath: dir + "/resolver/lewp",
+		SuffixesPath: dir + "/config/suffixes.toml",
+		PlistPath:    dir + "/LaunchAgents/dev.lewp.daemon.plist",
+		LogDir:       dir + "/Logs/lewp",
+		ProgramPath:  "/usr/local/bin/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	kept, err := localtls.LoadCA(dir+"/ca.pem", dir+"/ca-key.pem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.Certificate.SerialNumber.Cmp(existing.Certificate.SerialNumber) != 0 {
+		t.Fatal("setup rotated a CA whose constraints already matched")
+	}
+	if strings.Contains(stdout.String(), "rotating local CA") {
+		t.Fatalf("unexpected rotation notice:\n%s", stdout.String())
+	}
+}
+
+func TestSuffixRemovePrintsSetupHint(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	dir := t.TempDir()
+	if err := suffix.Save(dir+"/suffixes.toml", suffix.Config{Suffixes: []suffix.Entry{{Name: "local.todoordie.com", Mode: suffix.ModeSafeSubtree}}}); err != nil {
+		t.Fatal(err)
+	}
+	code := Run(Config{
+		Args:         []string{"suffix", "remove", "local.todoordie.com"},
+		WorkDir:      t.TempDir(),
+		Stdout:       &stdout,
+		Stderr:       &stderr,
+		SuffixesPath: dir + "/suffixes.toml",
+		ResolverPath: dir + "/resolver/lewp",
+		RunCommand:   func(_ context.Context, _ []string) error { return nil },
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Next: lewp setup") {
+		t.Fatalf("suffix remove output missing setup hint:\n%s", stdout.String())
 	}
 }
