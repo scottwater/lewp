@@ -418,7 +418,7 @@ func doctorManagedSuffixes(cfg Config) []string {
 // inference-only (it does not consult remembered identities in the registry).
 func inferenceCheck(cfg Config) doctorCheck {
 	c := doctorCheck{Name: "current folder"}
-	resolved, err := identity.Resolve(identity.Options{
+	resolved, err := identity.Resolve(context.Background(), identity.Options{
 		WorkDir:         cfg.WorkDir,
 		Env:             map[string]string{},
 		Kind:            identity.KindRoute,
@@ -480,7 +480,7 @@ func targetPortChecks(cfg Config) []doctorCheck {
 // already owned by a different path, mirroring the deterministic-suffix warning
 // `lewp add` would print.
 func conflictCheck(cfg Config) []doctorCheck {
-	resolved, err := identity.Resolve(identity.Options{
+	resolved, err := identity.Resolve(context.Background(), identity.Options{
 		WorkDir:         cfg.WorkDir,
 		Env:             map[string]string{},
 		Kind:            identity.KindRoute,

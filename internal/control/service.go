@@ -167,7 +167,7 @@ func requestEnv(env map[string]string) map[string]string {
 }
 
 func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, error) {
-	resolved, err := identity.Resolve(identity.Options{
+	resolved, err := identity.Resolve(ctx, identity.Options{
 		WorkDir:         req.WorkDir,
 		Root:            req.Root,
 		Name:            req.Name,
@@ -239,7 +239,7 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 }
 
 func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, error) {
-	resolved, err := identity.Resolve(identity.Options{
+	resolved, err := identity.Resolve(ctx, identity.Options{
 		WorkDir: req.WorkDir,
 		Name:    req.Name,
 		Env:     requestEnv(req.Env),
@@ -266,7 +266,7 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 		if name == "" {
 			name = "port"
 		}
-		resolved, err := identity.Resolve(identity.Options{
+		resolved, err := identity.Resolve(ctx, identity.Options{
 			WorkDir: req.WorkDir,
 			Name:    name,
 			Env:     requestEnv(req.Env),
@@ -280,7 +280,7 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 	}
 	// Explicit root/name releases a single named route.
 	if req.Root != "" || req.Name != "" {
-		resolved, err := identity.Resolve(identity.Options{
+		resolved, err := identity.Resolve(ctx, identity.Options{
 			WorkDir: req.WorkDir,
 			Root:    req.Root,
 			Name:    req.Name,

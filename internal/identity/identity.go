@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -89,7 +90,11 @@ type config struct {
 
 var unsafeLabel = regexp.MustCompile(`[^a-z0-9]+`)
 
-func Resolve(opts Options) (Result, error) {
+// Resolve derives a route/port identity from opts. ctx bounds the git
+// subprocesses detectGit runs in the client-supplied WorkDir: on the daemon
+// side it is the control dispatch context, so a slow or dead network mount
+// cannot pin a handler goroutine past the request deadline.
+func Resolve(ctx context.Context, opts Options) (Result, error) {
 	workDir := opts.WorkDir
 	if workDir == "" {
 		var err error
@@ -113,7 +118,7 @@ func Resolve(opts Options) (Result, error) {
 	}
 	git := opts.Git
 	if git == nil {
-		git = detectGit(abs)
+		git = detectGit(ctx, abs)
 	}
 
 	root, rootSource := pick(opts.Root, env(opts.Env, "LEWP_ROOT"), cfg.Root)
@@ -376,9 +381,9 @@ func parseConfig(path string, data []byte) (config, error) {
 	return cfg, nil
 }
 
-func detectGit(workDir string) *GitInfo {
-	gitDir := gitOutput(workDir, "rev-parse", "--git-dir")
-	commonDir := gitOutput(workDir, "rev-parse", "--git-common-dir")
+func detectGit(ctx context.Context, workDir string) *GitInfo {
+	gitDir := gitOutput(ctx, workDir, "rev-parse", "--git-dir")
+	commonDir := gitOutput(ctx, workDir, "rev-parse", "--git-common-dir")
 	if gitDir == "" || commonDir == "" || gitDir == commonDir {
 		return nil
 	}
@@ -386,12 +391,16 @@ func detectGit(workDir string) *GitInfo {
 	return &GitInfo{
 		IsWorktree: true,
 		MainRoot:   mainRoot,
-		Branch:     gitOutput(workDir, "branch", "--show-current"),
+		Branch:     gitOutput(ctx, workDir, "branch", "--show-current"),
 	}
 }
 
-func gitOutput(workDir string, args ...string) string {
-	cmd := exec.Command("git", args...)
+// gitOutput runs a git subcommand in workDir under ctx. Using CommandContext
+// (not exec.Command) means a hung git — e.g. a dead network mount holding the
+// WorkDir — is killed when ctx is cancelled or its deadline passes, so the
+// caller's timeout actually applies instead of blocking indefinitely.
+func gitOutput(ctx context.Context, workDir string, args ...string) string {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {

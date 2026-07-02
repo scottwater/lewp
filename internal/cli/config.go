@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -45,7 +46,7 @@ func runInit(cfg Config) int {
 	// IgnoreConfig: generate purely from flags and inference so the existing
 	// (and possibly malformed) file we are replacing never feeds back into the
 	// values we write.
-	resolved, err := identity.Resolve(identity.Options{
+	resolved, err := identity.Resolve(context.Background(), identity.Options{
 		WorkDir:      workDir,
 		Root:         *root,
 		Name:         *name,
