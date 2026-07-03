@@ -41,7 +41,7 @@ From a project instance directory:
 
 ```sh
 cd ~/projects/atlas/feature-1
-lewp add
+lewp lease
 ```
 
 Default output:
@@ -103,7 +103,7 @@ explicit project apex hosts:
 Example:
 
 ```sh
-lewp add --host atlas.lewp
+lewp lease --host atlas.lewp
 ```
 
 This registers `atlas.lewp` for the current folder. Custom hosts must stay
@@ -161,7 +161,7 @@ scott/feature/JIRA-123 Add SSO callback!
 -> jira-123-add-sso-callback
 ```
 
-If normalization would produce an unusable name, `lewp add` must fail with
+If normalization would produce an unusable name, `lewp lease` must fail with
 a clear error and ask for `--name`.
 
 ## CLI Overrides
@@ -169,8 +169,8 @@ a clear error and ask for `--name`.
 Users can override inferred values:
 
 ```sh
-lewp add --root atlas --name sso-callback
-lewp add --host atlas.lewp
+lewp lease --root atlas --name sso-callback
+lewp lease --host atlas.lewp
 ```
 
 Overrides become the remembered identity for that folder until explicitly
@@ -240,14 +240,15 @@ Requirements:
 - HTTP requests through the proxy update `last_seen_at` on a throttled,
   best-effort basis
 - V1 has no automatic lease expiry sweeper
-- a later `lewp add` from the same folder reuses the same host and port while
+- a later `lewp lease` from the same folder reuses the same host and port while
   the identity remains remembered
-- `lewp release` releases the current folder route
-- `lewp release --forget` removes remembered identity/history for that
-  folder
+- plain `lewp release` frees the current folder route and every bare port;
+  `--route` and `--port [name]` scope it down
+- `lewp release --forget` removes remembered identity/history for what was
+  released
 
 The user should not need to keep running the CLI during normal development. They
-run `lewp add` when creating or returning to a branch/worktree, then use
+run `lewp lease` when creating or returning to a branch/worktree, then use
 the URL while building.
 
 ## Daemon Architecture
@@ -393,14 +394,14 @@ Core commands:
 ```sh
 lewp setup
 lewp system start|stop|status|restart|uninstall
-lewp add [--root atlas] [--name feature-1] [--host atlas.lewp] [--json] [--shell]
+lewp lease [--root atlas] [--name feature-1] [--host atlas.lewp] [--json] [--shell]
 lewp port [--name vite] [--json] [--shell]
-lewp release [--forget]
+lewp release [--route | --port [name]] [--forget]
 lewp list [--all]
 lewp doctor
 ```
 
-`lewp add` defaults to simple env-style lines:
+`lewp lease` defaults to simple env-style lines:
 
 ```sh
 PORT=42137
@@ -496,10 +497,10 @@ Doctor output should be concrete and command-oriented.
 
 V1 is acceptable when:
 
-- `lewp add` from `~/projects/atlas/feature-1` returns stable `PORT`,
+- `lewp lease` from `~/projects/atlas/feature-1` returns stable `PORT`,
   `URL`, and `HOST`
 - `feature-1.atlas.lewp` resolves locally after setup
-- `lewp add --host atlas.lewp` registers a stable project apex host
+- `lewp lease --host atlas.lewp` registers a stable project apex host
 - `lewp port --name vite` returns a stable bare internal port without a hostname
 - proxy routes to `127.0.0.1:<PORT>`
 - closed ports show a useful debug page, not a blank 502
@@ -511,7 +512,8 @@ V1 is acceptable when:
 - conflicting names get deterministic suffixes and warnings
 - normalized names are valid DNS labels
 - remembered leases are stable and reclaimed by the same folder
-- `lewp release` frees current folder route
+- plain `lewp release` frees the current folder route and every bare port;
+  `--route` and `--port [name]` scope it down
 - `lewp release --forget` removes remembered identity
 - `lewp system uninstall` removes launchd/resolver integration cleanly
 - V1 cannot proxy remote targets

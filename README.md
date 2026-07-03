@@ -64,7 +64,7 @@ From a project instance directory:
 
 ```sh
 cd ~/projects/atlas/feature-1
-lewp add
+lewp lease
 ```
 
 Example output:
@@ -78,13 +78,13 @@ STATE=new
 HOST_KIND=instance
 ```
 
-`add` always prints both the HTTP `URL` and the `HTTPS_URL` whenever the lease
+`lease` always prints both the HTTP `URL` and the `HTTPS_URL` whenever the lease
 has a host. Whether the browser accepts the HTTPS one depends on `lewp setup`
 having trusted the local CA (see [HTTPS](#https)): `.lewp` hosts and configured
 safe-subtree custom suffixes both get browser-trusted certificates; domain-mirror
 suffixes stay HTTP-only. `STATE` and `HOST_KIND` are descriptive; use
 `--shell` for clean `export` lines (which omit them) when you want
-`eval "$(lewp add --shell)"`.
+`eval "$(lewp lease --shell)"`.
 
 Start your app yourself on the leased port:
 
@@ -127,7 +127,7 @@ A route's hostname is `<name>.<root>.lewp`. Lewp resolves `root`, `name`, and an
 optional explicit `host` from the first source that provides each, in priority
 order:
 
-1. **Flags** — `lewp add --root atlas --name feature-1 --host atlas.lewp`
+1. **Flags** — `lewp lease --root atlas --name feature-1 --host atlas.lewp`
 2. **Environment** — `LEWP_ROOT`, `LEWP_NAME`, `LEWP_HOST`
 3. **Config file** — the nearest `.lewp.local.toml` up the directory tree
 4. **Inference** — parent directory → `root`, current directory → `name`
@@ -136,17 +136,17 @@ The environment variables are read from the CLI process and forwarded to the
 daemon (the daemon never reads its own environment), so they work per-shell:
 
 ```sh
-LEWP_ROOT=atlas LEWP_NAME=feature-1 lewp add
+LEWP_ROOT=atlas LEWP_NAME=feature-1 lewp lease
 export LEWP_HOST=sso.atlas.lewp     # pin an explicit host for this shell
 ```
 
-Passing `--root`, `--name`, or `--host` to `lewp add` is remembered for that
-directory. Use `lewp add --reset` to clear those remembered route overrides and
+Passing `--root`, `--name`, or `--host` to `lewp lease` is remembered for that
+directory. Use `lewp lease --reset` to clear those remembered route overrides and
 re-resolve from flags, environment, config, and inference while keeping the same
 port, aliases, and route history. Combine it with a flag to keep one value:
 
 ```sh
-lewp add --reset --root atlas
+lewp lease --reset --root atlas
 ```
 
 For a stable, path-independent identity, write a `.lewp.local.toml` with
@@ -176,7 +176,7 @@ an owned public-domain subtree:
 
 ```sh
 lewp setup --suffix local.todoordie.com
-lewp add --host feature-1.local.todoordie.com
+lewp lease --host feature-1.local.todoordie.com
 ```
 
 Lewp installs a resolver only for the configured subtree. With
@@ -189,13 +189,13 @@ Domain mirror mode is for local mirrors of an owned public domain:
 
 ```sh
 lewp setup --suffix localkickofflabs.com --allow-domain-mirror
-lewp add --host localkickofflabs.com
+lewp lease --host localkickofflabs.com
 lewp alias add app.localkickofflabs.com
 lewp alias add leads.localkickofflabs.com
 ```
 
 While the resolver file exists, that suffix shadows public DNS on this Mac.
-Proxy routing is still host-based: add the primary route once with `lewp add`,
+Proxy routing is still host-based: create the primary route once with `lewp lease`,
 then attach any same-app hostnames with `lewp alias add`. After adding a suffix,
 run `lewp system start` (or `lewp setup --suffix localkickofflabs.com --allow-domain-mirror --start`)
 so the daemon kickstarts and loads the updated suffix list.
@@ -211,7 +211,7 @@ One app process can serve multiple local hostnames through the same Lewp route.
 Create the route once, start the app on that port, then add aliases:
 
 ```sh
-lewp add
+lewp lease
 lewp alias add tags.app.lewp
 lewp alias add leads.app.lewp
 lewp alias add '*.app.lewp'
@@ -233,7 +233,7 @@ tidy `atlas/<name>` layout:
 
 ```sh
 cd ~/scratch/wt/atlas-login-fix          # a worktree checkout
-lewp add
+lewp lease
 # inferred root=wt name=atlas-login-fix      (note on stderr)
 # PORT=42150
 # URL=http://atlas-login-fix.wt.lewp
@@ -249,7 +249,7 @@ host is predictable regardless of where the worktree lives:
 ```sh
 lewp init --root atlas --name login-fix     # write .lewp.local.toml
 lewp release --forget                        # drop the inferred wt.lewp route
-lewp add                                      # now -> login-fix.atlas.lewp
+lewp lease                                    # now -> login-fix.atlas.lewp
 ```
 
 If two worktrees infer the same host, the second is given a deterministic

@@ -28,7 +28,7 @@ install.
 lewp setup [--suffix S] [--allow-domain-mirror] [--log-requests errors|all]
 lewp system start|stop|status|restart
 lewp system uninstall [--yes]
-lewp add [--root R] [--name N] [--host H] [--auto-suffix] [--reset] [--json|--shell]
+lewp lease [--root R] [--name N] [--host H] [--auto-suffix] [--reset] [--json|--shell]
 lewp alias add <host> [--json]
 lewp alias remove <host>
 lewp alias list [--json]
@@ -36,8 +36,7 @@ lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--name N] [--host H] [--json|--shell|--port]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
-lewp port release [--name N] [--forget]
-lewp release [--all] [--forget]
+lewp release [--route | --port [N]] [--forget]
 lewp list [--all] [--json]
 lewp suffix list
 lewp suffix remove S
@@ -94,7 +93,7 @@ lewp setup --suffix localkickofflabs.com --allow-domain-mirror
 It allows an owned registrable domain as the suffix and shadows public DNS for
 that suffix locally until you run `lewp suffix remove localkickofflabs.com` or
 `lewp system uninstall`. Proxy routing remains host-based: register a primary
-route with `lewp add --host ...`, then attach same-app hostnames with
+route with `lewp lease --host ...`, then attach same-app hostnames with
 `lewp alias add ...`.
 
 Safe-subtree suffixes must be below a registrable domain. `local.todoordie.com`
@@ -226,17 +225,17 @@ lewp suffix list
 lewp suffix remove local.todoordie.com
 ```
 
-## `lewp add`
+## `lewp lease`
 
-Register a routed app port and a Lewp-managed host for the current directory.
+Lease a routed app port and a Lewp-managed host for the current directory.
 This is the command for creating a route.
 
 ```sh
-lewp add
-lewp add --root atlas --name feature-1
-lewp add --host atlas.lewp
-lewp add --json
-lewp add --shell
+lewp lease
+lewp lease --root atlas --name feature-1
+lewp lease --host atlas.lewp
+lewp lease --json
+lewp lease --shell
 ```
 
 Default (human) output:
@@ -261,7 +260,7 @@ the human output also prints a `# <host> is local-only (resolves to 127.0.0.1)`
 note on stderr.
 
 `--shell` prefixes the assignable values with `export` and omits the descriptive
-`STATE`/`HOST_KIND` lines and the stderr note, so `eval "$(lewp add --shell)"`
+`STATE`/`HOST_KIND` lines and the stderr note, so `eval "$(lewp lease --shell)"`
 sets only the variables you want and nothing else:
 
 ```sh
@@ -278,10 +277,10 @@ state, and release state.
 Host rules:
 
 - default host: `<instance>.<root>.lewp`
-- project apex override: `lewp add --host atlas.lewp`
-- custom `.lewp` override: `lewp add --host sso.atlas.lewp`
+- project apex override: `lewp lease --host atlas.lewp`
+- custom `.lewp` override: `lewp lease --host sso.atlas.lewp`
 - configured public suffix override:
-  `lewp add --host feature-1.local.todoordie.com`
+  `lewp lease --host feature-1.local.todoordie.com`
 - hosts outside `.lewp` or the configured suffix list are rejected
 
 Discovery order (each of `root`, `name`, and `host` is resolved from the first
@@ -313,11 +312,11 @@ collides fails with the conflicting path and cleanup guidance; pass
 ### Clearing a remembered override with `--reset`
 
 Once you pass `--root`, `--name`, or `--host`, Lewp remembers that value for the
-directory and reuses it on later plain `lewp add` calls. To undo a bad override
+directory and reuses it on later plain `lewp lease` calls. To undo a bad override
 without losing the folder's port or history, pass `--reset`:
 
 ```sh
-lewp add --reset
+lewp lease --reset
 ```
 
 `--reset` ignores the remembered identity and re-resolves from flags, env,
@@ -328,7 +327,7 @@ value, a `# reset remembered identity: host old -> new` note is printed on
 stderr. Combine `--reset` with a flag to keep one value while clearing the rest:
 
 ```sh
-lewp add --reset --root atlas   # re-infer name and host, but keep root=atlas
+lewp lease --reset --root atlas   # re-infer name and host, but keep root=atlas
 ```
 
 Only the current directory's primary host and root/name are reset; its aliases
@@ -351,10 +350,10 @@ Use aliases when one app process serves multiple hostnames, such as Rails
 subdomain routing (`tags.app.lewp`, `leads.app.lewp`) or a local domain mirror
 where several public-looking URLs should point to the same dev server.
 
-`alias add` requires an active route in the current directory. Run `lewp add`
+`alias add` requires an active route in the current directory. Run `lewp lease`
 first. The host must be under `.lewp` or a suffix configured by
 [`lewp setup --suffix`](#lewp-setup); public apex/domain-mirror hosts still
-require the same setup opt-in rules as `lewp add --host`.
+require the same setup opt-in rules as `lewp lease --host`.
 
 Wildcards are supported as host patterns:
 
@@ -368,7 +367,7 @@ that conflict with an existing active host and reports the conflicting path.
 Adding an exact alias already covered by a wildcard on the same route succeeds
 with a warning.
 
-Default `alias add` output mirrors `lewp add` for the attached host:
+Default `alias add` output mirrors `lewp lease` for the attached host:
 
 ```sh
 PORT=42137
@@ -395,7 +394,7 @@ lewp init --host atlas.lewp
 lewp init --force
 ```
 
-Values come from flags first, then path inference (the same inference `add`
+Values come from flags first, then path inference (the same inference `lease`
 uses). Flags:
 
 - `--root R` — root segment to record (defaults to the inferred root)
@@ -454,7 +453,7 @@ non-zero and points you at the commands that create or relocate one:
 
 ```text
 no Lewp route or port is registered for this directory
-Run: lewp add
+Run: lewp lease
 Or lease a bare port: lewp port --name <name>
 Or move an existing route here: lewp move --from <path>
 ```
@@ -490,7 +489,7 @@ lewp port --name vite
 lewp port --name vite --shell
 ```
 
-`port` prints the same env-style output as `add` minus the host fields: the
+`port` prints the same env-style output as `lease` minus the host fields: the
 default (human) form adds a `STATE=` line, and `--shell` emits a single
 `export PORT=<n>` line. Because `--shell` emits one `export` line per value,
 evaluate it rather than capturing it into a variable:
@@ -509,42 +508,35 @@ export VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
 With no `--name`, `port` leases under the default name `port`, so repeated
 `lewp port` calls from the same directory return the same number.
 
-### `lewp port release`
-
-Release a single bare port lease for the current directory.
-
-```sh
-lewp port release             # release the default-named ("port") lease
-lewp port release --name vite # release the bare port named "vite"
-lewp port release --name vite --forget
-```
-
-`--name` selects which bare port to release (default `port`); `--forget` also
-drops its remembered identity. Releasing a name with no active port is reported
-(`no active port named "vite" for this directory`) and exits `0` — release is
-idempotent. This frees one named port; to drop the route and every bare port at
-once use [`lewp release --all`](#lewp-release).
+To free a bare port, use [`lewp release --port <name>`](#lewp-release); plain
+`lewp release` frees the route and every bare port at once.
 
 ## `lewp release`
 
-Release the current folder route, and optionally its bare ports.
+Release everything Lewp holds for the current directory: the route (including
+its aliases and wildcard hosts) and every bare port.
 
 ```sh
 lewp release
-lewp release --all
+lewp release --route
+lewp release --port vite
 lewp release --forget
 ```
 
-By default `release` frees only the route, including its aliases and wildcard
-hosts. `--all` additionally releases every bare port leased for this directory
-(equivalent to running `lewp port release` for each one). Without `--forget`,
-history stays in the registry; with
-`--forget`, Lewp removes the remembered identity/history for the current folder.
+By default `release` is the full inverse of `lewp lease` plus any `lewp port`
+leases. Scope it down with:
 
-Release is idempotent: when nothing is active it reports `no active route for
-this directory` (or, with `--all`, `no active route or port for this directory`)
-and exits `0`. To release a single named bare port instead of all of them, use
-[`lewp port release --name <name>`](#lewp-port-release).
+- `--route` — release only the route and its aliases, keeping bare ports
+- `--port [<name>]` — release only one bare port (default name `port`,
+  mirroring `lewp port` with no `--name`)
+
+`--route` and `--port` cannot be combined. Without `--forget`, history stays
+in the registry; with `--forget`, Lewp also removes the remembered
+identity/history for what was released (so `--port vite --forget` forgets only
+that port's identity).
+
+Release is idempotent: when nothing is active it reports `no active route or
+port for this directory` (or the `--route`/`--port` variants) and exits `0`.
 
 ## `lewp list`
 
@@ -753,7 +745,7 @@ light and dark mode, and present the suggested command in a copyable block:
   `lewp list` / `lewp doctor` hints.
 - **Unregistered managed Lewp host/suffix** — when a host under `.lewp` or a
   configured custom suffix has no route, the proxy returns `404` with parsed
-  labels when available and next steps (`lewp add`, `lewp list`, `lewp doctor`).
+  labels when available and next steps (`lewp lease`, `lewp list`, `lewp doctor`).
   Unmanaged hosts get a plain `404`. The host is HTML-escaped so a crafted
   hostname cannot inject markup.
 
