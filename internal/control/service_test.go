@@ -230,7 +230,7 @@ func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
 		t.Fatalf("conflict owner path=%q want %q", conflict.OwnerPath, firstDir)
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, firstDir) || !strings.Contains(msg, "lewp release --forget") || !strings.Contains(msg, "--auto-suffix") {
+	if !strings.Contains(msg, firstDir) || !strings.Contains(msg, "lewp release --route --forget") || !strings.Contains(msg, "--auto-suffix") {
 		t.Fatalf("conflict message missing cleanup guidance: %q", msg)
 	}
 

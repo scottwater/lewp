@@ -36,7 +36,7 @@ lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--name N] [--host H] [--json|--shell|--port]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
-lewp release [--route | --port [N]] [--forget]
+lewp release [--route | --port [<name>]] [--forget]
 lewp list [--all] [--json]
 lewp suffix list
 lewp suffix remove S
@@ -322,7 +322,7 @@ lewp lease --reset
 `--reset` ignores the remembered identity and re-resolves from flags, env,
 config, and inference, then persists the fresh result in place. The active port
 and event history are kept — unlike [`lewp release --forget`](#lewp-release),
-which deletes the route entirely. When a reset actually changes a remembered
+which deletes the route and every bare port for the directory entirely. When a reset actually changes a remembered
 value, a `# reset remembered identity: host old -> new` note is printed on
 stderr. Combine `--reset` with a flag to keep one value while clearing the rest:
 
