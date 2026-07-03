@@ -153,7 +153,7 @@ func TestProxyUnknownLewpHostShowsHelpfulPage(t *testing.T) {
 		"feature-2.audit.lewp",
 		"instance <code>feature-2</code>",
 		"root <code>audit</code>",
-		"lewp add",
+		"lewp lease",
 		"lewp list",
 		"lewp doctor",
 	} {

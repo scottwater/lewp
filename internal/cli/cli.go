@@ -91,7 +91,7 @@ func Run(cfg Config) int {
 	if cfg.WorkDir == "" {
 		// Fail loudly rather than leaving WorkDir empty: an empty WorkDir makes the
 		// daemon fall back to ITS OWN cwd (`/` under launchd), which resolves a
-		// bogus identity — `lewp add` dies with `root "/" is unusable` and `lewp
+		// bogus identity — `lewp lease` dies with `root "/" is unusable` and `lewp
 		// release` reports "no active route" while the real route stays live. This
 		// happens when the current directory has been deleted out from under the
 		// shell (routine with worktrees), so point the user at the fix directly.
@@ -180,12 +180,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runDaemon(cfg)
-	case "add":
+	case "lease":
 		if helpRequested(cfg.Args[1:]) {
-			fmt.Fprint(cfg.Stdout, addHelp)
+			fmt.Fprint(cfg.Stdout, leaseHelp)
 			return 0
 		}
-		return runAdd(cfg)
+		return runLease(cfg)
 	case "alias":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, aliasHelp)

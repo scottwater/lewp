@@ -305,7 +305,7 @@ func writeUnknownRoutePage(w http.ResponseWriter, host string) {
 
 	fmt.Fprint(w, "<h2>Next steps</h2>")
 	fmt.Fprint(w, "<p>From the project folder you want this host to point at, claim a port and hostname:</p>")
-	writeCommandBlock(w, "lewp add")
+	writeCommandBlock(w, "lewp lease")
 	fmt.Fprint(w, "<ol>")
 	fmt.Fprint(w, "<li>See what is currently registered: <code>lewp list</code>.</li>")
 	fmt.Fprint(w, "<li>Check daemon, DNS, and TLS health: <code>lewp doctor</code>.</li>")

@@ -23,7 +23,7 @@ import (
 func TestRunAddReportsDaemonNotRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:       []string{"add"},
+		Args:       []string{"lease"},
 		WorkDir:    t.TempDir(),
 		SocketPath: t.TempDir() + "/missing.sock",
 		Stdout:     &stdout,
@@ -48,7 +48,7 @@ func TestRunAddReportsDaemonNotRunning(t *testing.T) {
 func TestRunGetwdFailureIsFatal(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:   []string{"add"},
+		Args:   []string{"lease"},
 		Stdout: &stdout,
 		Stderr: &stderr,
 		Getwd:  func() (string, error) { return "", errors.New("getwd: no such file or directory") },
@@ -68,7 +68,7 @@ func TestRunFailsWithoutHomeDirectory(t *testing.T) {
 	t.Setenv("HOME", "")
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:    []string{"add"},
+		Args:    []string{"lease"},
 		WorkDir: t.TempDir(),
 		Stdout:  &stdout,
 		Stderr:  &stderr,
@@ -753,7 +753,7 @@ ipv6_address: ::1
 }
 
 // TestDoctorInferenceUsesConfiguredSuffixes proves doctor's current-folder
-// inference honors configured custom suffixes the same way `lewp add` does: a
+// inference honors configured custom suffixes the same way `lewp lease` does: a
 // directory whose .lewp.local.toml pins a custom-suffix host must resolve OK,
 // not warn that the folder cannot infer a valid host.
 func TestDoctorInferenceUsesConfiguredSuffixes(t *testing.T) {
@@ -1754,13 +1754,13 @@ func TestRunHelpVariantsPrintToStdout(t *testing.T) {
 			t.Fatalf("%v: code=%d stderr=%q", args, code, stderr.String())
 		}
 		got := stdout.String()
-		for _, want := range []string{"Usage:", "add", "setup", "version", "command-specific help"} {
+		for _, want := range []string{"Usage:", "lease", "setup", "version", "command-specific help"} {
 			if !strings.Contains(got, want) {
 				t.Fatalf("%v help missing %q:\n%s", args, want, got)
 			}
 		}
-		if strings.Contains(got, "\n  lease") || strings.Contains(got, "lewp lease") || strings.Contains(got, "Alias for add") {
-			t.Fatalf("%v help should not mention removed lease command:\n%s", args, got)
+		if strings.Contains(got, "\n  add") || strings.Contains(got, "lewp add") || strings.Contains(got, "Alias for lease") {
+			t.Fatalf("%v help should not mention removed add command:\n%s", args, got)
 		}
 		if stderr.Len() != 0 {
 			t.Fatalf("%v wrote to stderr: %q", args, stderr.String())
@@ -1797,15 +1797,15 @@ func TestRunUnknownCommandReturns2WithHelp(t *testing.T) {
 	}
 }
 
-func TestRunLeaseCommandIsRemoved(t *testing.T) {
+func TestRunAddCommandIsRemoved(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	code := Run(Config{Args: []string{"lease"}, Stdout: &stdout, Stderr: &stderr})
+	code := Run(Config{Args: []string{"add"}, Stdout: &stdout, Stderr: &stderr})
 	if code != 2 {
 		t.Fatalf("code=%d", code)
 	}
 	got := stderr.String()
-	if !strings.Contains(got, "unknown command \"lease\"") || !strings.Contains(got, "lewp add") {
-		t.Fatalf("stderr missing removed-command guidance: %q", got)
+	if !strings.Contains(got, "unknown command \"add\"") || !strings.Contains(got, "lewp lease") {
+		t.Fatalf("stderr missing rename guidance: %q", got)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout=%q", stdout.String())
@@ -1814,7 +1814,7 @@ func TestRunLeaseCommandIsRemoved(t *testing.T) {
 
 func TestRunCommandHelpPrintsCommandHelp(t *testing.T) {
 	cases := map[string]string{
-		"add":     "--shell",
+		"lease":   "--shell",
 		"port":    "--name",
 		"release": "--forget",
 		"list":    "--all",

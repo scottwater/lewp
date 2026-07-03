@@ -12,8 +12,8 @@ import (
 	"github.com/scottwater/lewp/internal/identity"
 )
 
-func runAdd(cfg Config) int {
-	fs := flag.NewFlagSet("add", flag.ContinueOnError)
+func runLease(cfg Config) int {
+	fs := flag.NewFlagSet("lease", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	root := fs.String("root", "", "")
 	name := fs.String("name", "", "")
@@ -22,9 +22,11 @@ func runAdd(cfg Config) int {
 	shell := fs.Bool("shell", false, "")
 	autoSuffix := fs.Bool("auto-suffix", false, "")
 	reset := fs.Bool("reset", false, "")
-	if !parseFlags(cfg, fs, "add") {
+	if !parseFlags(cfg, fs, "lease") {
 		return 2
 	}
+	// The wire command stays "add" so a newer CLI keeps working against an
+	// older daemon; only the CLI-visible verb is "lease".
 	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix, Reset: *reset, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
@@ -240,7 +242,7 @@ func runInfo(cfg Config) int {
 	}
 	if len(resp.Entries) == 0 {
 		fmt.Fprintln(cfg.Stderr, "no Lewp route or port is registered for this directory")
-		fmt.Fprintln(cfg.Stderr, "Run: lewp add")
+		fmt.Fprintln(cfg.Stderr, "Run: lewp lease")
 		fmt.Fprintln(cfg.Stderr, "Or lease a bare port: lewp port --name <name>")
 		fmt.Fprintln(cfg.Stderr, "Or move an existing route here: lewp move --from <path>")
 		return 1
@@ -395,7 +397,7 @@ func dashIfEmpty(s string) string {
 }
 
 // writeLease prints the lease to stdout as env lines (or JSON). Inference notes
-// and warnings go to stderr so that `eval "$(lewp add --shell)"` and any
+// and warnings go to stderr so that `eval "$(lewp lease --shell)"` and any
 // `PORT=$(...)` capture only see clean assignable output, never `#` comments or
 // conflict warnings.
 func writeLease(stdout, stderr io.Writer, lease control.LeaseResponse, jsonOut, shell bool) {
@@ -421,7 +423,7 @@ func writeLease(stdout, stderr io.Writer, lease control.LeaseResponse, jsonOut, 
 		fmt.Fprintf(stdout, "%sHOST=%s\n", prefix, lease.Host)
 	}
 	// STATE and HOST_KIND are descriptive, human-facing fields. They are omitted
-	// under --shell so `eval "$(lewp add --shell)"` does not export bookkeeping
+	// under --shell so `eval "$(lewp lease --shell)"` does not export bookkeeping
 	// variables into the user's environment; JSON already carries them.
 	if !shell {
 		if lease.LeaseState != "" {

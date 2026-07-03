@@ -23,7 +23,7 @@ Usage:
 Commands:
   setup      Install the .lewp DNS resolver, local CA, and launchd service
   system     Manage the daemon: start|stop|status|restart|uninstall
-  add        Register a stable port and managed hostname for the current directory
+  lease      Lease a stable port and managed hostname for the current directory
   alias      Manage extra hostnames for the current route
   init       Generate a .lewp.local.toml identity file for the current directory
   info       Show routes and bare ports registered for the current directory
@@ -40,11 +40,11 @@ Commands:
 
 Examples:
   lewp setup && lewp system start
-  cd ~/projects/atlas/feature-1 && lewp add
-  eval "$(lewp add --shell)" && PORT=$PORT bin/dev
+  cd ~/projects/atlas/feature-1 && lewp lease
+  eval "$(lewp lease --shell)" && PORT=$PORT bin/dev
 
 Configuration (highest priority first):
-  flags             --root, --name, --host on lewp add
+  flags             --root, --name, --host on lewp lease
   environment       LEWP_ROOT, LEWP_NAME, LEWP_HOST
   .lewp.local.toml  nearest file up the tree; keys: root, name, host
   inference         parent dir -> root, current dir -> name
@@ -108,7 +108,7 @@ Examples:
   lewp system uninstall --yes
 `
 
-	addHelp = `lewp add — register a stable port and host for this directory
+	leaseHelp = `lewp lease — lease a stable port and host for this directory
 
 Re-running from the same directory returns the same port and host. By default,
 the host is under .lewp. Root and name are inferred from the directory layout
@@ -120,7 +120,7 @@ inference. Inferred values and warnings are printed to stderr so --shell and
 $(...) capture only the clean env lines.
 
 Usage:
-  lewp add [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset] [--json] [--shell]
+  lewp lease [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset] [--json] [--shell]
 
 Flags:
   --root <root>   Override the inferred root segment of the hostname
@@ -139,16 +139,16 @@ default with the conflicting path and cleanup guidance. An inferred host that
 conflicts is given a stable deterministic suffix automatically.
 
 Once you pass --root, --name, or --host, that value is remembered and reused by
-later plain "lewp add" calls. Use --reset to clear a bad override without
+later plain "lewp lease" calls. Use --reset to clear a bad override without
 throwing away the port or history the way "lewp release --forget" would. Combine
 it with a flag to keep one value while clearing the rest, e.g.
-"lewp add --reset --root atlas" re-infers the name and host but keeps root.
+"lewp lease --reset --root atlas" re-infers the name and host but keeps root.
 
 Examples:
-  lewp add
-  lewp add --root atlas --name feature-1
-  lewp add --reset
-  eval "$(lewp add --shell)"
+  lewp lease
+  lewp lease --root atlas --name feature-1
+  lewp lease --reset
+  eval "$(lewp lease --shell)"
 `
 
 	aliasHelp = `lewp alias — manage extra hostnames for the current route

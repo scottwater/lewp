@@ -52,11 +52,11 @@ func startTestDaemon(t *testing.T) string {
 	return ""
 }
 
-func TestRunAddAndInfoMoveCommandHelp(t *testing.T) {
+func TestRunLeaseAndInfoMoveCommandHelp(t *testing.T) {
 	cases := map[string]string{
-		"add":  "lewp add",
-		"info": "lewp info",
-		"move": "--from",
+		"lease": "lewp lease",
+		"info":  "lewp info",
+		"move":  "--from",
 	}
 	for cmd, want := range cases {
 		var stdout, stderr bytes.Buffer
@@ -100,7 +100,7 @@ func TestRunReleaseAllReleasesRouteAndPorts(t *testing.T) {
 	dir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -174,10 +174,10 @@ func TestRunMoveRequiresFrom(t *testing.T) {
 	}
 }
 
-func TestRunAddBadFlagNamesAdd(t *testing.T) {
+func TestRunLeaseBadFlagNamesLease(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:       []string{"add", "--badflag"},
+		Args:       []string{"lease", "--badflag"},
 		WorkDir:    t.TempDir(),
 		SocketPath: t.TempDir() + "/missing.sock",
 		Stdout:     &stdout,
@@ -187,10 +187,10 @@ func TestRunAddBadFlagNamesAdd(t *testing.T) {
 		t.Fatalf("code=%d want 2", code)
 	}
 	got := stderr.String()
-	if !strings.Contains(got, "flag provided but not defined: -badflag") || strings.Contains(got, "lease") {
+	if !strings.Contains(got, "flag provided but not defined: -badflag") || strings.Contains(got, "add") {
 		t.Fatalf("bad flag output used wrong command name: %q", got)
 	}
-	if !strings.Contains(got, "lewp add:") || !strings.Contains(got, "Run: lewp add --help") {
+	if !strings.Contains(got, "lewp lease:") || !strings.Contains(got, "Run: lewp lease --help") {
 		t.Fatalf("bad flag output missing concise usage pointer: %q", got)
 	}
 	if strings.Contains(got, "Usage of") {
@@ -224,7 +224,7 @@ func TestRunAddForwardsClientEnv(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{
-		Args:       []string{"add"},
+		Args:       []string{"lease"},
 		WorkDir:    dir,
 		SocketPath: socketPath,
 		Env:        map[string]string{"LEWP_ROOT": "audit", "LEWP_NAME": "feature-1"},
@@ -245,7 +245,7 @@ func TestRunAddResetClearsRememberedOverride(t *testing.T) {
 
 	// Remember a host override for this directory.
 	var stdout, stderr bytes.Buffer
-	code := Run(Config{Args: []string{"add", "--root", "audit", "--name", "feature-1", "--host", "custom.lewp"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	code := Run(Config{Args: []string{"lease", "--root", "audit", "--name", "feature-1", "--host", "custom.lewp"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
@@ -257,7 +257,7 @@ func TestRunAddResetClearsRememberedOverride(t *testing.T) {
 	// reports what was cleared, while stdout keeps clean env lines.
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(Config{Args: []string{"add", "--reset", "--root", "audit", "--name", "feature-1"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	code = Run(Config{Args: []string{"lease", "--reset", "--root", "audit", "--name", "feature-1"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
 		t.Fatalf("add --reset code=%d stderr=%q", code, stderr.String())
 	}
@@ -283,14 +283,14 @@ func TestRunAddInfoMoveRoundTrip(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("info on empty dir code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "no Lewp route or port is registered") || !strings.Contains(stderr.String(), "lewp add") || !strings.Contains(stderr.String(), "lewp port") || !strings.Contains(stderr.String(), "lewp move") {
+	if !strings.Contains(stderr.String(), "no Lewp route or port is registered") || !strings.Contains(stderr.String(), "lewp lease") || !strings.Contains(stderr.String(), "lewp port") || !strings.Contains(stderr.String(), "lewp move") {
 		t.Fatalf("info empty message missing guidance: %q", stderr.String())
 	}
 
 	// add registers a route.
 	stdout.Reset()
 	stderr.Reset()
-	code = Run(Config{Args: []string{"add", "--root", "audit", "--name", "feature-1"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	code = Run(Config{Args: []string{"lease", "--root", "audit", "--name", "feature-1"}, WorkDir: srcDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
 	if code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
@@ -477,12 +477,12 @@ func TestRunListAlignsColumnsWithMixedHosts(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"add", "--host", "todoordie.lewp"}, WorkDir: otherDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--host", "todoordie.lewp"}, WorkDir: otherDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add other code=%d stderr=%q", code, stderr.String())
 	}
 
@@ -527,7 +527,7 @@ func TestRunInfoDefaultsToCurrentDirectoryTable(t *testing.T) {
 	otherDir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -542,7 +542,7 @@ func TestRunInfoDefaultsToCurrentDirectoryTable(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "other"}, WorkDir: otherDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "other"}, WorkDir: otherDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add other code=%d stderr=%q", code, stderr.String())
 	}
 
@@ -568,7 +568,7 @@ func TestRunInfoPortFiltersToOneEntryWithoutNewline(t *testing.T) {
 	appDir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -611,7 +611,7 @@ func TestRunInfoShellRequiresSingleFilteredEntry(t *testing.T) {
 	appDir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -645,7 +645,7 @@ func TestRunInfoJSONAndTableFilters(t *testing.T) {
 	appDir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -696,7 +696,7 @@ func TestRunInfoRejectsConflictingScalarFormats(t *testing.T) {
 	appDir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
 	}
 
@@ -724,7 +724,7 @@ func TestRunListJSONEmitsEntries(t *testing.T) {
 	appDir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()

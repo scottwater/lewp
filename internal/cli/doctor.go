@@ -409,7 +409,7 @@ func systemResolverCheck(cfg Config) doctorCheck {
 
 // doctorManagedSuffixes loads the configured suffix list so inference and
 // conflict checks validate hosts against the same managed suffixes the daemon
-// and `lewp add` use. A broken suffix config is already surfaced as its own
+// and `lewp lease` use. A broken suffix config is already surfaced as its own
 // failing check (suffixResolverChecks/dnsResolutionChecks), so here it degrades
 // to the built-in .lewp suffix rather than repeating the load error.
 func doctorManagedSuffixes(cfg Config) []string {
@@ -421,7 +421,7 @@ func doctorManagedSuffixes(cfg Config) []string {
 }
 
 // inferenceCheck shows what root/name/host doctor infers for the current
-// directory, so users can see what `lewp add` would register here. It is
+// directory, so users can see what `lewp lease` would register here. It is
 // inference-only (it does not consult remembered identities in the registry).
 func inferenceCheck(cfg Config) doctorCheck {
 	c := doctorCheck{Name: "current folder"}
@@ -455,7 +455,7 @@ func targetPortChecks(cfg Config) []doctorCheck {
 			Name:   "registered route",
 			Status: statusOK,
 			Detail: "no route registered for this directory",
-			Run:    "lewp add",
+			Run:    "lewp lease",
 		}}
 	}
 	var checks []doctorCheck
@@ -485,7 +485,7 @@ func targetPortChecks(cfg Config) []doctorCheck {
 
 // conflictCheck warns when the hostname inferred for the current directory is
 // already owned by a different path, mirroring the deterministic-suffix warning
-// `lewp add` would print.
+// `lewp lease` would print.
 func conflictCheck(cfg Config) []doctorCheck {
 	resolved, err := identity.Resolve(context.Background(), identity.Options{
 		WorkDir:         cfg.WorkDir,
@@ -505,7 +505,7 @@ func conflictCheck(cfg Config) []doctorCheck {
 			return []doctorCheck{{
 				Name:    "hostname conflict",
 				Status:  statusWarn,
-				Detail:  fmt.Sprintf("%s is already assigned to %s; lewp add here would use a -<suffix> host", resolved.Host, entry.Path),
+				Detail:  fmt.Sprintf("%s is already assigned to %s; lewp lease here would use a -<suffix> host", resolved.Host, entry.Path),
 				Inspect: "lewp list --all",
 			}}
 		}

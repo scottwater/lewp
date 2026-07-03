@@ -37,7 +37,7 @@ func (s *Service) AliasAdd(ctx context.Context, req AliasRequest) (LeaseResponse
 		return LeaseResponse{}, err
 	}
 	if !ok {
-		return LeaseResponse{}, fmt.Errorf("no active route for this directory\nRun: lewp add")
+		return LeaseResponse{}, fmt.Errorf("no active route for this directory\nRun: lewp lease")
 	}
 	hostType := registry.HostTypeAlias
 	if identity.IsWildcardRouteHost(host) {
@@ -86,7 +86,7 @@ func (s *Service) AliasRemove(ctx context.Context, req AliasRequest) (AliasRemov
 		return AliasRemoveResponse{}, err
 	}
 	if !ok {
-		return AliasRemoveResponse{}, fmt.Errorf("no active route for this directory\nRun: lewp add")
+		return AliasRemoveResponse{}, fmt.Errorf("no active route for this directory\nRun: lewp lease")
 	}
 	n, err := s.store.RemoveRouteHost(ctx, route.RouteID, host)
 	return AliasRemoveResponse{Removed: n}, err

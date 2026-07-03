@@ -67,7 +67,7 @@ func runInit(cfg Config) int {
 		hostLine = fmt.Sprintf("host = %q\n", resolved.Host)
 	}
 	contents := fmt.Sprintf(`# %s — local Lewp identity overrides (keep uncommitted)
-# Keys: root, name, host. See: lewp add --help
+# Keys: root, name, host. See: lewp lease --help
 root = %q
 name = %q
 %s`, identity.ConfigFileName, resolved.NormalizedRoot, resolved.NormalizedName, hostLine)

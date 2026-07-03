@@ -16,7 +16,7 @@ func TestRunAliasAddListRemove(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -52,7 +52,7 @@ func TestRunAliasAddAcceptsJSONAfterHost(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -74,7 +74,7 @@ func TestRunAliasAddWarnsForExactCoveredBySameRouteWildcard(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
@@ -97,7 +97,7 @@ func TestRunAliasListJSONEmptyArray(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 
-	if code := Run(Config{Args: []string{"add", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()

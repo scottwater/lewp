@@ -12,7 +12,7 @@ import (
 var completionCommands = []struct{ name, desc string }{
 	{"setup", "Install the .lewp resolver, local CA, and launchd service"},
 	{"system", "Manage the daemon (start|stop|status|restart|uninstall)"},
-	{"add", "Register a stable port and .lewp hostname for this directory"},
+	{"lease", "Lease a stable port and .lewp hostname for this directory"},
 	{"alias", "Manage extra hostnames for the current route"},
 	{"init", "Generate a .lewp.local.toml identity file"},
 	{"info", "Show routes and bare ports for this directory"},
@@ -73,7 +73,7 @@ _lewp() {
   case "${COMP_WORDS[1]}" in
     setup)  COMPREPLY=( $(compgen -W "--suffix --allow-domain-mirror --start --log-requests --help" -- "$cur") ) ;;
     system) COMPREPLY=( $(compgen -W "start stop status restart uninstall --help" -- "$cur") ) ;;
-    add)    COMPREPLY=( $(compgen -W "--root --name --host --auto-suffix --reset --json --shell --help" -- "$cur") ) ;;
+    lease)  COMPREPLY=( $(compgen -W "--root --name --host --auto-suffix --reset --json --shell --help" -- "$cur") ) ;;
     alias)  COMPREPLY=( $(compgen -W "add remove list --json --help" -- "$cur") ) ;;
     info)   COMPREPLY=( $(compgen -W "--name --host --json --shell --port --help" -- "$cur") ) ;;
     port)   COMPREPLY=( $(compgen -W "release --name --json --shell --forget --help" -- "$cur") ) ;;
@@ -103,7 +103,7 @@ func zshCompletion() string {
 	b.WriteString("    case \"${words[2]}\" in\n")
 	b.WriteString("      setup) _values 'setup options' --suffix --allow-domain-mirror --start --log-requests --help ;;\n")
 	b.WriteString("      system) _values 'action' start stop status restart uninstall ;;\n")
-	b.WriteString("      add) _values 'add options' --root --name --host --auto-suffix --reset --json --shell --help ;;\n")
+	b.WriteString("      lease) _values 'lease options' --root --name --host --auto-suffix --reset --json --shell --help ;;\n")
 	b.WriteString("      alias) _values 'alias subcommand/options' add remove list --json --help ;;\n")
 	b.WriteString("      info) _values 'info options' --name --host --json --shell --port --help ;;\n")
 	b.WriteString("      port) _values 'port subcommand/options' release --name --json --shell --forget --help ;;\n")
@@ -129,13 +129,13 @@ func fishCompletion() string {
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from setup' -l start -d 'Start or restart the daemon after setup'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from setup' -l log-requests -r -d 'Set daemon request logging mode'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from system' -a 'start stop status restart uninstall'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l root -r -d 'Override root segment'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l name -r -d 'Override instance segment'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l host -r -d 'Register explicit host'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l auto-suffix -d 'Suffix explicit host conflicts'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l reset -d 'Clear remembered route overrides'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l json -d 'Emit JSON'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from add' -l shell -d 'Emit shell exports'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l root -r -d 'Override root segment'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l name -r -d 'Override instance segment'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l host -r -d 'Register explicit host'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l auto-suffix -d 'Suffix explicit host conflicts'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l reset -d 'Clear remembered route overrides'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l json -d 'Emit JSON'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from lease' -l shell -d 'Emit shell exports'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from alias' -a 'add remove list'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from alias' -l json -d 'Emit JSON'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from info' -l name -r -d 'Filter by logical name'\n")
