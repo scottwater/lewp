@@ -29,7 +29,7 @@ Commands:
   info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory
   port       Lease a bare internal port without a hostname
-  release    Release the route for the current directory
+  release    Release the route and bare ports for the current directory
   list       List active routes and their health
   suffix     List or remove custom managed suffixes
   doctor     Diagnose daemon state, DNS, and CA trust
@@ -241,7 +241,6 @@ port but no .lewp host.
 
 Usage:
   lewp port [--name <name>] [--json] [--shell]
-  lewp port release [--name <name>] [--forget]
 
 Flags:
   --name <name>   Logical name for the port within this directory (default "port")
@@ -254,38 +253,36 @@ With no --name a bare port is leased under the default name "port", so repeated
 --shell emits one "export" line per value, so evaluate it rather than capturing
 it into a single variable. For just the number, prefer --json with jq.
 
-Subcommand:
-  lewp port release [--name <name>] [--forget]
-      Release a single bare port lease for this directory (default name "port").
-      Add --forget to also drop its remembered identity. Releasing nothing is
-      reported, not an error. Use "lewp release --all" to drop the route and
-      every bare port at once.
+To free a bare port, use "lewp release --port <name>" (plain "lewp release"
+frees the route and every bare port at once).
 
 Examples:
   lewp port --name vite
   eval "$(lewp port --name vite --shell)"
   VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
-  lewp port release --name vite
+  lewp release --port vite
 `
 
-	releaseHelp = `lewp release — release the route (and optionally bare ports) for this directory
+	releaseHelp = `lewp release — release everything Lewp holds for this directory
+
+By default release frees the whole directory: the route (with its aliases and
+wildcard hosts) and every bare port. It is the inverse of "lewp lease" plus any
+"lewp port" leases. Release is idempotent: releasing when nothing is active is
+reported, never an error.
 
 Usage:
-  lewp release [--all] [--forget]
+  lewp release [--route | --port [<name>]] [--forget]
 
 Flags:
-  --all      Also release every bare port leased for this directory, not just
-             the route
-  --forget   Also remove remembered identity and history for this directory
-
-Releasing a route also releases its aliases and wildcard hosts. Release is
-idempotent: releasing when nothing is active is reported, never an error. To
-release a single named bare port instead of all of them, use
-"lewp port release --name <name>".
+  --route          Release only the route (and its aliases), keeping bare ports
+  --port [<name>]  Release only one bare port (default name "port")
+  --forget         Also remove remembered identity and history for what was
+                   released
 
 Examples:
   lewp release
-  lewp release --all
+  lewp release --route
+  lewp release --port vite
   lewp release --forget
 `
 

@@ -18,7 +18,7 @@ var completionCommands = []struct{ name, desc string }{
 	{"info", "Show routes and bare ports for this directory"},
 	{"move", "Move a route from another directory to this one"},
 	{"port", "Lease a bare internal port without a hostname"},
-	{"release", "Release the route (and optionally ports) for this directory"},
+	{"release", "Release the route and bare ports for this directory"},
 	{"list", "List active routes and their health"},
 	{"doctor", "Diagnose daemon state, DNS, and CA trust"},
 	{"logs", "Show or tail the daemon logs"},
@@ -76,7 +76,8 @@ _lewp() {
     lease)  COMPREPLY=( $(compgen -W "--root --name --host --auto-suffix --reset --json --shell --help" -- "$cur") ) ;;
     alias)  COMPREPLY=( $(compgen -W "add remove list --json --help" -- "$cur") ) ;;
     info)   COMPREPLY=( $(compgen -W "--name --host --json --shell --port --help" -- "$cur") ) ;;
-    port)   COMPREPLY=( $(compgen -W "release --name --json --shell --forget --help" -- "$cur") ) ;;
+    port)   COMPREPLY=( $(compgen -W "--name --json --shell --help" -- "$cur") ) ;;
+    release) COMPREPLY=( $(compgen -W "--route --port --forget --help" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish --help" -- "$cur") ) ;;
     *)      COMPREPLY=( $(compgen -W "--help" -- "$cur") ) ;;
   esac
@@ -106,7 +107,8 @@ func zshCompletion() string {
 	b.WriteString("      lease) _values 'lease options' --root --name --host --auto-suffix --reset --json --shell --help ;;\n")
 	b.WriteString("      alias) _values 'alias subcommand/options' add remove list --json --help ;;\n")
 	b.WriteString("      info) _values 'info options' --name --host --json --shell --port --help ;;\n")
-	b.WriteString("      port) _values 'port subcommand/options' release --name --json --shell --forget --help ;;\n")
+	b.WriteString("      port) _values 'port options' --name --json --shell --help ;;\n")
+	b.WriteString("      release) _values 'release options' --route --port --forget --help ;;\n")
 	b.WriteString("      completion) _values 'shell' bash zsh fish ;;\n")
 	b.WriteString("      *) _arguments '--help[show command help]' ;;\n")
 	b.WriteString("    esac\n")
@@ -143,11 +145,12 @@ func fishCompletion() string {
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from info' -l json -d 'Emit JSON'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from info' -l shell -d 'Emit shell exports'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from info' -l port -d 'Emit bare port'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -a release -d 'Release a bare port lease'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l name -r -d 'Logical port name'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l json -d 'Emit JSON'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l shell -d 'Emit shell exports'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l forget -d 'Forget remembered identity'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l route -d 'Release only the route'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l port -d 'Release one bare port'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l forget -d 'Forget remembered identity'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'\n")
 	return b.String()
 }

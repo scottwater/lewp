@@ -36,9 +36,6 @@ func runLease(cfg Config) int {
 }
 
 func runPort(cfg Config) int {
-	if len(cfg.Args) >= 2 && cfg.Args[1] == "release" {
-		return runPortRelease(cfg)
-	}
 	fs := flag.NewFlagSet("port", flag.ContinueOnError)
 	fs.SetOutput(cfg.Stderr)
 	name := fs.String("name", "port", "")
@@ -47,34 +44,19 @@ func runPort(cfg Config) int {
 	if !parseFlags(cfg, fs, "port") {
 		return 2
 	}
+	if fs.NArg() != 0 {
+		if fs.Arg(0) == "release" {
+			fmt.Fprintln(cfg.Stderr, `lewp port: "port release" was removed; use: lewp release --port [<name>]`)
+		} else {
+			fmt.Fprintf(cfg.Stderr, "lewp port: unexpected argument %s\n", fs.Arg(0))
+		}
+		return 2
+	}
 	resp, err := call(cfg, control.Request{Command: "port", Port: control.PortRequest{WorkDir: cfg.WorkDir, Name: *name, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
 	writeLease(cfg.Stdout, cfg.Stderr, *resp.Lease, *jsonOut, *shell)
-	return 0
-}
-
-// runPortRelease releases a single bare port lease for the current directory.
-// Releasing nothing is reported but not treated as an error: release is
-// idempotent.
-func runPortRelease(cfg Config) int {
-	fs := flag.NewFlagSet("port release", flag.ContinueOnError)
-	fs.SetOutput(cfg.Stderr)
-	name := fs.String("name", "port", "")
-	forget := fs.Bool("forget", false, "")
-	if fs.Parse(cfg.Args[2:]) != nil {
-		return 2
-	}
-	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Name: *name, Kind: identity.KindPort, Forget: *forget, Env: cfg.Env}})
-	if err != nil {
-		return daemonError(cfg, err)
-	}
-	if resp.Release == nil || resp.Release.Ports == 0 {
-		fmt.Fprintf(cfg.Stdout, "no active port named %q for this directory\n", *name)
-		return 0
-	}
-	fmt.Fprintf(cfg.Stdout, "released port %q\n", *name)
 	return 0
 }
 
@@ -316,15 +298,77 @@ func runMove(cfg Config) int {
 	return 0
 }
 
+// releaseScope selects what `lewp release` frees for the current directory.
+type releaseScope int
+
+const (
+	releaseEverything releaseScope = iota // route + aliases + every bare port
+	releaseRouteOnly                      // route + aliases, keep bare ports
+	releasePortOnly                       // one named bare port
+)
+
+// parseReleaseArgs hand-parses `lewp release` flags because --port takes an
+// optional name and the stdlib flag package supports optional values only for
+// booleans. --all is rejected with pointer text: plain release now covers it.
+func parseReleaseArgs(args []string) (scope releaseScope, portName string, forget bool, err error) {
+	scope = releaseEverything
+	portName = "port"
+	sawRoute, sawPort := false, false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--forget":
+			forget = true
+		case arg == "--route":
+			sawRoute = true
+		case arg == "--port":
+			sawPort = true
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				portName = args[i]
+			}
+		case strings.HasPrefix(arg, "--port="):
+			sawPort = true
+			portName = strings.TrimPrefix(arg, "--port=")
+			if portName == "" {
+				return 0, "", false, fmt.Errorf("--port= requires a name")
+			}
+		case arg == "--all":
+			return 0, "", false, fmt.Errorf(`--all was removed; plain "lewp release" now frees the route and every bare port`)
+		case strings.HasPrefix(arg, "-"):
+			return 0, "", false, fmt.Errorf("unknown flag %s", arg)
+		default:
+			return 0, "", false, fmt.Errorf("unexpected argument %s", arg)
+		}
+	}
+	if sawRoute && sawPort {
+		return 0, "", false, fmt.Errorf("--route and --port cannot be combined")
+	}
+	if sawRoute {
+		scope = releaseRouteOnly
+	}
+	if sawPort {
+		scope = releasePortOnly
+	}
+	return scope, portName, forget, nil
+}
+
 func runRelease(cfg Config) int {
-	fs := flag.NewFlagSet("release", flag.ContinueOnError)
-	fs.SetOutput(cfg.Stderr)
-	all := fs.Bool("all", false, "")
-	forget := fs.Bool("forget", false, "")
-	if !parseFlags(cfg, fs, "release") {
+	scope, portName, forget, err := parseReleaseArgs(cfg.Args[1:])
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp release: %v\n", err)
+		fmt.Fprintln(cfg.Stderr, "Run: lewp release --help")
 		return 2
 	}
-	resp, err := call(cfg, control.Request{Command: "release", Release: control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: *forget, All: *all, Env: cfg.Env}})
+	req := control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: forget, Env: cfg.Env}
+	switch scope {
+	case releaseEverything:
+		req.All = true
+	case releasePortOnly:
+		req.Kind = identity.KindPort
+		req.Name = portName
+	}
+	resp, err := call(cfg, control.Request{Command: "release", Release: req})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
@@ -332,19 +376,26 @@ func runRelease(cfg Config) int {
 	if resp.Release != nil {
 		routes, ports = resp.Release.Routes, resp.Release.Ports
 	}
-	if *all {
+	switch scope {
+	case releasePortOnly:
+		if ports == 0 {
+			fmt.Fprintf(cfg.Stdout, "no active port named %q for this directory\n", portName)
+			return 0
+		}
+		fmt.Fprintf(cfg.Stdout, "released port %q\n", portName)
+	case releaseRouteOnly:
+		if routes == 0 {
+			fmt.Fprintln(cfg.Stdout, "no active route for this directory")
+			return 0
+		}
+		fmt.Fprintf(cfg.Stdout, "released %d route(s)\n", routes)
+	default:
 		if routes == 0 && ports == 0 {
 			fmt.Fprintln(cfg.Stdout, "no active route or port for this directory")
 			return 0
 		}
 		fmt.Fprintf(cfg.Stdout, "released %d route(s) and %d port(s)\n", routes, ports)
-		return 0
 	}
-	if routes == 0 {
-		fmt.Fprintln(cfg.Stdout, "no active route for this directory")
-		return 0
-	}
-	fmt.Fprintf(cfg.Stdout, "released %d route(s)\n", routes)
 	return 0
 }
 

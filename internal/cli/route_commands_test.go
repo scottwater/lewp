@@ -71,12 +71,12 @@ func TestRunLeaseAndInfoMoveCommandHelp(t *testing.T) {
 }
 
 // TestPortAndReleaseHelpDocumentReleaseAffordances guards that the help surfaces
-// the otherwise-invisible `lewp port release` subcommand, `lewp release --all`,
-// and the default bare-port name, so these existing behaviors are discoverable.
+// the release scope flags and the default bare-port name, so partial release
+// stays discoverable now that plain release frees everything.
 func TestPortAndReleaseHelpDocumentReleaseAffordances(t *testing.T) {
 	cases := map[string][]string{
-		"port":    {"lewp port release", `default "port"`},
-		"release": {"--all", "lewp port release"},
+		"port":    {"lewp release --port", `default "port"`},
+		"release": {"--route", "--port", "--forget"},
 	}
 	for cmd, wants := range cases {
 		var stdout, stderr bytes.Buffer
@@ -93,15 +93,15 @@ func TestPortAndReleaseHelpDocumentReleaseAffordances(t *testing.T) {
 	}
 }
 
-// TestRunReleaseAllReleasesRouteAndPorts proves `lewp release --all` frees both
-// the route and the bare ports for a directory in one call.
-func TestRunReleaseAllReleasesRouteAndPorts(t *testing.T) {
+// TestRunReleaseFreesEverythingByDefault proves plain `lewp release` frees the
+// route and every bare port for the directory in one call.
+func TestRunReleaseFreesEverythingByDefault(t *testing.T) {
 	socketPath := startTestDaemon(t)
 	dir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
 	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("add code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("lease code=%d stderr=%q", code, stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
@@ -111,49 +111,156 @@ func TestRunReleaseAllReleasesRouteAndPorts(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"release", "--all"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("release --all code=%d stderr=%q", code, stderr.String())
+	if code := Run(Config{Args: []string{"release"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("release code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "released 1 route(s) and 1 port(s)") {
-		t.Fatalf("release --all output unexpected: %q", stdout.String())
+		t.Fatalf("release output unexpected: %q", stdout.String())
 	}
 
 	// Nothing remains for the directory after a full release.
 	stdout.Reset()
 	stderr.Reset()
 	if code := Run(Config{Args: []string{"info"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 1 {
-		t.Fatalf("info after release --all code=%d stdout=%q", code, stdout.String())
+		t.Fatalf("info after release code=%d stdout=%q", code, stdout.String())
+	}
+
+	// Releasing again is idempotent and reports the no-op without erroring.
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"release"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("idempotent release code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "no active route or port for this directory") {
+		t.Fatalf("idempotent release output unexpected: %q", stdout.String())
 	}
 }
 
-// TestRunPortReleaseByName proves `lewp port release --name` frees a single bare
-// port and is idempotent when the name has no active lease.
-func TestRunPortReleaseByName(t *testing.T) {
+// TestRunReleasePortByName proves `lewp release --port <name>` frees a single
+// bare port, leaves the route alone, and is idempotent.
+func TestRunReleasePortByName(t *testing.T) {
 	socketPath := startTestDaemon(t)
 	dir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("lease code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
 	if code := Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
 	}
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"port", "release", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("port release code=%d stderr=%q", code, stderr.String())
+	if code := Run(Config{Args: []string{"release", "--port", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("release --port code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `released port "vite"`) {
-		t.Fatalf("port release output unexpected: %q", stdout.String())
+		t.Fatalf("release --port output unexpected: %q", stdout.String())
 	}
 
-	// Releasing again is idempotent and reports the no-op without erroring.
+	// The route survives a port-scoped release.
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"port", "release", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("idempotent port release code=%d stderr=%q", code, stderr.String())
+	if code := Run(Config{Args: []string{"info"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info after release --port code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "app.work.lewp") {
+		t.Fatalf("route missing after port-scoped release: %q", stdout.String())
+	}
+
+	// Releasing the same name again is an idempotent no-op.
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"release", "--port", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("idempotent release --port code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `no active port named "vite"`) {
-		t.Fatalf("idempotent port release output unexpected: %q", stdout.String())
+		t.Fatalf("idempotent release --port output unexpected: %q", stdout.String())
+	}
+}
+
+// TestRunReleaseRouteOnlyKeepsPorts proves `lewp release --route` frees the
+// route but leaves bare ports leased.
+func TestRunReleaseRouteOnlyKeepsPorts(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("lease code=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"release", "--route"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("release --route code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "released 1 route(s)") {
+		t.Fatalf("release --route output unexpected: %q", stdout.String())
+	}
+
+	// The bare port survives.
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info after release --route code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "vite") {
+		t.Fatalf("bare port missing after route-scoped release: %q", stdout.String())
+	}
+}
+
+// TestRunReleaseFlagValidation covers scope conflicts and the removed --all and
+// port release affordances, each with pointer text to the replacement.
+func TestRunReleaseFlagValidation(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"release", "--route", "--port", "vite"}, "cannot be combined"},
+		{[]string{"release", "--all"}, "--all was removed"},
+		{[]string{"release", "--bogus"}, "unknown flag"},
+		{[]string{"release", "extra"}, "unexpected argument"},
+		{[]string{"port", "release"}, "lewp release --port"},
+	}
+	for _, tc := range cases {
+		var stdout, stderr bytes.Buffer
+		code := Run(Config{Args: tc.args, WorkDir: t.TempDir(), Stdout: &stdout, Stderr: &stderr})
+		if code != 2 {
+			t.Fatalf("%v: code=%d stderr=%q", tc.args, code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), tc.want) {
+			t.Fatalf("%v: stderr missing %q: %q", tc.args, tc.want, stderr.String())
+		}
+	}
+}
+
+// TestRunReleasePortDefaultName proves a bare `--port` targets the default
+// "port" lease, mirroring `lewp port` with no --name.
+func TestRunReleasePortDefaultName(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"port"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"release", "--port"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("release --port code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `released port "port"`) {
+		t.Fatalf("release --port output unexpected: %q", stdout.String())
 	}
 }
 
