@@ -94,7 +94,7 @@ Resolved by the plan:
 - proxy: raw `net/http/httputil`
 - HTTPS: stdlib CA + macOS keychain trust
 - `lewp init`: out of V1
-- requested routed-app ports (`lewp add --port`): out of V1
+- requested routed-app ports (`lewp lease --port`): out of V1
 
 Still open:
 
