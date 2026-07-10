@@ -23,6 +23,7 @@ import (
 	"github.com/scottwater/lewp/internal/registry"
 	"github.com/scottwater/lewp/internal/suffix"
 	localtls "github.com/scottwater/lewp/internal/tls"
+	"github.com/scottwater/lewp/internal/update"
 )
 
 type Config struct {
@@ -52,6 +53,7 @@ type Config struct {
 	Commit       string
 	BuildDate    string
 	RunCommand   func(context.Context, []string) error
+	Upgrade      func(context.Context, string) (update.UpgradeResult, error)
 	// RunCommandOutput runs a command and returns its combined output. It is
 	// used for read-only diagnostics (doctor's installed-version probe, system
 	// start's launchctl print) where the output itself is the signal. Tests
@@ -139,6 +141,10 @@ func Run(cfg Config) int {
 	if cfg.RunCommand == nil {
 		cfg.RunCommand = runCommand
 	}
+	if cfg.Upgrade == nil {
+		manager := update.NewManager()
+		cfg.Upgrade = manager.Upgrade
+	}
 	if cfg.RunCommandOutput == nil {
 		cfg.RunCommandOutput = runCommandOutput
 	}
@@ -174,6 +180,12 @@ func Run(cfg Config) int {
 			return 0
 		}
 		return runVersion(cfg)
+	case "upgrade":
+		if helpRequested(cfg.Args[1:]) {
+			fmt.Fprint(cfg.Stdout, upgradeHelp)
+			return 0
+		}
+		return runUpgrade(cfg)
 	case "daemon":
 		if helpRequested(cfg.Args[1:]) {
 			fmt.Fprint(cfg.Stdout, daemonHelp)

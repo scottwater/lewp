@@ -18,6 +18,7 @@ import (
 	"github.com/scottwater/lewp/internal/launchd"
 	"github.com/scottwater/lewp/internal/suffix"
 	localtls "github.com/scottwater/lewp/internal/tls"
+	"github.com/scottwater/lewp/internal/update"
 )
 
 func TestRunAddReportsDaemonNotRunning(t *testing.T) {
@@ -1877,6 +1878,61 @@ func TestRunVersionDetailedPrintsInjectedMetadata(t *testing.T) {
 				t.Fatalf("%v version missing %q:\n%s", args, want, got)
 			}
 		}
+	}
+}
+
+func TestRunUpgradePrintsResult(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	called := false
+	code := Run(Config{
+		Args:    []string{"upgrade"},
+		WorkDir: t.TempDir(),
+		Version: "0.1.0",
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Upgrade: func(_ context.Context, current string) (update.UpgradeResult, error) {
+			called = true
+			if current != "0.1.0" {
+				t.Fatalf("current version = %q", current)
+			}
+			return update.UpgradeResult{
+				CurrentVersion: "0.1.0",
+				LatestVersion:  "v0.2.0",
+				ExecutablePath: "/tmp/lewp",
+			}, nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !called {
+		t.Fatal("upgrade function was not called")
+	}
+	got := stdout.String()
+	for _, want := range []string{"upgraded lewp from v0.1.0 to v0.2.0", "binary: /tmp/lewp", "Next: lewp system restart"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("upgrade output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestRunUpgradeNoopsWhenCurrent(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:    []string{"upgrade"},
+		WorkDir: t.TempDir(),
+		Version: "0.2.0",
+		Stdout:  &stdout,
+		Stderr:  &stderr,
+		Upgrade: func(_ context.Context, _ string) (update.UpgradeResult, error) {
+			return update.UpgradeResult{LatestVersion: "v0.2.0", UpToDate: true}, nil
+		},
+	})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if got := stdout.String(); got != "lewp is already up to date (v0.2.0)\n" {
+		t.Fatalf("stdout=%q", got)
 	}
 }
 

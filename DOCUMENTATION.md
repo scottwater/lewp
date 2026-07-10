@@ -13,13 +13,17 @@ Most commands talk to the daemon over
 ## Build and Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/scottwater/lewp/main/install.sh | bash
+go install github.com/scottwater/lewp/cmd/lewp@latest
 bin/build
 bin/install
 bin/reinstall
 ```
 
-`bin/install` installs to `~/.local/bin/lewp` by default. Set
-`LEWP_INSTALL_DIR` to install somewhere else. `bin/reinstall` runs build then
+`install.sh` downloads the latest GitHub release archive for the current Mac
+architecture and installs `lewp` into `~/.local/bin` by default. Set
+`LEWP_INSTALL_DIR` to install somewhere else. `go install` builds from source.
+`bin/install` installs a local checkout build; `bin/reinstall` runs build then
 install.
 
 ## Commands
@@ -44,6 +48,7 @@ lewp doctor
 lewp logs [--lines N] [--grep TEXT] [--follow] [--path]
 lewp completion bash|zsh|fish
 lewp version
+lewp upgrade
 lewp daemon
 ```
 
@@ -712,6 +717,20 @@ go:      go1.25.1
 `version`, `--version`, and `-v` are equivalent. The version is injected at link
 time by `bin/build`; an un-stamped `go build` reports `dev`. The detailed
 commit/build-time fields are also injected at link time for development builds.
+
+## `lewp upgrade`
+
+Download the latest GitHub release archive for this Mac, extract the `lewp`
+binary, and replace the executable currently running the command.
+
+```sh
+lewp upgrade
+lewp system restart
+```
+
+If the current binary already matches the latest release, `upgrade` reports that
+it is up to date and exits `0`. After a successful replacement, restart the
+daemon so launchd runs the new binary.
 
 ## `lewp daemon`
 

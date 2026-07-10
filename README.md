@@ -9,7 +9,19 @@ other app process.
 
 ## Install
 
-From source:
+Release install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/scottwater/lewp/main/install.sh | bash
+```
+
+Or with Go:
+
+```sh
+go install github.com/scottwater/lewp/cmd/lewp@latest
+```
+
+Or from a local checkout:
 
 ```sh
 git clone <repo-url> lewp
@@ -18,7 +30,7 @@ bin/reinstall
 ```
 
 This installs to `~/.local/bin/lewp` by default. Make sure `~/.local/bin` is in
-your `PATH`. Override with `LEWP_INSTALL_DIR=/some/bin bin/install`.
+your `PATH`. Override with `LEWP_INSTALL_DIR=/some/bin`.
 
 Requirements:
 
@@ -57,6 +69,32 @@ Check the installed build with:
 ```sh
 lewp version
 ```
+
+Upgrade release installs with:
+
+```sh
+lewp upgrade
+lewp system restart
+```
+
+## Release Versioning
+
+Release versions come from git tags. There is no checked-in version file to
+update before a release; `internal/buildinfo` only contains fallback values for
+unstamped local builds.
+
+To publish a release from the current committed state:
+
+```sh
+go test ./...
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Pushing a `v*` tag runs the GitHub release workflow. GoReleaser builds the
+macOS artifacts and injects the tag version into the binary, so release
+artifacts from `v0.1.0` report `lewp version 0.1.0`. New installs and
+`lewp upgrade` use the latest GitHub release.
 
 ## Quick Start
 

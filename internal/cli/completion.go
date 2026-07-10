@@ -23,6 +23,7 @@ var completionCommands = []struct{ name, desc string }{
 	{"doctor", "Diagnose daemon state, DNS, and CA trust"},
 	{"logs", "Show or tail the daemon logs"},
 	{"version", "Print version"},
+	{"upgrade", "Upgrade to the latest GitHub release"},
 	{"completion", "Print a shell completion script"},
 	{"help", "Show top-level help"},
 }
@@ -78,6 +79,8 @@ _lewp() {
     info)   COMPREPLY=( $(compgen -W "--name --host --json --shell --port --help" -- "$cur") ) ;;
     port)   COMPREPLY=( $(compgen -W "--name --json --shell --help" -- "$cur") ) ;;
     release) COMPREPLY=( $(compgen -W "--route --port --forget --help" -- "$cur") ) ;;
+    version) COMPREPLY=( $(compgen -W "--detailed --help" -- "$cur") ) ;;
+    upgrade) COMPREPLY=( $(compgen -W "--help" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish --help" -- "$cur") ) ;;
     *)      COMPREPLY=( $(compgen -W "--help" -- "$cur") ) ;;
   esac
@@ -109,6 +112,8 @@ func zshCompletion() string {
 	b.WriteString("      info) _values 'info options' --name --host --json --shell --port --help ;;\n")
 	b.WriteString("      port) _values 'port options' --name --json --shell --help ;;\n")
 	b.WriteString("      release) _values 'release options' --route --port --forget --help ;;\n")
+	b.WriteString("      version) _values 'version options' --detailed --help ;;\n")
+	b.WriteString("      upgrade) _values 'upgrade options' --help ;;\n")
 	b.WriteString("      completion) _values 'shell' bash zsh fish ;;\n")
 	b.WriteString("      *) _arguments '--help[show command help]' ;;\n")
 	b.WriteString("    esac\n")
@@ -151,6 +156,7 @@ func fishCompletion() string {
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l route -d 'Release only the route'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l port -d 'Release one bare port'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l forget -d 'Forget remembered identity'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from version' -l detailed -d 'Include build metadata'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'\n")
 	return b.String()
 }

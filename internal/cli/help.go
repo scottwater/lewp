@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"runtime"
 
 	"github.com/scottwater/lewp/internal/buildinfo"
+	"github.com/scottwater/lewp/internal/update"
 )
 
 // mainHelp is the top-level help shown for `lewp`, `lewp help`, `lewp --help`,
@@ -36,6 +38,7 @@ Commands:
   logs       Show or tail the daemon logs
   completion Print a shell completion script (bash|zsh|fish)
   version    Print version
+  upgrade    Replace this binary with the latest GitHub release
   daemon     Run the daemon in the foreground (normally launchd-managed)
 
 Examples:
@@ -365,6 +368,18 @@ Flags:
   --detailed   Include git commit, UTC build time, and Go toolchain version
 `
 
+	upgradeHelp = `lewp upgrade — replace this binary with the latest GitHub release
+
+Usage:
+  lewp upgrade
+
+Downloads the latest release archive for this Mac, extracts the lewp binary, and
+atomically replaces the executable currently running this command. If launchd is
+already using that binary, restart the daemon after upgrade:
+
+  lewp system restart
+`
+
 	completionHelp = `lewp completion — print a shell completion script
 
 Usage:
@@ -442,6 +457,27 @@ func runVersion(cfg Config) int {
 		fmt.Fprintf(cfg.Stdout, "built:   %s\n", cfg.BuildDate)
 		fmt.Fprintf(cfg.Stdout, "go:      %s\n", runtime.Version())
 	}
+	return 0
+}
+
+func runUpgrade(cfg Config) int {
+	if len(cfg.Args) != 1 {
+		fmt.Fprintln(cfg.Stderr, "lewp upgrade: unexpected argument")
+		fmt.Fprintln(cfg.Stderr, "Run: lewp upgrade --help")
+		return 2
+	}
+	result, err := cfg.Upgrade(context.Background(), cfg.Version)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "lewp upgrade: %v\n", err)
+		return 1
+	}
+	if result.UpToDate {
+		fmt.Fprintf(cfg.Stdout, "lewp is already up to date (%s)\n", update.DisplayVersion(result.LatestVersion))
+		return 0
+	}
+	fmt.Fprintf(cfg.Stdout, "upgraded lewp from %s to %s\n", update.DisplayVersion(result.CurrentVersion), update.DisplayVersion(result.LatestVersion))
+	fmt.Fprintf(cfg.Stdout, "binary: %s\n", result.ExecutablePath)
+	fmt.Fprintln(cfg.Stdout, "Next: lewp system restart")
 	return 0
 }
 
