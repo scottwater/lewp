@@ -62,3 +62,23 @@ func TestReleaseWorkflowBuildsGoReleaserArtifacts(t *testing.T) {
 		}
 	}
 }
+
+func TestCIWorkflowRunsGoTests(t *testing.T) {
+	body, err := os.ReadFile("../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(body)
+	for _, want := range []string{
+		`name: CI`,
+		`pull_request:`,
+		`branches:`,
+		`macos-latest`,
+		`go-version: stable`,
+		`go test ./...`,
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("CI workflow missing %q:\n%s", want, workflow)
+		}
+	}
+}
