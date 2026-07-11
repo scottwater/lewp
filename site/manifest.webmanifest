@@ -1,0 +1,13 @@
+{
+  "name": "lewp",
+  "short_name": "lewp",
+  "description": "macOS local domain router — real URLs for local dev.",
+  "start_url": "index.html",
+  "display": "browser",
+  "background_color": "#F7F4EE",
+  "theme_color": "#F7F4EE",
+  "icons": [
+    { "src": "icon-192.png", "type": "image/png", "sizes": "192x192" },
+    { "src": "icon-512.png", "type": "image/png", "sizes": "512x512" }
+  ]
+}

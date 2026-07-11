@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lewp — Real URLs for local dev</title>
+<meta name="description" content="lewp is a macOS local domain router. Run one command in your project directory and get a stable, trusted-HTTPS URL — no port to remember. It routes traffic; it never starts your app.">
+<meta name="theme-color" content="#F7F4EE">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="container">
+
+  <!-- ============ HEADER ============ -->
+  <header class="site-header">
+    <a href="index.html" class="brand">
+      <svg width="30" height="16" viewBox="0 0 60 32" fill="none" style="overflow: visible;" aria-hidden="true">
+        <path d="M4 16 C 18 16 18 4 28 4 C 40 4 40 28 26 28 C 16 28 20 16 40 16 L 56 16" stroke="#0E8C8C" stroke-width="3" stroke-linecap="round" fill="none"/>
+        <circle cx="4" cy="16" r="4" fill="#0E8C8C"/>
+      </svg>
+      <span>lewp</span>
+    </a>
+    <nav class="nav">
+      <a href="#install">Install</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/scottwater/lewp">GitHub&nbsp;↗</a>
+    </nav>
+  </header>
+
+  <!-- ============ HERO ============ -->
+  <section class="hero">
+    <div class="hero-logo">
+      <svg width="280" height="140" viewBox="0 0 240 120" fill="none" style="overflow: visible;" aria-hidden="true">
+        <path class="lewp-path" pathLength="1" d="M16 62 C 66 62 66 20 100 20 C 142 20 142 100 96 100 C 62 100 76 62 152 62 L 224 62" stroke="#0E8C8C" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+        <circle class="lewp-dot" cx="16" cy="62" r="8" fill="#0E8C8C"/>
+        <circle class="lewp-tip" cx="224" cy="62" r="6" fill="#0E8C8C"/>
+      </svg>
+    </div>
+
+    <h1 class="lewp-fade">Real URLs for local dev.<br>No ports to juggle.</h1>
+
+    <p class="hero-sub lewp-fade-2">lewp is a macOS local domain router. Run one command in your project directory and get a stable, trusted-HTTPS URL — no port to remember. It routes traffic; it never starts your app.</p>
+
+    <div class="hero-cta lewp-fade-2">
+      <code class="hero-cmd"><span class="prompt">$</span>lewp lease</code>
+      <div class="hero-url">
+        <span class="arrow">→</span>
+        <a href="#how">https://feature-1.atlas.lewp</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PROBLEM ============ -->
+  <section class="problem">
+    <p class="kicker">The problem</p>
+    <h2>:3000, :3001, :3002 — which one was the admin again?</h2>
+    <p class="lede">Running several apps at once means memorizing a pile of ports. Add a few <code class="inline-code">git worktree</code> checkouts and it gets worse — each one wants its own URL, its own port, its own cert warning to click through.</p>
+
+    <div class="before-after">
+      <div class="card-before">
+        <p class="card-label">BEFORE</p>
+        <div class="card-list">
+          <span>localhost:3000</span>
+          <span>localhost:3001</span>
+          <span>localhost:4321</span>
+          <span>localhost:5173</span>
+          <span class="warn">⚠ your connection is not private</span>
+        </div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="card-after">
+        <p class="card-label">AFTER</p>
+        <div class="card-list">
+          <span><span class="prompt">https://</span>atlas.lewp</span>
+          <span><span class="prompt">https://</span>feature-1.atlas.lewp</span>
+          <span><span class="prompt">https://</span>docs.atlas.lewp</span>
+          <span><span class="prompt">https://</span>admin.atlas.lewp</span>
+          <span class="ok">✓ trusted certificate</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section id="how" class="how">
+    <p class="kicker">How it works</p>
+    <h2>Three steps. lewp routes — you run the app.</h2>
+
+    <div class="steps">
+
+      <!-- step 1 -->
+      <div class="step">
+        <div class="step-num">1</div>
+        <div>
+          <h3>Lease a URL in your project directory</h3>
+          <div class="term">
+            <div class="term-titlebar">
+              <div class="term-lights"><span></span><span></span><span></span></div>
+              <span class="term-path">~/code/atlas</span>
+            </div>
+            <div class="term-body">
+              <div><span class="prompt">$</span> lewp lease</div>
+              <div class="dim" style="margin-top: 8px;">PORT=<span class="term-ink">42137</span></div>
+              <div class="dim">URL=<span class="term-ink">http://feature-1.atlas.lewp</span></div>
+              <div class="dim">HTTPS_URL=<span class="ok">https://feature-1.atlas.lewp</span></div>
+              <div class="dim">HOST=<span class="term-ink">feature-1.atlas.lewp</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- step 2 -->
+      <div class="step">
+        <div class="step-num">2</div>
+        <div>
+          <h3>Start your app on that port — yourself</h3>
+          <div class="term">
+            <div class="term-body">
+              <div><span class="prompt">$</span> bin/rails server -p 42137</div>
+              <div class="dim" style="margin-top: 6px;"># or: npm run dev -- --port 42137</div>
+            </div>
+          </div>
+          <p class="step-note">lewp is <strong>not a process manager</strong>. It doesn't boot Rails, Vite, or Next for you — it just routes browser traffic to the port you leased.</p>
+        </div>
+      </div>
+
+      <!-- step 3 -->
+      <div class="step">
+        <div class="step-num">3</div>
+        <div>
+          <h3>Open the URL — trusted HTTPS, no port</h3>
+          <div class="term">
+            <div class="term-url">
+              <span class="ok">✓</span>
+              <span class="ok">https://</span><span>feature-1.atlas.lewp</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ FEATURES ============ -->
+  <section class="features">
+    <p class="kicker">What you get</p>
+    <div class="features-grid">
+
+      <div class="feature">
+        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
+          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
+        </svg>
+        <div>
+          <h3>Predictable .lewp hostnames</h3>
+          <p>Stable, human-readable URLs derived from your directory — the same one every time.</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
+          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
+        </svg>
+        <div>
+          <h3>Trusted local HTTPS</h3>
+          <p>A locally-trusted certificate, so no more clicking through browser warnings.</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
+          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
+        </svg>
+        <div>
+          <h3>Built for git worktrees</h3>
+          <p>Every checkout gets its own hostname and port, cleanly, with no collisions.</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
+          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
+        </svg>
+        <div>
+          <h3>Not a process manager</h3>
+          <p>lewp routes traffic and gets out of your way. You start your apps however you like.</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
+          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
+        </svg>
+        <div>
+          <h3>Custom public suffixes</h3>
+          <p>Use OAuth-friendly local domains that providers accept where localhost is rejected.</p>
+        </div>
+      </div>
+
+      <div class="feature">
+        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
+          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
+        </svg>
+        <div>
+          <h3>Leased ports that stick</h3>
+          <p>A port stays assigned to your project and survives restarts, so it stays reliable.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ INSTALL ============ -->
+  <section id="install" class="install">
+    <p class="kicker">Install</p>
+    <h2>Get lewp</h2>
+    <p class="reqs">Requires macOS · Go 1.25+</p>
+
+    <div class="install-list">
+      <div>
+        <p class="install-label">Install script</p>
+        <code class="install-cmd"><span class="prompt">$</span>curl -fsSL https://raw.githubusercontent.com/scottwater/lewp/main/install.sh | bash</code>
+      </div>
+      <div>
+        <p class="install-label">Or with Go</p>
+        <code class="install-cmd"><span class="prompt">$</span>go install github.com/scottwater/lewp/cmd/lewp@latest</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FOOTER ============ -->
+  <footer class="site-footer">
+    <div class="footer-tag">
+      <svg width="26" height="14" viewBox="0 0 60 32" fill="none" aria-hidden="true">
+        <path d="M4 16 C 18 16 18 4 28 4 C 40 4 40 28 26 28 C 16 28 20 16 40 16 L 56 16" stroke="#0E8C8C" stroke-width="3" stroke-linecap="round" fill="none"/>
+        <circle cx="4" cy="16" r="4" fill="#0E8C8C"/>
+      </svg>
+      <span>lo, and behold.</span>
+    </div>
+    <nav class="footer-nav">
+      <a href="https://github.com/scottwater/lewp">GitHub</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/scottwater/lewp/blob/main/LICENSE">MIT License</a>
+    </nav>
+  </footer>
+
+</div>
+
+</body>
+</html>
