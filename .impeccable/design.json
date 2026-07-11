@@ -10,6 +10,12 @@
         "canonical": "#0E8C8C",
         "tonalRamp": ["#062F2F", "#0A4747", "#0C6161", "#0E8C8C", "#3AA6A6", "#6FC0C0", "#A8D9D9", "#DDF0F0"]
       },
+      "loop-teal-text": {
+        "role": "primary",
+        "displayName": "Loop Teal Text",
+        "canonical": "#0A6E6E",
+        "tonalRamp": ["#062F2F", "#084A4A", "#0A6E6E", "#0E8C8C", "#3AA6A6", "#6FC0C0", "#A8D9D9", "#DDF0F0"]
+      },
       "warm-paper": {
         "role": "neutral",
         "displayName": "Warm Paper",
@@ -91,7 +97,7 @@
       "refersTo": "inline-code",
       "description": "Mono uppercase teal section label; one per major section at most.",
       "html": "<p class=\"ds-kicker\">How it works</p>",
-      "css": ".ds-kicker { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #0E8C8C; margin: 0; }"
+      "css": ".ds-kicker { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #0A6E6E; margin: 0; }"
     },
     {
       "name": "Inline Code",
@@ -115,7 +121,15 @@
       "refersTo": "terminal-panel",
       "description": "Mono site navigation; ink at rest, underline on hover, teal when active.",
       "html": "<nav class=\"ds-nav\"><a href=\"#\">Install</a><a href=\"#\" class=\"ds-active\">Docs</a><a href=\"#\">GitHub ↗</a></nav>",
-      "css": ".ds-nav { display: flex; align-items: center; gap: 26px; font-size: 14px; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; } .ds-nav a { color: #1A1A1A; text-decoration: none; } .ds-nav a:hover { text-decoration: underline; } .ds-nav a:focus-visible { outline: 2px solid #0E8C8C; outline-offset: 3px; border-radius: 2px; } .ds-nav a.ds-active { color: #0E8C8C; }"
+      "css": ".ds-nav { display: flex; align-items: center; gap: 26px; font-size: 14px; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; } .ds-nav a { color: #1A1A1A; text-decoration: none; } .ds-nav a:hover { text-decoration: underline; } .ds-nav a:focus-visible { outline: 2px solid #0E8C8C; outline-offset: 3px; border-radius: 2px; } .ds-nav a.ds-active { color: #0A6E6E; }"
+    },
+    {
+      "name": "Copy Button",
+      "kind": "button",
+      "refersTo": "terminal-panel",
+      "description": "Pinned to the right edge of runnable command blocks; flips to 'copied ✓' in OK Green for two seconds.",
+      "html": "<div style=\"position:relative;display:inline-block\"><code class=\"ds-cmd\" style=\"padding-right:68px\"><span class=\"ds-prompt\">$</span>lewp lease</code><button class=\"ds-copy-btn\" aria-label=\"Copy command to clipboard\">copy</button></div>",
+      "css": ".ds-cmd { display: inline-flex; align-items: center; gap: 10px; background: #16211F; border-radius: 10px; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 14.5px; color: #EDEBE4; padding: 14px 18px; white-space: nowrap; } .ds-cmd .ds-prompt { color: #0E8C8C; } .ds-copy-btn { position: absolute; top: 50%; transform: translateY(-50%); right: 8px; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1; padding: 7px 9px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.16); background: rgba(22,33,31,0.9); color: #9A968D; cursor: pointer; transition: color 0.15s ease-out, border-color 0.15s ease-out; } .ds-copy-btn:hover { color: #EDEBE4; border-color: rgba(255,255,255,0.32); } .ds-copy-btn:focus-visible { outline: 2px solid #0E8C8C; outline-offset: 2px; }"
     }
   ],
   "narrative": {

@@ -3,6 +3,7 @@ name: Lewp
 description: Real URLs for local dev — calm, precise, handmade marketing + docs site
 colors:
   loop-teal: "#0E8C8C"
+  loop-teal-text: "#0A6E6E"
   warm-paper: "#F7F4EE"
   ink: "#1A1A1A"
   soft-ink: "#4A4A46"
@@ -16,7 +17,7 @@ colors:
   terminal: "#16211F"
   terminal-ink: "#EDEBE4"
   terminal-dim: "#9A968D"
-  terminal-comment: "#6E6A62"
+  terminal-comment: "#908B81"
   ok-green: "#5FB98C"
   warn-red: "#B4433A"
 typography:
@@ -108,7 +109,8 @@ This system explicitly rejects the VC-SaaS landing page (gradient heroes, hero m
 A restrained warm-paper palette with one committed teal accent and a self-contained dark terminal sub-palette.
 
 ### Primary
-- **Loop Teal** (#0E8C8C): The only accent. Named for the hand-drawn loop logo. Used for the brand mark, links, terminal prompts (`$`), kicker labels, and the step-number tint (10% opacity fill). It signals "interactive or brand" — never decoration.
+- **Loop Teal** (#0E8C8C): The brand accent. Named for the hand-drawn loop logo. Used for the brand mark and SVG strokes, terminal prompts (`$`), step numbers, and other large or bold elements (≥18px, or ≥14px bold). It signals "interactive or brand" — never decoration.
+- **Loop Teal Text** (#0A6E6E): The same voice at reading size. Used wherever teal is set below large-text size — links, the kicker, active nav, scroll-spy states. It clears 4.5:1 on Warm Paper; plain Loop Teal does not (3.72:1), which is why small teal text is prohibited.
 
 ### Neutral
 - **Warm Paper** (#F7F4EE): The body background. The bench surface everything sits on.
@@ -116,19 +118,19 @@ A restrained warm-paper palette with one committed teal accent and a self-contai
 - **Ink** (#1A1A1A): Headings and primary text.
 - **Soft Ink** (#4A4A46): Ledes and hero subtext.
 - **Faded Ink** (#6A675F): Supporting notes, feature body copy, sidebar links.
-- **Faint** (#9A9891) / **Faint-2** (#C7C2B6): Metadata and decorative marks (arrows, footer tags). Never body copy.
+- **Faint** (#9A9891) / **Faint-2** (#C7C2B6): Decorative marks only (arrows, dividers). Never text of any kind — both fail AA even for large type. Small labels use Faded Ink instead.
 - **Hairline** (#E4E0D6) / **Hairline Soft** (#E9E5DB): 1px section and list borders — the primary structural device.
 - **Chip** (#ECE8DE): Inline-code background.
 
 ### Terminal (the dark object's own world)
 - **Terminal** (#16211F): Panel background — a deep green-black, not pure black.
 - **Terminal Ink** (#EDEBE4): Command output text.
-- **Terminal Dim** (#9A968D) / **Terminal Comment** (#6E6A62): Secondary output and comments.
+- **Terminal Dim** (#9A968D) / **Terminal Comment** (#908B81): Secondary output and comments.
 - **OK Green** (#5FB98C): Success output (`✓ trusted certificate`, https URLs).
 - **Warn Red** (#B4433A): Failure output (`⚠ your connection is not private`).
 
 ### Named Rules
-**The One Teal Rule.** Loop Teal is the only accent on the surface. It appears on well under 10% of any viewport, and only on brand, links, prompts, and labels. A second accent color is prohibited; success/failure greens and reds live only inside terminal panels.
+**The One Teal Rule.** Teal is the only accent on the surface. It appears on well under 10% of any viewport, and only on brand, links, prompts, and labels — Loop Teal at large/bold sizes, Loop Teal Text at reading sizes. A second accent color is prohibited; success/failure greens and reds live only inside terminal panels.
 
 **The Two Worlds Rule.** Paper colors never appear inside terminal panels; terminal colors never leak onto paper. The contrast between the two IS the depth system.
 
@@ -183,22 +185,29 @@ There are no conventional buttons on this site — the primary CTA is a command 
 - **Style:** Chip (#ECE8DE) background, 4px radius, 2px 6px padding, mono at 0.9em, Ink text.
 
 ### Kicker
-- **Style:** Geist Mono 13px, uppercase, 0.08em tracking, Loop Teal, 18px below-margin. Marks major landing-page sections and doc-page tops.
-- **Constraint:** A named brand system, not scaffolding — one per major section at most, always Loop Teal, never a new color or size.
+- **Style:** Geist Mono 13px, uppercase, 0.08em tracking, Loop Teal Text, 18px below-margin.
+- **Constraint:** One kicker per page, period — it marks the single genuinely sequential section ("How it works" on the landing page). Sections carry plain headlines; an eyebrow above every section is prohibited (it was trimmed back to one in the 2026-07 critique pass).
 
 ### Step Numbers
 - **Style:** 44px circle, 10% Loop Teal fill, Loop Teal mono 600 numeral. Reserved for the genuinely sequential "How it works" steps — not a generic section marker.
 
 ### Navigation
-- **Style:** Geist Mono 13.5–14px; Ink links that hover to underline; active page in Loop Teal. Docs sidebar: 13.5px Faded Ink links with a 2px transparent left rule that tints teal on hover; sticky below the blurred docs header.
+- **Style:** Geist Mono 13.5–14px; Ink links that hover to underline; active page in Loop Teal Text. Docs sidebar: 13.5px Faded Ink links grouped under three mono titles (Start · Commands · Reference), each link with a 2px transparent left rule; hover tints it teal, and a scroll-spy `.active` state (Loop Teal Text + solid left rule) tracks the current section. Sticky below the blurred docs header.
+
+### Copy Button
+- **Style:** Small mono button (12px, 7px 9px padding, 6px radius) pinned to the right edge of a command block: hairline `rgba(255,255,255,0.16)` border on the terminal surface, Terminal Dim text, hover to Terminal Ink, focus ring in Loop Teal. On copy it reads "copied ✓" in OK Green for two seconds.
+- **Placement:** Every runnable command — the hero command, the three install steps, and docs `<pre>` blocks that contain only commands (output samples and usage syntax never get one). Injected by `site/site.js`; `<pre class="no-copy">` opts out.
+
+### Docs Headings
+- **Style:** Section h2s are Geist 600 (prose voice). Only h2s that are literal commands (`lewp setup`, `lewp lease`, …) carry `class="cmd"` and render in Geist Mono, per the Machine Voice Rule.
 
 ## 6. Do's and Don'ts
 
 ### Do:
-- **Do** keep Loop Teal (#0E8C8C) the only accent on paper; success/error color lives inside terminals only.
+- **Do** keep teal the only accent on paper — Loop Teal (#0E8C8C) for large/bold elements, Loop Teal Text (#0A6E6E) below large-text size; success/error color lives inside terminals only.
 - **Do** put real, runnable commands and real output in every terminal panel — the demo is the pitch.
 - **Do** structure with hairline borders (#E4E0D6) and background steps; reach for a shadow only under a focal terminal object.
-- **Do** keep body text at Soft Ink (#4A4A46) or darker on paper — WCAG AA (≥4.5:1) is the floor; Faint (#9A9891) is for metadata only.
+- **Do** keep body text at Soft Ink (#4A4A46) or darker on paper — WCAG AA (≥4.5:1) is the floor for all text, labels included; Faint (#9A9891) is decorative-only.
 - **Do** provide the `prefers-reduced-motion` alternative for every animation, as the hero path-draw already does (instant, fully-drawn state).
 - **Do** keep measures tight: ~640px headlines, ~600–680px prose.
 
