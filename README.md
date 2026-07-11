@@ -346,4 +346,3 @@ go test ./...
 bin/build
 ```
 
-The implementation follows the V1 plan in [docs/plan.md](docs/plan.md).
