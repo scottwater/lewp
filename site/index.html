@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lewp — Real URLs for local dev</title>
-<meta name="description" content="lewp is a macOS local domain router. Run one command in your project directory and get a stable, trusted-HTTPS URL — no port to remember. It routes traffic; it never starts your app.">
+<meta name="description" content="lewp is a macOS local domain router. Run one command in your project directory and get a stable, trusted-HTTPS URL with no port to remember. It routes traffic; it never starts your app.">
 <meta name="theme-color" content="#F7F4EE">
 <link rel="icon" href="favicon.ico" sizes="any">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -47,7 +47,7 @@
 
     <h1 class="lewp-fade">Real URLs for local dev.<br>No ports to juggle.</h1>
 
-    <p class="hero-sub lewp-fade-2">lewp is a macOS local domain router. Run one command in your project directory and get a stable, trusted-HTTPS URL — no port to remember. It routes traffic; it never starts your app.</p>
+    <p class="hero-sub lewp-fade-2">lewp is a macOS local domain router. Run one command in your project directory and get a stable, trusted-HTTPS URL with no port to remember. It routes traffic; it never starts your app.</p>
 
     <div class="hero-cta lewp-fade-2">
       <code class="hero-cmd"><span class="prompt">$</span>lewp lease</code>
@@ -60,9 +60,8 @@
 
   <!-- ============ PROBLEM ============ -->
   <section class="problem">
-    <p class="kicker">The problem</p>
     <h2>:3000, :3001, :3002 — which one was the admin again?</h2>
-    <p class="lede">Running several apps at once means memorizing a pile of ports. Add a few <code class="inline-code">git worktree</code> checkouts and it gets worse — each one wants its own URL, its own port, its own cert warning to click through.</p>
+    <p class="lede">Running several apps at once means memorizing a pile of ports. Add a few <code class="inline-code">git worktree</code> checkouts and it gets worse: each one wants its own URL, its own port, its own cert warning to click through.</p>
 
     <div class="before-after">
       <div class="card-before">
@@ -92,7 +91,7 @@
   <!-- ============ HOW IT WORKS ============ -->
   <section id="how" class="how">
     <p class="kicker">How it works</p>
-    <h2>Three steps. lewp routes — you run the app.</h2>
+    <h2>Three steps. lewp routes; you run the app.</h2>
 
     <div class="steps">
 
@@ -114,6 +113,7 @@
               <div class="dim">HOST=<span class="term-ink">feature-1.atlas.lewp</span></div>
             </div>
           </div>
+          <p class="step-note">First time? <code class="inline-code">lewp setup</code> runs once after <a href="#install">installing</a> and wires up DNS, HTTPS, and the daemon.</p>
         </div>
       </div>
 
@@ -128,7 +128,7 @@
               <div class="dim" style="margin-top: 6px;"># or: npm run dev -- --port 42137</div>
             </div>
           </div>
-          <p class="step-note">lewp is <strong>not a process manager</strong>. It doesn't boot Rails, Vite, or Next for you — it just routes browser traffic to the port you leased.</p>
+          <p class="step-note">lewp is <strong>not a process manager</strong>. It doesn't boot Rails, Vite, or Next for you; it just routes browser traffic to the port you leased.</p>
         </div>
       </div>
 
@@ -136,7 +136,7 @@
       <div class="step">
         <div class="step-num">3</div>
         <div>
-          <h3>Open the URL — trusted HTTPS, no port</h3>
+          <h3>Open the URL: trusted HTTPS, no port</h3>
           <div class="term">
             <div class="term-url">
               <span class="ok">✓</span>
@@ -151,25 +151,17 @@
 
   <!-- ============ FEATURES ============ -->
   <section class="features">
-    <p class="kicker">What you get</p>
+    <h2>What you get</h2>
     <div class="features-grid">
 
       <div class="feature">
-        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
-          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
-        </svg>
         <div>
           <h3>Predictable .lewp hostnames</h3>
-          <p>Stable, human-readable URLs derived from your directory — the same one every time.</p>
+          <p>Stable, human-readable URLs derived from your directory, the same one every time.</p>
         </div>
       </div>
 
       <div class="feature">
-        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
-          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
-        </svg>
         <div>
           <h3>Trusted local HTTPS</h3>
           <p>A locally-trusted certificate, so no more clicking through browser warnings.</p>
@@ -177,10 +169,6 @@
       </div>
 
       <div class="feature">
-        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
-          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
-        </svg>
         <div>
           <h3>Built for git worktrees</h3>
           <p>Every checkout gets its own hostname and port, cleanly, with no collisions.</p>
@@ -188,10 +176,6 @@
       </div>
 
       <div class="feature">
-        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
-          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
-        </svg>
         <div>
           <h3>Not a process manager</h3>
           <p>lewp routes traffic and gets out of your way. You start your apps however you like.</p>
@@ -199,10 +183,6 @@
       </div>
 
       <div class="feature">
-        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
-          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
-        </svg>
         <div>
           <h3>Custom public suffixes</h3>
           <p>Use OAuth-friendly local domains that providers accept where localhost is rejected.</p>
@@ -210,10 +190,6 @@
       </div>
 
       <div class="feature">
-        <svg width="20" height="16" viewBox="0 0 40 24" fill="none" aria-hidden="true">
-          <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
-          <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
-        </svg>
         <div>
           <h3>Leased ports that stick</h3>
           <p>A port stays assigned to your project and survives restarts, so it stays reliable.</p>
@@ -225,19 +201,30 @@
 
   <!-- ============ INSTALL ============ -->
   <section id="install" class="install">
-    <p class="kicker">Install</p>
     <h2>Get lewp</h2>
-    <p class="reqs">Requires macOS · Go 1.25+</p>
+    <p class="reqs">Requires macOS. Go 1.25+ only if you build from source.</p>
 
     <div class="install-list">
       <div>
-        <p class="install-label">Install script</p>
+        <p class="install-label">1 · Install the binary</p>
         <code class="install-cmd"><span class="prompt">$</span>curl -fsSL https://raw.githubusercontent.com/scottwater/lewp/main/install.sh | bash</code>
+        <p class="install-note">Downloads the latest release binary for your Mac into <code class="inline-code">~/.local/bin</code>. Want to look before you run it? <a href="https://github.com/scottwater/lewp/blob/main/install.sh">Read install.sh&nbsp;↗</a> (it's short). Prefer Go? <code class="inline-code">go install github.com/scottwater/lewp/cmd/lewp@latest</code></p>
       </div>
       <div>
-        <p class="install-label">Or with Go</p>
-        <code class="install-cmd"><span class="prompt">$</span>go install github.com/scottwater/lewp/cmd/lewp@latest</code>
+        <p class="install-label">2 · One-time setup</p>
+        <code class="install-cmd"><span class="prompt">$</span>lewp setup &amp;&amp; lewp system start</code>
+        <p class="install-note"><strong>What it touches:</strong> asks for sudo once to write <code class="inline-code">/etc/resolver/lewp</code>, then creates a local CA and trusts it in your keychain so HTTPS works without warnings. Fully reversible: <code class="inline-code">lewp system uninstall</code> removes all of it.</p>
       </div>
+      <div>
+        <p class="install-label">3 · Lease your first URL</p>
+        <code class="install-cmd"><span class="prompt">$</span>lewp lease</code>
+        <p class="install-note">Run it in any project directory, then start your app on the leased port.</p>
+      </div>
+    </div>
+
+    <div class="install-trust">
+      <p>lewp routes loopback traffic only. It never starts your app, and nothing is ever exposed to your network.</p>
+      <p><a href="docs.html#troubleshooting">Troubleshooting</a> · <a href="docs.html#system">Uninstall</a> · <a href="https://github.com/scottwater/lewp">Source&nbsp;↗</a></p>
     </div>
   </section>
 
@@ -259,5 +246,6 @@
 
 </div>
 
+<script src="site.js" defer></script>
 </body>
 </html>

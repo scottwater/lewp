@@ -40,11 +40,12 @@
   <!-- ============ SIDEBAR ============ -->
   <aside class="doc-side-wrap">
     <nav class="doc-side">
-      <p class="doc-side-title">Contents</p>
+      <p class="doc-side-title">Start</p>
       <a href="#install">Build &amp; Install</a>
       <a href="#commands">All commands</a>
       <a href="#setup">lewp setup</a>
       <a href="#system">lewp system</a>
+      <p class="doc-side-title">Commands</p>
       <a href="#suffix">lewp suffix</a>
       <a href="#lease">lewp lease</a>
       <a href="#alias">lewp alias</a>
@@ -60,6 +61,7 @@
       <a href="#version">lewp version</a>
       <a href="#upgrade">lewp upgrade</a>
       <a href="#daemon">lewp daemon</a>
+      <p class="doc-side-title">Reference</p>
       <a href="#errors">Error pages</a>
       <a href="#browser">Browser URLs</a>
       <a href="#troubleshooting">Troubleshooting</a>
@@ -68,7 +70,6 @@
 
   <!-- ============ CONTENT ============ -->
   <main class="doc-main">
-    <p class="kicker">Documentation</p>
     <h1>lewp CLI reference</h1>
     <p class="doc-lede">One binary, two roles: the CLI client you type commands into, and the launchd-managed daemon that does the routing.</p>
     <div class="term doc-intro-term">
@@ -87,7 +88,7 @@
         </svg>
         <h2>Build and Install</h2>
       </div>
-      <pre>curl -fsSL https://raw.githubusercontent.com/scottwater/lewp/main/install.sh | bash
+      <pre class="no-copy">curl -fsSL https://raw.githubusercontent.com/scottwater/lewp/main/install.sh | bash
 go install github.com/scottwater/lewp/cmd/lewp@latest
 bin/build
 bin/install
@@ -103,7 +104,7 @@ bin/reinstall</pre>
         </svg>
         <h2>Commands</h2>
       </div>
-      <pre>lewp setup [--suffix S] [--allow-domain-mirror] [--log-requests errors|all]
+      <pre class="no-copy">lewp setup [--suffix S] [--allow-domain-mirror] [--log-requests errors|all]
 lewp system start|stop|status|restart
 lewp system uninstall [--yes]
 lewp lease [--root R] [--name N] [--host H] [--auto-suffix] [--reset] [--json|--shell]
@@ -161,7 +162,7 @@ Commands:
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp setup</h2>
+        <h2 class="cmd">lewp setup</h2>
       </div>
       <p>One-time macOS setup for .lewp routing and HTTPS. It writes /etc/resolver/lewp (via sudo when needed), creates the local CA under ~/Library/Application Support/lewp/, installs the launchd plist, and trusts the CA with the macOS security tool. Run lewp system start afterward.</p>
       <pre>lewp setup [--suffix &lt;suffix&gt;] [--allow-domain-mirror] [--start]
@@ -184,14 +185,14 @@ LOGS=/Users/scott/Library/Logs/lewp</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp system</h2>
+        <h2 class="cmd">lewp system</h2>
       </div>
       <p>Manage the macOS LaunchAgent: start | stop | restart | status | uninstall. Each action runs the matching launchctl command and prints it. If start sees bootstrap status 5 because the job is already loaded, it falls back to launchctl kickstart -k.</p>
       <pre>lewp system start
 lewp system status
 lewp system uninstall --yes</pre>
       <p>uninstall is destructive, so it first prints an affected-file summary (launchd job, keychain trust, resolver files, CA material it keeps) before doing any work, then asks for confirmation. Non-interactively it refuses unless you pass --yes (or -y), so an unattended uninstall can never silently tear down the integration.</p>
-      <pre>lewp daemon is running</pre>
+      <pre class="no-copy">lewp daemon is running</pre>
     </section>
 
     <section id="suffix" class="doc-section doc-scroll">
@@ -200,9 +201,9 @@ lewp system uninstall --yes</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp suffix</h2>
+        <h2 class="cmd">lewp suffix</h2>
       </div>
-      <p>List and remove custom managed suffixes. .lewp is built in and cannot be removed. Custom suffixes are added with lewp setup --suffix S; suffix remove S removes the suffix from config and deletes its resolver file after confirming the resolver is Lewp-owned.</p>
+      <p>List and remove custom managed suffixes. .lewp is built in and cannot be removed. Custom suffixes are added with lewp setup --suffix S; suffix remove S removes the suffix from config and deletes its resolver file after confirming the resolver is lewp-owned.</p>
       <pre>lewp suffix list
 lewp suffix remove local.todoordie.com</pre>
       <pre>SUFFIX                 MODE
@@ -217,9 +218,9 @@ localkickofflabs.com   domain-mirror</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp lease</h2>
+        <h2 class="cmd">lewp lease</h2>
       </div>
-      <p>Lease a routed app port and a Lewp-managed host for the current directory. This is the command for creating a route. Re-running from the same directory returns the same port and host. By default the host is under .lewp; root and name are inferred from the directory layout unless overridden.</p>
+      <p>Lease a routed app port and a lewp-managed host for the current directory. This is the command for creating a route. Re-running from the same directory returns the same port and host. By default the host is under .lewp; root and name are inferred from the directory layout unless overridden.</p>
       <pre>lewp lease
 lewp lease --root atlas --name feature-1
 lewp lease --host atlas.lewp
@@ -247,7 +248,7 @@ lewp lease --reset --root atlas  # keep root, re-infer name and host</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp alias</h2>
+        <h2 class="cmd">lewp alias</h2>
       </div>
       <p>Attach extra hostnames to the current directory’s active route. Aliases reuse the route’s existing port and process — they do not allocate another port, create another primary route, or start anything. Run lewp lease first; alias add requires an active route.</p>
       <pre>lewp alias add tags.feature-1.atlas.lewp
@@ -269,7 +270,7 @@ HOST_KIND=alias</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp init</h2>
+        <h2 class="cmd">lewp init</h2>
       </div>
       <p>Generate a .lewp.local.toml for the current directory so its identity is explicit and stable regardless of how the folder is laid out. init only writes the file — it never contacts the daemon, allocates a port, or leases a route. Values come from flags first, then path inference.</p>
       <pre>lewp init
@@ -288,7 +289,7 @@ host = "atlas.lewp"</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp info</h2>
+        <h2 class="cmd">lewp info</h2>
       </div>
       <p>Show routes and bare ports registered for the current directory. info reads existing registry data only — it never infers, allocates, or mutates a route or port. Default output is the same table shape as lewp list, scoped to this directory.</p>
       <pre>HOST                       NAME       KIND   PORT   STATE  PATH
@@ -306,7 +307,7 @@ eval "$(lewp info --host feature-1.atlas.lewp --shell)"</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp move</h2>
+        <h2 class="cmd">lewp move</h2>
       </div>
       <p>Move an existing route from another directory to the current directory, keeping the same primary host, aliases, wildcards, and port. Use this after relocating or renaming a project folder so its stable URLs follow it. --from is required and names the directory that currently owns the route.</p>
       <pre>lewp move --from ~/projects/atlas/old-feature
@@ -320,7 +321,7 @@ lewp move --from ~/projects/atlas/old-feature --json</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp port</h2>
+        <h2 class="cmd">lewp port</h2>
       </div>
       <p>Lease a stable bare internal port with no hostname or proxy route — useful for sidecar processes (asset bundlers, internal APIs) that need a stable port but no .lewp host. With no --name, port leases under the default name "port", so repeated calls from the same directory return the same number.</p>
       <pre>lewp port
@@ -336,9 +337,9 @@ export VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp release</h2>
+        <h2 class="cmd">lewp release</h2>
       </div>
-      <p>Release everything Lewp holds for the current directory: the route (including its aliases and wildcard hosts) and every bare port. It is the full inverse of lewp lease plus any lewp port leases.</p>
+      <p>Release everything lewp holds for the current directory: the route (including its aliases and wildcard hosts) and every bare port. It is the full inverse of lewp lease plus any lewp port leases.</p>
       <pre>lewp release              # everything
 lewp release --route      # only the route + aliases, keep bare ports
 lewp release --port vite  # only one bare port
@@ -352,7 +353,7 @@ lewp release --forget     # also drop remembered identity/history</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp list</h2>
+        <h2 class="cmd">lewp list</h2>
       </div>
       <p>List registry entries (routes, aliases, and bare ports) with their health. States are derived from TCP checks. The default list hides released routes; --all includes registry history. KIND is route, alias, or port; a bare port has no host, so HOST shows "-".</p>
       <pre>HOST                       NAME       KIND   PORT   STATE  PATH
@@ -369,7 +370,7 @@ tags.feature-1.atlas.lewp  feature-1  alias  42137  up     .../atlas/feature-1
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp doctor</h2>
+        <h2 class="cmd">lewp doctor</h2>
       </div>
       <p>Diagnose daemon state, DNS, and CA trust. It reports daemon and control-socket reachability, resolver configuration, and whether the local CA is trusted in the keychain. It also compares the binary launchd is configured to run against the CLI you are running now.</p>
       <pre>daemon: ok
@@ -391,7 +392,7 @@ installed version: 0.1.0</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp logs</h2>
+        <h2 class="cmd">lewp logs</h2>
       </div>
       <p>Show or tail the launchd-managed daemon’s logs under ~/Library/Logs/lewp. By default the daemon’s stdout carries a request line only for failed requests; startup failures land on stderr. lewp logs only reads files — it never starts the daemon.</p>
       <pre>lewp logs                        # last 200 lines of each log
@@ -409,7 +410,7 @@ lewp logs --path                 # print the two log file paths</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp completion</h2>
+        <h2 class="cmd">lewp completion</h2>
       </div>
       <p>Print a static shell completion script to stdout for bash, zsh, or fish. The script is self-contained and never contacts the daemon. A missing or unsupported shell argument exits 2 with guidance.</p>
       <pre>lewp completion bash &gt; /usr/local/etc/bash_completion.d/lewp
@@ -423,7 +424,7 @@ lewp completion fish &gt; ~/.config/fish/completions/lewp.fish</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp version</h2>
+        <h2 class="cmd">lewp version</h2>
       </div>
       <p>Print the public version. Add --detailed for development/build metadata. version, --version, and -v are equivalent. The version is injected at link time by bin/build; an un-stamped go build reports "dev".</p>
       <pre>lewp version 0.1.0
@@ -438,7 +439,7 @@ go:      go1.25.1</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp upgrade</h2>
+        <h2 class="cmd">lewp upgrade</h2>
       </div>
       <p>Download the latest GitHub release archive for this Mac, extract the lewp binary, and atomically replace the executable currently running the command. If the current binary already matches the latest release, upgrade reports it is up to date and exits 0.</p>
       <pre>lewp upgrade
@@ -451,7 +452,7 @@ lewp system restart   # so launchd runs the new binary</pre>
           <path d="M3 12 C 11 12 11 4 17 4 C 25 4 25 20 16 20 C 10 20 13 12 27 12 L 37 12" stroke="#0E8C8C" stroke-width="2.5" stroke-linecap="round" fill="none"/>
           <circle cx="3" cy="12" r="3" fill="#0E8C8C"/>
         </svg>
-        <h2>lewp daemon</h2>
+        <h2 class="cmd">lewp daemon</h2>
       </div>
       <p>Run the daemon in the foreground. Normally launchd starts this command. The daemon owns the SQLite registry, the Unix control socket, HTTP/HTTPS proxy listeners from launchd, and SNI certificate minting from the persisted local CA.</p>
       <p>The daemon logs failed requests (proxy errors and statuses ≥ 400) to stdout, captured in daemon.out.log; inspect it with lewp logs. Pass --log-requests=all to log every proxied request instead. Startup errors are written to stderr (daemon.err.log).</p>
@@ -478,7 +479,7 @@ lewp system restart   # so launchd runs the new binary</pre>
         </svg>
         <h2>Browser URLs</h2>
       </div>
-      <p>DNS resolves all .lewp names and configured custom suffixes to loopback. The proxy routes by full registered host. HTTPS uses Lewp’s local CA, created and trusted by lewp setup, which mints certificates for .lewp SNI names and safe-subtree custom suffixes. Domain-mirror suffixes always route over HTTP.</p>
+      <p>DNS resolves all .lewp names and configured custom suffixes to loopback. The proxy routes by full registered host. HTTPS uses lewp’s local CA, created and trusted by lewp setup, which mints certificates for .lewp SNI names and safe-subtree custom suffixes. Domain-mirror suffixes always route over HTTP.</p>
       <pre>http://&lt;host&gt;
 https://&lt;host&gt;   # .lewp and safe-subtree custom suffix hosts</pre>
       <p>Safari and Chromium browsers (Chrome, Brave, Arc, Edge, Helium) trust the macOS system keychain, so https://&lt;host&gt; works as soon as lewp setup has run. Firefox is not supported in V1 — it uses its own NSS trust store, so use http://&lt;host&gt; in Firefox or switch to Safari/Chromium for HTTPS.</p>
@@ -493,9 +494,9 @@ https://&lt;host&gt;   # .lewp and safe-subtree custom suffix hosts</pre>
         <h2>Troubleshooting</h2>
       </div>
       <p>Daemon not running: lewp daemon is not running → run lewp system start.</p>
-      <p>Target app not running: lewp list shows the route as down, and the browser shows a Lewp debug page with host, target, path, and hints. Start your app manually with the leased PORT.</p>
-      <p>HTTPS warnings: run lewp setup, restart the browser if it cached trust state, or run lewp system uninstall to remove Lewp CA trust, the LaunchAgent plist, and resolver file.</p>
-      <p>Port collisions: Lewp never steals another remembered live assignment. Conflicting primary hosts receive deterministic suffixes; conflicting aliases and wildcards are rejected with the conflicting path. Use lewp release --forget from old folders to remove stale ownership.</p>
+      <p>Target app not running: lewp list shows the route as down, and the browser shows a lewp debug page with host, target, path, and hints. Start your app manually with the leased PORT.</p>
+      <p>HTTPS warnings: run lewp setup, restart the browser if it cached trust state, or run lewp system uninstall to remove lewp CA trust, the LaunchAgent plist, and resolver file.</p>
+      <p>Port collisions: lewp never steals another remembered live assignment. Conflicting primary hosts receive deterministic suffixes; conflicting aliases and wildcards are rejected with the conflicting path. Use lewp release --forget from old folders to remove stale ownership.</p>
     </section>
 
     <div class="doc-footer">
@@ -506,5 +507,6 @@ https://&lt;host&gt;   # .lewp and safe-subtree custom suffix hosts</pre>
   </main>
 </div>
 
+<script src="site.js" defer></script>
 </body>
 </html>
