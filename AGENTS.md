@@ -33,6 +33,19 @@ Design and history:
 Reference implementations (read-only guides, not dependencies) live in
 `reference/`.
 
+## Design Context
+
+The marketing + docs site lives in `site/` (static HTML/CSS, no build step).
+Before any design or copy work on it, read:
+
+- `PRODUCT.md` — brand register, audience, positioning, belief ladder, and
+  strategic design principles for the site
+- `DESIGN.md` — the visual system: Loop Teal accent, warm-paper palette,
+  Geist/Geist Mono typography, terminal-panel components, and named rules
+
+The site's primary CTA is the install command; there is no proof (testimonials,
+user counts) yet — never fabricate any.
+
 ## Working in this repo
 
 When implementing or modifying Lewp, read `docs/` first and follow the design

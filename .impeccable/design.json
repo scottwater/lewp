@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-11T18:46:44Z",
+  "title": "Design System: Lewp",
+  "extensions": {
+    "colorMeta": {
+      "loop-teal": {
+        "role": "primary",
+        "displayName": "Loop Teal",
+        "canonical": "#0E8C8C",
+        "tonalRamp": ["#062F2F", "#0A4747", "#0C6161", "#0E8C8C", "#3AA6A6", "#6FC0C0", "#A8D9D9", "#DDF0F0"]
+      },
+      "warm-paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#F7F4EE",
+        "tonalRamp": ["#2B2924", "#4A4740", "#6A675F", "#9A9891", "#C7C2B6", "#E4E0D6", "#F7F4EE", "#FBF9F3"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#1A1A1A",
+        "tonalRamp": ["#1A1A1A", "#333330", "#4A4A46", "#6A675F", "#8B887F", "#ACA89D", "#CDC9BE", "#EEEAE0"]
+      },
+      "terminal": {
+        "role": "neutral",
+        "displayName": "Terminal",
+        "canonical": "#16211F",
+        "tonalRamp": ["#0B1110", "#16211F", "#2A3835", "#43524E", "#5F6E6A", "#828F8B", "#AAB4B1", "#D5DAD8"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Hero headline only; centered and balanced, 38px at ≤720px." },
+      "headline": { "displayName": "Headline", "purpose": "Section h2s, left-aligned, max ~620px." },
+      "title": { "displayName": "Title", "purpose": "Step and feature h3s." },
+      "body": { "displayName": "Body", "purpose": "Ledes 18–19px in Soft Ink; supporting copy 14.5–16px in Faded Ink." },
+      "label": { "displayName": "Label / Mono", "purpose": "Kickers, nav, card labels, footer — anything a machine would say is mono (The Machine Voice Rule)." }
+    },
+    "shadows": [
+      {
+        "name": "object-shadow",
+        "value": "0 1px 0 rgba(0,0,0,0.04), 0 10px 30px -12px rgba(22,33,31,0.35)",
+        "purpose": "Reserved for focal terminal panels (hero command). Tinted with the terminal's own green-black. Paper cards never cast shadows."
+      }
+    ],
+    "motion": [
+      {
+        "name": "lewp-draw",
+        "value": "stroke-dashoffset 1.7s cubic-bezier(0.65, 0.05, 0.36, 1) 0.3s",
+        "purpose": "Once-only hero logo path draw. The site's entire motion budget; reduced-motion shows the drawn state instantly."
+      },
+      {
+        "name": "lewp-fade",
+        "value": "opacity/translateY(6px) 0.7s ease-out, staggered 0.5s / 0.75s",
+        "purpose": "Hero headline and sub entrance, choreographed with the path draw."
+      }
+    ],
+    "breakpoints": [
+      { "name": "landing", "value": "720px" },
+      { "name": "docs", "value": "880px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Terminal Panel",
+      "kind": "custom",
+      "refersTo": "terminal-panel",
+      "description": "The signature component: a dark object on the paper bench showing a real command and its real output.",
+      "html": "<div class=\"ds-term\"><div class=\"ds-term-titlebar\"><div class=\"ds-term-lights\"><span></span><span></span><span></span></div><span class=\"ds-term-path\">~/code/atlas</span></div><div class=\"ds-term-body\"><div><span class=\"ds-prompt\">$</span> lewp lease</div><div class=\"ds-dim\">URL=<span class=\"ds-term-ink\">http://feature-1.atlas.lewp</span></div><div class=\"ds-dim\">HTTPS_URL=<span class=\"ds-ok\">https://feature-1.atlas.lewp</span></div></div></div>",
+      "css": ".ds-term { background: #16211F; border-radius: 10px; overflow: hidden; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 14px; max-width: 420px; } .ds-term-titlebar { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.08); } .ds-term-lights { display: flex; gap: 7px; } .ds-term-lights span { width: 11px; height: 11px; border-radius: 50%; background: #5C5751; } .ds-term-path { color: rgba(255,255,255,0.35); font-size: 12px; } .ds-term-body { padding: 16px 18px; color: #EDEBE4; line-height: 1.8; } .ds-prompt { color: #0E8C8C; } .ds-dim { color: #9A968D; } .ds-ok { color: #5FB98C; } .ds-term-ink { color: #EDEBE4; }"
+    },
+    {
+      "name": "Command CTA",
+      "kind": "button",
+      "refersTo": "terminal-panel",
+      "description": "The site's primary CTA: a one-line terminal panel with a copyable command. Hero variant carries the object shadow.",
+      "html": "<code class=\"ds-cmd\"><span class=\"ds-prompt\">$</span>lewp lease</code>",
+      "css": ".ds-cmd { display: inline-flex; align-items: center; gap: 10px; background: #16211F; border-radius: 10px; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 14.5px; color: #EDEBE4; padding: 14px 18px; white-space: nowrap; box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 10px 30px -12px rgba(22,33,31,0.35); } .ds-cmd .ds-prompt { color: #0E8C8C; }"
+    },
+    {
+      "name": "Paper Card",
+      "kind": "card",
+      "refersTo": "paper-card",
+      "description": "Raised paper with a hairline border; used for before/after comparisons, never card grids.",
+      "html": "<div class=\"ds-card\"><p class=\"ds-card-label\">BEFORE</p><div class=\"ds-card-list\"><span>localhost:3000</span><span>localhost:5173</span><span class=\"ds-warn\">⚠ your connection is not private</span></div></div>",
+      "css": ".ds-card { background: #FBF9F3; border: 1px solid #E4E0D6; border-radius: 12px; padding: 22px 24px; max-width: 340px; } .ds-card-label { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 12px; color: #9A9891; margin: 0 0 16px; letter-spacing: 0.04em; } .ds-card-list { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 14px; display: flex; flex-direction: column; gap: 9px; color: #7A776F; } .ds-warn { color: #B4433A; }"
+    },
+    {
+      "name": "Kicker",
+      "kind": "chip",
+      "refersTo": "inline-code",
+      "description": "Mono uppercase teal section label; one per major section at most.",
+      "html": "<p class=\"ds-kicker\">How it works</p>",
+      "css": ".ds-kicker { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: #0E8C8C; margin: 0; }"
+    },
+    {
+      "name": "Inline Code",
+      "kind": "chip",
+      "refersTo": "inline-code",
+      "description": "Chip-backed mono for commands and paths inside prose.",
+      "html": "<span>Add a few <code class=\"ds-inline-code\">git worktree</code> checkouts</span>",
+      "css": ".ds-inline-code { font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-size: 0.9em; background: #ECE8DE; padding: 2px 6px; border-radius: 4px; color: #1A1A1A; }"
+    },
+    {
+      "name": "Step Number",
+      "kind": "custom",
+      "refersTo": "step-number",
+      "description": "Teal-tinted circle for genuinely sequential steps only.",
+      "html": "<div class=\"ds-step-num\">1</div>",
+      "css": ".ds-step-num { display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; background: rgba(14,140,140,0.10); color: #0E8C8C; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; font-weight: 600; font-size: 16px; }"
+    },
+    {
+      "name": "Nav Link",
+      "kind": "nav",
+      "refersTo": "terminal-panel",
+      "description": "Mono site navigation; ink at rest, underline on hover, teal when active.",
+      "html": "<nav class=\"ds-nav\"><a href=\"#\">Install</a><a href=\"#\" class=\"ds-active\">Docs</a><a href=\"#\">GitHub ↗</a></nav>",
+      "css": ".ds-nav { display: flex; align-items: center; gap: 26px; font-size: 14px; font-family: 'Geist Mono', ui-monospace, Menlo, monospace; } .ds-nav a { color: #1A1A1A; text-decoration: none; } .ds-nav a:hover { text-decoration: underline; } .ds-nav a:focus-visible { outline: 2px solid #0E8C8C; outline-offset: 3px; border-radius: 2px; } .ds-nav a.ds-active { color: #0E8C8C; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Workshop Bench",
+    "overview": "The Lewp site is a well-kept workbench: a warm paper surface with a small set of exact tools laid out on it. The light world (cream paper, hairline borders, near-black ink) is where the explaining happens; the dark world (deep green-black terminal panels) is where the proving happens. The two never blend — terminals are physical objects placed on the paper, showing real commands and real output. The single teal accent is the one colored tool on the bench. The system is calm, precise, and handmade: one sans family (Geist) carries all reading text through weight and size contrast alone; Geist Mono marks everything machine-adjacent. The only whimsy on the entire surface is the hand-drawn loop logo and its once-per-visit path-draw animation.",
+    "keyCharacteristics": [
+      "Two material worlds: warm paper surfaces, dark terminal objects",
+      "One accent (Loop Teal) used sparingly for brand, links, and prompts",
+      "Single sans family + mono for everything machine-adjacent",
+      "Flat by default; hairline borders structure the page",
+      "Motion happens once, at the hero, then the page holds still"
+    ],
+    "rules": [
+      { "name": "The One Teal Rule", "body": "Loop Teal is the only accent on the surface. It appears on well under 10% of any viewport, and only on brand, links, prompts, and labels. A second accent color is prohibited; success/failure greens and reds live only inside terminal panels.", "section": "colors" },
+      { "name": "The Two Worlds Rule", "body": "Paper colors never appear inside terminal panels; terminal colors never leak onto paper. The contrast between the two IS the depth system.", "section": "colors" },
+      { "name": "The Machine Voice Rule", "body": "If a machine would print it — a command, a URL, a port, a path — it is set in Geist Mono. Prose is never mono; machine text is never sans.", "section": "typography" },
+      { "name": "The Object Rule", "body": "Only dark terminal panels may cast shadows, and only when they're the focal object of the fold. Paper cards never do; they get hairline borders instead.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep Loop Teal (#0E8C8C) the only accent on paper; success/error color lives inside terminals only.",
+      "Do put real, runnable commands and real output in every terminal panel — the demo is the pitch.",
+      "Do structure with hairline borders (#E4E0D6) and background steps; reach for a shadow only under a focal terminal object.",
+      "Do keep body text at Soft Ink (#4A4A46) or darker on paper — WCAG AA (≥4.5:1) is the floor; Faint (#9A9891) is for metadata only.",
+      "Do provide the prefers-reduced-motion alternative for every animation, as the hero path-draw already does (instant, fully-drawn state).",
+      "Do keep measures tight: ~640px headlines, ~600–680px prose."
+    ],
+    "donts": [
+      "Don't build the \"VC-SaaS landing page\": no gradient heroes, hero metrics, pricing-tier tables, logo walls, or \"Trusted by 10,000 developers\" claims — there is no proof yet, and fabricating it breaks the brand.",
+      "Don't drift into \"dark-mode terminal-core\": the page is never dark; dark panels are objects on paper (The Two Worlds Rule).",
+      "Don't add \"corporate docs portal\" chrome: no breadcrumbs, no sidebar forests, no search-first austerity.",
+      "Don't introduce buttons where a copyable command will do — the CTA is the command.",
+      "Don't color the terminal titlebar dots red/yellow/green; they are deliberately dull (#5C5751).",
+      "Don't add new fonts, gradients, gradient text, glassmorphism (the docs-header blur is the single sanctioned use), or side-stripe accent borders thicker than the sidebar's 2px hover rule.",
+      "Don't animate anything after first load; the hero's once-only draw is the site's entire motion budget."
+    ]
+  }
+}
