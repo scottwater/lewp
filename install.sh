@@ -75,6 +75,9 @@ main() {
   echo ""
   echo "Run 'lewp version --detailed' to verify installation."
   echo "Then run 'lewp setup' and 'lewp system start' for first-time setup."
+
+  rm -rf "${tmp_dir}"
+  trap - EXIT
 }
 
 main

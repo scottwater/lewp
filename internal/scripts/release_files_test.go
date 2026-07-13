@@ -2,6 +2,8 @@ package scripts
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -24,6 +26,73 @@ func TestInstallScriptDownloadsLatestRelease(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("install.sh missing %q:\n%s", want, script)
 		}
+	}
+}
+
+func TestInstallScriptCleansUpTemporaryDirectory(t *testing.T) {
+	repoRoot, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testRoot := t.TempDir()
+	fakeBin := filepath.Join(testRoot, "bin")
+	installDir := filepath.Join(testRoot, "install")
+	downloadDir := filepath.Join(testRoot, "download")
+	if err := os.Mkdir(fakeBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeExecutable := func(name, body string) {
+		t.Helper()
+		path := filepath.Join(fakeBin, name)
+		if err := os.WriteFile(path, []byte("#!/bin/bash\nset -euo pipefail\n"+body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExecutable("uname", `
+		if [[ "${1:-}" == "-s" ]]; then echo Darwin; else echo arm64; fi
+	`)
+	writeExecutable("mktemp", `
+		mkdir -p "${LEWP_TEST_DOWNLOAD_DIR}"
+		echo "${LEWP_TEST_DOWNLOAD_DIR}"
+	`)
+	writeExecutable("curl", `
+		output=""
+		while (($#)); do
+			if [[ "$1" == "-o" ]]; then output="$2"; shift 2; else shift; fi
+		done
+		if [[ -n "$output" ]]; then
+			: > "$output"
+		else
+			echo '{"tag_name":"v0.1.0"}'
+		fi
+	`)
+	writeExecutable("tar", `
+		destination=""
+		while (($#)); do
+			if [[ "$1" == "-C" ]]; then destination="$2"; shift 2; else shift; fi
+		done
+		printf '#!/bin/bash\n' > "${destination}/lewp"
+		chmod 0755 "${destination}/lewp"
+	`)
+
+	cmd := exec.Command("/bin/bash", filepath.Join(repoRoot, "install.sh"))
+	cmd.Env = append(os.Environ(),
+		"HOME="+testRoot,
+		"LEWP_INSTALL_DIR="+installDir,
+		"LEWP_TEST_DOWNLOAD_DIR="+downloadDir,
+		"PATH="+fakeBin+":/usr/bin:/bin",
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("install.sh failed: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "unbound variable") {
+		t.Fatalf("install.sh reported a cleanup error:\n%s", output)
+	}
+	if _, err := os.Stat(downloadDir); !os.IsNotExist(err) {
+		t.Fatalf("temporary download directory still exists: %s", downloadDir)
 	}
 }
 
