@@ -1,3 +1,5 @@
+![Repository social preview](assets/github-social-preview.png)
+
 # Lewp
 
 Lewp is a macOS-first local domain router/proxy for parallel local development.
@@ -345,4 +347,3 @@ Full command documentation lives in [DOCUMENTATION.md](DOCUMENTATION.md).
 go test ./...
 bin/build
 ```
-
