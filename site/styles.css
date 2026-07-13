@@ -165,8 +165,8 @@ a:hover { text-decoration: underline; }
 }
 .lewp-dot { transform-origin: center; animation: lewp-pop 0.45s ease-out both; }
 .lewp-tip { opacity: 0; animation: lewp-pop 0.4s ease-out 1.9s forwards; transform-origin: center; }
-.lewp-fade { opacity: 0; animation: lewp-fade 0.7s ease-out 0.5s forwards; }
-.lewp-fade-2 { opacity: 0; animation: lewp-fade 0.7s ease-out 0.75s forwards; }
+.lewp-fade { opacity: 0; animation: lewp-fade 0.7s ease-out forwards; }
+.lewp-fade-2 { opacity: 0; animation: lewp-fade 0.7s ease-out 0.15s forwards; }
 @media (prefers-reduced-motion: reduce) {
   .lewp-path { animation: none; stroke-dashoffset: 0; }
   .lewp-dot, .lewp-tip, .lewp-fade, .lewp-fade-2 { animation: none; opacity: 1; transform: none; }
