@@ -1,3 +1,6 @@
 reference/
 /lewp
 .worktrees/
+
+.tracer/
+.pi-subagents/
