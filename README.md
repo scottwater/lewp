@@ -156,10 +156,35 @@ Wildcards match one label only. `*.feature-1.atlas.lewp` matches
 Check or relocate a route later:
 
 ```sh
-lewp info                                  # table of this directory's route and ports
+lewp info                                     # this directory's route and ports
 PORT="$(lewp info --host feature-1.atlas.lewp --port)"
 lewp move --from ~/projects/atlas/feature-1   # bring its route, aliases, and port here
 ```
+
+Release the current directory with `lewp release`, or target another registered
+owner without changing directories:
+
+```sh
+lewp release
+lewp release --path /work/deleted-worktree
+lewp release --path /work/app --name vite
+lewp release --host app.work.lewp
+lewp release --host '*.app.work.lewp'
+lewp release --port 42137
+```
+
+Host and numeric-port selectors match current owners. An exact path also works
+after you delete or move that directory. To review a subtree before changing
+it, run:
+
+```sh
+lewp release --path /work/worktrees --recursive --dry-run
+lewp release --path /work/worktrees --recursive --yes
+```
+
+The dry run never prompts or changes the registry. A recursive change previews
+all matches and asks for confirmation; scripts must pass `--yes` or `-y`.
+Release keeps registry history unless you add `--forget`.
 
 ## Identity and configuration
 
@@ -287,9 +312,10 @@ If the inferred `root`/`name` are not what you want, pin them explicitly so the
 host is predictable regardless of where the worktree lives:
 
 ```sh
-lewp init --root atlas --name login-fix     # write .lewp.local.toml
-lewp release --forget                        # drop the inferred wt.lewp route
-lewp lease                                    # now -> login-fix.atlas.lewp
+lewp init --root atlas --name login-fix
+lewp release --path ~/scratch/wt/atlas-login-fix --route --forget
+lewp lease
+# login-fix.atlas.lewp
 ```
 
 If two worktrees infer the same host, the second is given a deterministic

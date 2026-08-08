@@ -72,26 +72,28 @@ func TestRunLeaseAndInfoMoveCommandHelp(t *testing.T) {
 	}
 }
 
-// TestPortAndReleaseHelpDocumentReleaseAffordances guards that the help surfaces
-// the release scope flags and the default bare-port name, so partial release
-// stays discoverable now that plain release frees everything.
-func TestPortAndReleaseHelpDocumentReleaseAffordances(t *testing.T) {
-	cases := map[string][]string{
-		"port":    {"lewp release --port", `default "port"`},
-		"release": {"--route", "--port", "--forget"},
+func TestPortAndReleaseHelpDocumentGlobalReleaseTargets(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"release", "--help"}, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	for cmd, wants := range cases {
-		var stdout, stderr bytes.Buffer
-		code := Run(Config{Args: []string{cmd, "--help"}, Stdout: &stdout, Stderr: &stderr})
-		if code != 0 {
-			t.Fatalf("%s --help: code=%d stderr=%q", cmd, code, stderr.String())
+	got := stdout.String()
+	for _, want := range []string{"--path <path>", "--recursive", "--host <host>", "--port <number>", "--name <name>", "--route", "--forget", "--dry-run", "--json", "--yes, -y", `--host '*.app.work.lewp'`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("release help missing %q:\n%s", want, got)
 		}
-		got := stdout.String()
-		for _, want := range wants {
-			if !strings.Contains(got, want) {
-				t.Fatalf("%s --help missing %q:\n%s", cmd, want, got)
-			}
-		}
+	}
+	if strings.Contains(got, "--port [<name>]") {
+		t.Fatalf("release help retains old named-port syntax:\n%s", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"port", "--help"}, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "lewp release --name vite") || strings.Contains(stdout.String(), "lewp release --port vite") {
+		t.Fatalf("port help stale:\n%s", stdout.String())
 	}
 }
 

@@ -40,7 +40,8 @@ lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--name N] [--host H] [--json|--shell|--port]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
-lewp release [--route | --port [<name>]] [--forget]
+lewp release [--path P [--recursive] [--route | --name N] | --host H | --port N]
+             [--forget] [--dry-run] [--json] [--yes|-y]
 lewp list [--all] [--json]
 lewp suffix list
 lewp suffix remove S
@@ -55,6 +56,21 @@ lewp daemon
 Every command accepts `--help` (alias `-h`) for command-specific usage, flags,
 and examples. `lewp`, `lewp help`, and `lewp --help` print the top-level help.
 An unknown command prints the top-level help to stderr and exits `2`.
+
+## Glossary
+
+- **Route**: A hostname-backed registration that sends HTTP and HTTPS traffic
+  to one stable loopback port for a registered path. Its primary host, aliases,
+  and wildcard hosts belong to the same route.
+- **Bare port**: A named, stable loopback port allocation for a registered path.
+  It has no hostname and no proxy route.
+- **Release**: Make a route or bare port inactive and return its active port to
+  Lewp's allocation pool. Release keeps registry history. It does not stop a
+  process or change anything in the project directory.
+- **Forget**: Delete the selected registry history and remembered identity. If
+  the selected route or bare port is active, Lewp releases it in the same
+  operation. A path selector can forget released history, including history for
+  a path that no longer exists. Forget does not delete project files.
 
 Top-level help:
 
@@ -77,7 +93,7 @@ Commands:
   info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory
   port       Lease a bare internal port without a hostname
-  release    Release the route and bare ports for the current directory
+  release    Release routes and bare ports by path, host, or port
   list       List active routes and their health
   suffix     List or remove custom managed suffixes
   doctor     Diagnose daemon state, DNS, and CA trust
@@ -383,8 +399,15 @@ Flags:
   --shell         Emit shell "export" lines for use with eval
 
 An explicit --host that is already assigned to another directory fails by
-default with the conflicting path and cleanup guidance. An inferred host that
-conflicts is given a stable deterministic suffix automatically.
+default with the conflicting path and cleanup guidance. You can release and
+forget the old route without changing directories. For an owner path with
+spaces, Lewp prints a quoted command such as:
+
+```sh
+lewp release --path "/work/old app" --route --forget
+```
+
+An inferred host that conflicts receives a stable deterministic suffix.
 
 Once you pass --root, --name, or --host, that value is remembered and reused by
 later plain "lewp lease" calls. Use --reset to clear a bad override without
@@ -770,14 +793,14 @@ With no --name a bare port is leased under the default name "port", so repeated
 --shell emits one "export" line per value, so evaluate it rather than capturing
 it into a single variable. For just the number, prefer --json with jq.
 
-To free a bare port, use "lewp release --port <name>" (plain "lewp release"
-frees the route and every bare port at once).
+To free a named bare port in this directory, use "lewp release --name <name>".
+Plain "lewp release" frees the route and every bare port for this directory.
 
 Examples:
   lewp port --name vite
   eval "$(lewp port --name vite --shell)"
   VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
-  lewp release --port vite
+  lewp release --name vite
 ```
 
 Lease a stable bare port with no hostname or proxy route.
@@ -807,61 +830,186 @@ export VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
 With no `--name`, `port` leases under the default name `port`, so repeated
 `lewp port` calls from the same directory return the same number.
 
-To free a bare port, use [`lewp release --port <name>`](#lewp-release); plain
-`lewp release` frees the route and every bare port at once.
+To free the named port in the current directory, use
+[`lewp release --name <name>`](#lewp-release). To target the current owner of a
+known number from any directory, use `lewp release --port <number>`. Plain
+`lewp release` frees the route and every bare port for the current directory.
 
 ## `lewp release`
 
 Help:
 
 ```text
-lewp release — release everything Lewp holds for this directory
+lewp release — release routes and bare ports by path, host, or port
 
-By default release frees the whole directory: the route (with its aliases and
-wildcard hosts) and every bare port. It is the inverse of "lewp lease" plus any
-"lewp port" leases. Release is idempotent: releasing when nothing is active is
-reported, never an error.
+Plain release targets the current directory. It releases the route, including
+aliases and wildcard hosts, and every bare port. Exact selectors do not prompt.
+A no-op reports no match and exits successfully.
 
 Usage:
-  lewp release [--route | --port [<name>]] [--forget]
+  lewp release [--path <path> [--recursive] [--route | --name <name>] |
+                --host <host> | --port <number>]
+               [--forget] [--dry-run] [--json] [--yes|-y]
 
-Flags:
-  --route          Release only the route (and its aliases), keeping bare ports
-  --port [<name>]  Release only one bare port (default name "port")
-  --forget         Also remove remembered identity and history for what was
-                   released
+Targets and scopes:
+  --path <path>    Target an exact registered path, including an external or
+                   deleted path. Lewp cleans the path lexically; it does not
+                   resolve symlinks or require the path to exist.
+  --recursive      Include paths below --path at path-component boundaries
+  --host <host>    Target the current owner of an exact registered host
+  --port <number>  Target the current owner of a numeric port
+  --name <name>    Release one named bare port under a path
+  --route          Release only the route under a path, keeping bare ports
+
+Output and safety:
+  --forget         Delete matching registry history. Release otherwise keeps
+                   history. With a path, forget also deletes released history.
+  --dry-run        Show the plan without prompting or changing the registry
+  --json           Emit the result as one JSON object
+  --yes, -y        Approve a recursive mutation without a prompt. Scripts and
+                   recursive JSON mutations require this flag.
+
+A recursive mutation prints its full plan before asking for confirmation. Lewp
+applies that exact plan atomically and refuses it if registry state changes;
+rerun the command to review a new plan. Recursive selection from / is allowed
+for dry runs but remains protected by the same confirmation rules for changes.
 
 Examples:
   lewp release
-  lewp release --route
-  lewp release --port vite
-  lewp release --forget
+  lewp release --path /work/deleted-worktree
+  lewp release --path /work/worktrees --recursive --dry-run
+  lewp release --path /work/worktrees --recursive --yes
+  lewp release --path /work/app --route
+  lewp release --path /work/app --name vite
+  lewp release --host app.work.lewp
+  lewp release --host '*.app.work.lewp'
+  lewp release --port 42137
+  lewp release --path /work/deleted-worktree --forget
+  lewp release --path /work/worktrees --recursive --yes --json
 ```
 
-Release everything Lewp holds for the current directory: the route (including
-its aliases and wildcard hosts) and every bare port.
+### Targets and path matching
+
+Plain `lewp release` uses the current directory as an implicit exact path. It
+releases that path's route, aliases, wildcard hosts, and bare ports. Use
+`--route` to select its route or `--name vite` to select one bare port:
 
 ```sh
 lewp release
-lewp release --route
-lewp release --port vite
-lewp release --forget
+lewp release --path /work/app --route
+lewp release --path /work/app --name vite
 ```
 
-By default `release` is the full inverse of `lewp lease` plus any `lewp port`
-leases. Scope it down with:
+`--path` accepts an absolute path or resolves a relative path against the
+invoking directory. Lewp makes the result absolute and cleans `.` and `..`
+lexically. It does not call `realpath`, follow symlinks, or require the target to
+exist. The cleaned string must match the path that Lewp registered. This lets
+you clean up a moved or deleted worktree:
 
-- `--route` — release only the route and its aliases, keeping bare ports
-- `--port [<name>]` — release only one bare port (default name `port`,
-  mirroring `lewp port` with no `--name`)
+```sh
+lewp release --path /work/deleted-worktree
+lewp release --path /work/deleted-worktree --forget
+```
 
-`--route` and `--port` cannot be combined. Without `--forget`, history stays
-in the registry; with `--forget`, Lewp also removes the remembered
-identity/history for what was released (so `--port vite --forget` forgets only
-that port's identity).
+An exact path selects only that registration. `--recursive` also selects
+registered descendants at path-component boundaries. For example,
+`/work/app` includes `/work/app/admin` but not `/work/application`. Lewp does
+not walk the filesystem.
 
-Release is idempotent: when nothing is active it reports `no active route or
-port for this directory` (or the `--route`/`--port` variants) and exits `0`.
+```sh
+lewp release --path /work/worktrees --recursive --dry-run
+lewp release --path /work/worktrees --recursive --yes
+```
+
+A host selector matches an exact registered primary host, alias, or wildcard.
+Quote wildcard arguments so the shell cannot expand them. Host and numeric-port
+selectors target current owners only; they do not search released history.
+A numeric port can belong to a route or bare port.
+
+```sh
+lewp release --host app.work.lewp
+lewp release --host '*.app.work.lewp'
+lewp release --port 42137
+```
+
+You may combine `--recursive` only with an explicit `--path`. The `--route` and
+`--name` scopes also require a path selector and cannot be combined with each
+other. Without a scope, a path selects its route and all bare ports.
+
+### Release, forget, and counts
+
+Release frees active allocations and keeps their registry history. `--forget`
+deletes the matching history. A path with `--forget` can select active and
+released history, so it works after you released an item or deleted its path.
+Host and port selectors still require a current owner.
+
+Lewp reports one item per logical allocation. Database row count does not affect
+the totals. One route counts as one item even when it has aliases, wildcard
+hosts, or several historical port numbers. One named bare port at one path also
+counts as one item.
+
+- `matched` counts logical route and bare-port items in the plan.
+- `released` counts matched active items with a `release` action.
+- `forgotten` counts matched items with a `forget` action.
+
+An active item selected with `--forget` has both actions, so it increments both
+`released` and `forgotten`. Released-only history has only the `forget` action
+and increments `forgotten`. Dry runs report the counts that an apply would
+produce. Human output labels them `Planned releases` and `Planned forgets` for a
+dry run, or `Released` and `Forgotten` after an apply.
+
+A selector with no matches prints a specific no-match message and exits `0`.
+Repeated release and forget commands therefore succeed as idempotent no-ops.
+
+### Preview, confirmation, and atomic apply
+
+`--dry-run` prints the complete plan and never prompts or changes the registry.
+It works without `--yes`, including recursive JSON dry runs.
+
+An interactive recursive mutation prints the complete plan and defaults its
+`Proceed? [y/N]` prompt to no. Pass `--yes` or `-y` to approve it without a
+prompt. Noninteractive recursive mutations and recursive mutations with
+`--json` require `--yes` or `-y`. Exact path, host, and port mutations do not
+prompt.
+
+The recursive path `/` can match every registered path. Lewp safeguards a `/`
+mutation with the same full preview and confirmation rules; run a dry run first.
+
+Lewp builds a plan from one registry snapshot and applies that exact plan in one
+transaction. If registry state changes between preview and apply, Lewp refuses
+the stale plan, changes nothing, and prints `release plan changed; rerun the
+release command`. Rerun the original command to inspect a fresh plan.
+
+### JSON output
+
+`--json` writes one object and no human table or prompt. Its top-level fields
+are:
+
+- `operation`: `"release"`
+- `dry_run`: boolean
+- `selector`: the normalized public selector
+- `matched`, `released`, `forgotten`: logical item/action counts described above
+- `items`: a non-null array of logical items
+
+`selector.type` is `"path"`, `"host"`, or `"port"`. A path selector includes
+`path`, `implicit`, `recursive`, and `scope`; `scope` is `"all"`, `"route"`, or
+`"name"`, and name scope also includes `name`. A host selector includes `host`.
+A port selector includes numeric `port`.
+
+Each item includes `kind` (`"route"` or `"port"`), `path`, `state`
+(`"up"`, `"down"`, `"stale"`, or `"released"`), nullable current `port`, a
+sorted `ports` array of distinct current and historical numbers, and `actions`.
+Actions contain `"release"`, `"forget"`, or both in that order. Route items
+also include primary `host` and a `hosts` array whose entries contain `host` and
+`type` (`"primary"`, `"alias"`, or `"wildcard"`). Bare-port items include
+`name` instead. Lewp keeps internal route, lease, host, and port row IDs private
+and never includes them in JSON output.
+
+For a recursive JSON mutation, pass `--yes` or `-y`:
+
+```sh
+lewp release --path /work/worktrees --recursive --yes --json
+```
 
 ## `lewp list`
 
@@ -1270,9 +1418,11 @@ HTTPS warnings:
 - run `lewp system uninstall` to stop launchd and remove Lewp CA trust,
   LaunchAgent plist, and resolver file
 
-Port collisions:
+Port and host conflicts:
 
-- Lewp never steals another remembered live assignment
-- conflicting primary hosts receive deterministic suffixes
-- conflicting aliases and wildcards are rejected with the conflicting path
-- use `lewp release --forget` from old folders to remove stale ownership
+- Lewp does not take another current allocation.
+- An inferred primary host conflict receives a deterministic suffix. An
+  explicit primary host conflict reports its current owner.
+- Conflicting aliases and wildcards report the registered owner path.
+- Release a stale route owner from any directory with
+  `lewp release --path "/work/old app" --route --forget`.

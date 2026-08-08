@@ -33,6 +33,22 @@ func TestRunCompletionEmitsShellScripts(t *testing.T) {
 	}
 }
 
+func TestCompletionScriptsContainGlobalReleaseFlags(t *testing.T) {
+	wants := []string{"--path", "--recursive", "--host", "--port", "--name", "--route", "--forget", "--dry-run", "--json", "--yes"}
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		var stdout, stderr bytes.Buffer
+		if code := Run(Config{Args: []string{"completion", shell}, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			t.Fatalf("%s code=%d stderr=%q", shell, code, stderr.String())
+		}
+		got := stdout.String()
+		for _, want := range wants {
+			if !strings.Contains(got, want) {
+				t.Fatalf("%s completion missing %q", shell, want)
+			}
+		}
+	}
+}
+
 func TestRunCompletionMissingShellErrors(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := Run(Config{Args: []string{"completion"}, Stdout: &stdout, Stderr: &stderr})

@@ -54,8 +54,8 @@ type HostConflictError struct {
 }
 
 func (e *HostConflictError) Error() string {
-	return fmt.Sprintf("host %s is already assigned to %s\n"+
-		"Free it:        cd %s && lewp release --route --forget\n"+
+	return fmt.Sprintf("host %s is already assigned to %q\n"+
+		"Free it:        lewp release --path %q --route --forget\n"+
 		"Use another:    lewp lease --host <name>.lewp\n"+
 		"Suffix anyway:  lewp lease --host %s --auto-suffix",
 		e.Host, e.OwnerPath, e.OwnerPath, e.Host)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -605,7 +606,10 @@ func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
 	ctx := context.Background()
-	firstDir := t.TempDir()
+	firstDir := filepath.Join(t.TempDir(), "first owner")
+	if err := os.Mkdir(firstDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	secondDir := t.TempDir()
 
 	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: firstDir, Host: "audit.lewp"}); err != nil {
@@ -624,7 +628,8 @@ func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
 		t.Fatalf("conflict owner path=%q want %q", conflict.OwnerPath, firstDir)
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, firstDir) || !strings.Contains(msg, "lewp release --route --forget") || !strings.Contains(msg, "--auto-suffix") {
+	cleanup := fmt.Sprintf("lewp release --path %q --route --forget", firstDir)
+	if !strings.Contains(msg, cleanup) || strings.Contains(msg, "cd ") || !strings.Contains(msg, "--auto-suffix") {
 		t.Fatalf("conflict message missing cleanup guidance: %q", msg)
 	}
 

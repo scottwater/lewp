@@ -49,7 +49,7 @@ func runPort(cfg Config) int {
 	}
 	if fs.NArg() != 0 {
 		if fs.Arg(0) == "release" {
-			fmt.Fprintln(cfg.Stderr, `lewp port: "port release" was removed; use: lewp release --port [<name>]`)
+			fmt.Fprintln(cfg.Stderr, `lewp port: "port release" is no longer supported; use: lewp release --name <name> (or --name port for the default)`)
 		} else {
 			fmt.Fprintf(cfg.Stderr, "lewp port: unexpected argument %s\n", fs.Arg(0))
 		}

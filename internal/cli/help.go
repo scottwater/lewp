@@ -31,7 +31,7 @@ Commands:
   info       Show routes and bare ports registered for the current directory
   move       Move a route from another directory to the current directory
   port       Lease a bare internal port without a hostname
-  release    Release the route and bare ports for the current directory
+  release    Release routes and bare ports by path, host, or port
   list       List active routes and their health
   suffix     List or remove custom managed suffixes
   doctor     Diagnose daemon state, DNS, and CA trust
@@ -256,37 +256,62 @@ With no --name a bare port is leased under the default name "port", so repeated
 --shell emits one "export" line per value, so evaluate it rather than capturing
 it into a single variable. For just the number, prefer --json with jq.
 
-To free a bare port, use "lewp release --port <name>" (plain "lewp release"
-frees the route and every bare port at once).
+To free a named bare port in this directory, use "lewp release --name <name>".
+Plain "lewp release" frees the route and every bare port for this directory.
 
 Examples:
   lewp port --name vite
   eval "$(lewp port --name vite --shell)"
   VITE_RUBY_PORT="$(lewp port --name vite --json | jq -r .port)"
-  lewp release --port vite
+  lewp release --name vite
 `
 
-	releaseHelp = `lewp release — release everything Lewp holds for this directory
+	releaseHelp = `lewp release — release routes and bare ports by path, host, or port
 
-By default release frees the whole directory: the route (with its aliases and
-wildcard hosts) and every bare port. It is the inverse of "lewp lease" plus any
-"lewp port" leases. Release is idempotent: releasing when nothing is active is
-reported, never an error.
+Plain release targets the current directory. It releases the route, including
+aliases and wildcard hosts, and every bare port. Exact selectors do not prompt.
+A no-op reports no match and exits successfully.
 
 Usage:
-  lewp release [--route | --port [<name>]] [--forget]
+  lewp release [--path <path> [--recursive] [--route | --name <name>] |
+                --host <host> | --port <number>]
+               [--forget] [--dry-run] [--json] [--yes|-y]
 
-Flags:
-  --route          Release only the route (and its aliases), keeping bare ports
-  --port [<name>]  Release only one bare port (default name "port")
-  --forget         Also remove remembered identity and history for what was
-                   released
+Targets and scopes:
+  --path <path>    Target an exact registered path, including an external or
+                   deleted path. Lewp cleans the path lexically; it does not
+                   resolve symlinks or require the path to exist.
+  --recursive      Include paths below --path at path-component boundaries
+  --host <host>    Target the current owner of an exact registered host
+  --port <number>  Target the current owner of a numeric port
+  --name <name>    Release one named bare port under a path
+  --route          Release only the route under a path, keeping bare ports
+
+Output and safety:
+  --forget         Delete matching registry history. Release otherwise keeps
+                   history. With a path, forget also deletes released history.
+  --dry-run        Show the plan without prompting or changing the registry
+  --json           Emit the result as one JSON object
+  --yes, -y        Approve a recursive mutation without a prompt. Scripts and
+                   recursive JSON mutations require this flag.
+
+A recursive mutation prints its full plan before asking for confirmation. Lewp
+applies that exact plan atomically and refuses it if registry state changes;
+rerun the command to review a new plan. Recursive selection from / is allowed
+for dry runs but remains protected by the same confirmation rules for changes.
 
 Examples:
   lewp release
-  lewp release --route
-  lewp release --port vite
-  lewp release --forget
+  lewp release --path /work/deleted-worktree
+  lewp release --path /work/worktrees --recursive --dry-run
+  lewp release --path /work/worktrees --recursive --yes
+  lewp release --path /work/app --route
+  lewp release --path /work/app --name vite
+  lewp release --host app.work.lewp
+  lewp release --host '*.app.work.lewp'
+  lewp release --port 42137
+  lewp release --path /work/deleted-worktree --forget
+  lewp release --path /work/worktrees --recursive --yes --json
 `
 
 	listHelp = `lewp list — list routes, aliases, and bare ports with their health
