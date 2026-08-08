@@ -142,8 +142,10 @@ func dataSourceName(path string) string {
 	values.Add("_pragma", "journal_mode(WAL)")
 	// _txlock=immediate makes every read-write transaction BEGIN IMMEDIATE so it
 	// takes the write lock up front instead of upgrading a deferred read
-	// snapshot mid-transaction. Without it, WAL read-then-write paths can fail
-	// with SQLITE_BUSY_SNAPSHOT, which busy_timeout does not retry.
+	// snapshot mid-transaction. Release-plan apply relies on that lock to keep
+	// validation and mutation serializable with concurrent registry writers.
+	// Without it, WAL read-then-write paths can fail with SQLITE_BUSY_SNAPSHOT,
+	// which busy_timeout does not retry.
 	values.Add("_txlock", "immediate")
 	return (&url.URL{Scheme: "file", Path: path, RawQuery: values.Encode()}).String()
 }
