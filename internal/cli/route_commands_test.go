@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -114,7 +115,7 @@ func TestRunReleaseFreesEverythingByDefault(t *testing.T) {
 	if code := Run(Config{Args: []string{"release"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("release code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "released 1 route(s) and 1 port(s)") {
+	if !strings.Contains(stdout.String(), "Released: 2") || !strings.Contains(stdout.String(), "Forgotten: 0") {
 		t.Fatalf("release output unexpected: %q", stdout.String())
 	}
 
@@ -136,8 +137,8 @@ func TestRunReleaseFreesEverythingByDefault(t *testing.T) {
 	}
 }
 
-// TestRunReleasePortByName proves `lewp release --port <name>` frees a single
-// bare port, leaves the route alone, and is idempotent.
+// TestRunReleasePortByName proves `lewp release --name <name>` frees a single
+// bare port in the current path, leaves the route alone, and is idempotent.
 func TestRunReleasePortByName(t *testing.T) {
 	socketPath := startTestDaemon(t)
 	dir := t.TempDir()
@@ -154,8 +155,8 @@ func TestRunReleasePortByName(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"release", "--port", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("release --port code=%d stderr=%q", code, stderr.String())
+	if code := Run(Config{Args: []string{"release", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("release --name code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `released port "vite"`) {
 		t.Fatalf("release --port output unexpected: %q", stdout.String())
@@ -174,8 +175,8 @@ func TestRunReleasePortByName(t *testing.T) {
 	// Releasing the same name again is an idempotent no-op.
 	stdout.Reset()
 	stderr.Reset()
-	if code := Run(Config{Args: []string{"release", "--port", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("idempotent release --port code=%d stderr=%q", code, stderr.String())
+	if code := Run(Config{Args: []string{"release", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("idempotent release --name code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `no active port named "vite"`) {
 		t.Fatalf("idempotent release --port output unexpected: %q", stdout.String())
@@ -203,7 +204,7 @@ func TestRunReleaseRouteOnlyKeepsPorts(t *testing.T) {
 	if code := Run(Config{Args: []string{"release", "--route"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
 		t.Fatalf("release --route code=%d stderr=%q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "released 1 route(s)") {
+	if !strings.Contains(stdout.String(), `released route "app.work.lewp"`) || !strings.Contains(stdout.String(), "Released: 1") {
 		t.Fatalf("release --route output unexpected: %q", stdout.String())
 	}
 
@@ -218,49 +219,287 @@ func TestRunReleaseRouteOnlyKeepsPorts(t *testing.T) {
 	}
 }
 
-// TestRunReleaseFlagValidation covers scope conflicts and the removed --all and
-// port release affordances, each with pointer text to the replacement.
-func TestRunReleaseFlagValidation(t *testing.T) {
+func runOK(t *testing.T, cfg Config) string {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	cfg.Stdout, cfg.Stderr = &stdout, &stderr
+	if code := Run(cfg); code != 0 {
+		t.Fatalf("%v code=%d stderr=%q", cfg.Args, code, stderr.String())
+	}
+	return stdout.String()
+}
+
+func parseEnvPort(t *testing.T, output string) int {
+	t.Helper()
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "PORT=") {
+			var port int
+			if _, err := fmt.Sscanf(line, "PORT=%d", &port); err == nil {
+				return port
+			}
+		}
+	}
+	t.Fatalf("missing PORT in %q", output)
+	return 0
+}
+
+func assertInfoContains(t *testing.T, socketPath, workDir, needle string) {
+	t.Helper()
+	out := runOK(t, Config{Args: []string{"info"}, WorkDir: workDir, SocketPath: socketPath})
+	if !strings.Contains(out, needle) {
+		t.Fatalf("info for %s missing %q:\n%s", workDir, needle, out)
+	}
+}
+
+func assertInfoMissing(t *testing.T, socketPath, workDir, needle string) {
+	t.Helper()
+	out := runOK(t, Config{Args: []string{"info"}, WorkDir: workDir, SocketPath: socketPath})
+	if strings.Contains(out, needle) {
+		t.Fatalf("info for %s unexpectedly contains %q:\n%s", workDir, needle, out)
+	}
+}
+
+func TestRunReleaseValidatesSelectorsBeforeCallingDaemon(t *testing.T) {
 	cases := []struct {
 		args []string
 		want string
 	}{
-		{[]string{"release", "--route", "--port", "vite"}, "cannot be combined"},
-		{[]string{"release", "--all"}, "--all was removed"},
-		{[]string{"release", "--bogus"}, "unknown flag"},
-		{[]string{"release", "extra"}, "unexpected argument"},
-		{[]string{"port", "release"}, "lewp release --port"},
+		{[]string{"release", "--path", "/work/app", "--host", "app.work.lewp"}, "only one of --path, --host, and --port"},
+		{[]string{"release", "--host", "app.work.lewp", "--route"}, "--route and --name require a path selector"},
+		{[]string{"release", "--port", "42137", "--name", "vite"}, "--route and --name require a path selector"},
+		{[]string{"release", "--route", "--name", "vite"}, "--route and --name cannot be combined"},
+		{[]string{"release", "--recursive"}, "--recursive requires an explicit --path"},
+		{[]string{"release", "--path"}, "--path requires a value"},
+		{[]string{"release", "--host"}, "--host requires a value"},
+		{[]string{"release", "--name"}, "--name requires a value"},
+		{[]string{"release", "--port"}, "--port now requires a numeric port; use --name <name>"},
+		{[]string{"release", "--port", "vite"}, "--port now requires a numeric port; use --name vite"},
+		{[]string{"release", "--port", "0"}, "--port must be between 1 and 65535"},
+		{[]string{"release", "--port", "65536"}, "--port must be between 1 and 65535"},
+		{[]string{"release", "--bogus"}, "unknown flag --bogus"},
+		{[]string{"release", "extra"}, "unexpected argument extra"},
 	}
 	for _, tc := range cases {
-		var stdout, stderr bytes.Buffer
-		code := Run(Config{Args: tc.args, WorkDir: t.TempDir(), Stdout: &stdout, Stderr: &stderr})
-		if code != 2 {
-			t.Fatalf("%v: code=%d stderr=%q", tc.args, code, stderr.String())
+		t.Run(strings.Join(tc.args[1:], "_"), func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run(Config{Args: tc.args, WorkDir: t.TempDir(), SocketPath: t.TempDir() + "/missing.sock", Stdout: &stdout, Stderr: &stderr})
+			if code != 2 {
+				t.Fatalf("code=%d stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr=%q want %q", stderr.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestRunReleaseTargetsExternalPathAndNamedPort(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	caller := t.TempDir()
+	target := filepath.Join(caller, "deleted", "app")
+	other := t.TempDir()
+	runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: target, SocketPath: socketPath})
+	runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: target, SocketPath: socketPath})
+	runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: other, SocketPath: socketPath})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"release", "--path", "deleted/app", "--name", "vite"}, WorkDir: caller, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 || !strings.Contains(stdout.String(), `released port "vite"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	assertInfoContains(t, socketPath, target, "app.work.lewp")
+	assertInfoContains(t, socketPath, other, "vite")
+}
+
+func TestRunReleaseByPrimaryAliasAndWildcard(t *testing.T) {
+	for _, host := range []string{" APP.WORK.LEWP. ", " TAGS.APP.WORK.LEWP. ", " *.APP.WORK.LEWP. "} {
+		t.Run(host, func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			dir := t.TempDir()
+			runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"alias", "add", "*.app.work.lewp"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"port", "--name", "keep"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"release", "--host", host}, WorkDir: t.TempDir(), SocketPath: socketPath})
+			assertInfoMissing(t, socketPath, dir, "app.work.lewp")
+		})
+	}
+}
+
+func TestRunReleaseJSONContractAndDryRunDoesNotMutate(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+	runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath})
+	runOK(t, Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: dir, SocketPath: socketPath})
+	runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"release", "--path", dir, "--dry-run", "--json"}, WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	var got struct {
+		Operation string           `json:"operation"`
+		DryRun    bool             `json:"dry_run"`
+		Selector  map[string]any   `json:"selector"`
+		Matched   int              `json:"matched"`
+		Released  int              `json:"released"`
+		Forgotten int              `json:"forgotten"`
+		Items     []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("JSON: %v\n%s", err, stdout.String())
+	}
+	if got.Operation != "release" || !got.DryRun || got.Matched != 2 || got.Released != 2 || got.Forgotten != 0 || len(got.Items) != 2 {
+		t.Fatalf("got=%+v", got)
+	}
+	if got.Selector["type"] != "path" || got.Selector["path"] != dir || got.Selector["implicit"] != false || got.Selector["recursive"] != false || got.Selector["scope"] != "all" {
+		t.Fatalf("selector=%v", got.Selector)
+	}
+	if strings.Contains(stdout.String(), "release_plan") || strings.Contains(stdout.String(), "route_id") {
+		t.Fatalf("private IDs leaked: %s", stdout.String())
+	}
+	assertInfoContains(t, socketPath, dir, "app.work.lewp")
+	assertInfoContains(t, socketPath, dir, "vite")
+}
+
+func TestRunReleaseByNumericPortTargetsCurrentOwner(t *testing.T) {
+	for _, kind := range []string{"route", "port"} {
+		t.Run(kind, func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			target, other := t.TempDir(), t.TempDir()
+			var leaseOut string
+			if kind == "route" {
+				leaseOut = runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: target, SocketPath: socketPath})
+			} else {
+				leaseOut = runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: target, SocketPath: socketPath})
+			}
+			runOK(t, Config{Args: []string{"port", "--name", "target-keep"}, WorkDir: target, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"port", "--name", "keep"}, WorkDir: other, SocketPath: socketPath})
+			port := parseEnvPort(t, leaseOut)
+			runOK(t, Config{Args: []string{"release", "--port", fmt.Sprint(port)}, WorkDir: other, SocketPath: socketPath})
+			assertInfoMissing(t, socketPath, target, fmt.Sprint(port))
+			assertInfoContains(t, socketPath, other, "keep")
+		})
+	}
+}
+
+func TestRunReleaseDryRunParityAcrossSelectors(t *testing.T) {
+	cases := []string{"implicit", "path", "missing", "relative", "host", "port", "route", "name"}
+	for _, family := range cases {
+		t.Run(family, func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			caller := t.TempDir()
+			target := t.TempDir()
+			if family == "relative" {
+				target = filepath.Join(caller, "gone", "..", "app")
+			}
+			leaseOut := runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: target, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: target, SocketPath: socketPath})
+			args := []string{"release"}
+			workDir := target
+			switch family {
+			case "path":
+				args = append(args, "--path", target)
+				workDir = caller
+			case "missing":
+				args = append(args, "--path", filepath.Join(caller, "missing"))
+				workDir = caller
+			case "relative":
+				args = append(args, "--path", "gone/../app")
+				workDir = caller
+			case "host":
+				args = append(args, "--host", " APP.WORK.LEWP. ")
+				workDir = caller
+			case "port":
+				args = append(args, "--port", fmt.Sprint(parseEnvPort(t, leaseOut)))
+				workDir = caller
+			case "route":
+				args = append(args, "--route")
+			case "name":
+				args = append(args, "--name", "vite")
+			}
+			dryArgs := append(append([]string{}, args...), "--dry-run", "--json")
+			var dry control.ReleaseResponse
+			if err := json.Unmarshal([]byte(runOK(t, Config{Args: dryArgs, WorkDir: workDir, SocketPath: socketPath})), &dry); err != nil {
+				t.Fatal(err)
+			}
+			assertInfoContains(t, socketPath, target, "app.work.lewp")
+			assertInfoContains(t, socketPath, target, "vite")
+			realArgs := append(append([]string{}, args...), "--json")
+			var real control.ReleaseResponse
+			if err := json.Unmarshal([]byte(runOK(t, Config{Args: realArgs, WorkDir: workDir, SocketPath: socketPath})), &real); err != nil {
+				t.Fatal(err)
+			}
+			dry.DryRun = false
+			if !reflect.DeepEqual(dry, real) {
+				t.Fatalf("dry=%+v\nreal=%+v", dry, real)
+			}
+		})
+	}
+}
+
+func TestRunReleaseNoOpJSONUsesEmptyItems(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	base := t.TempDir()
+	for _, args := range [][]string{
+		{"release", "--path", "missing", "--json"},
+		{"release", "--host", "missing.work.lewp", "--json"},
+		{"release", "--port", "65535", "--json"},
+		{"release", "--name", "missing", "--json"},
+	} {
+		var got control.ReleaseResponse
+		if err := json.Unmarshal([]byte(runOK(t, Config{Args: args, WorkDir: base, SocketPath: socketPath})), &got); err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(stderr.String(), tc.want) {
-			t.Fatalf("%v: stderr missing %q: %q", tc.args, tc.want, stderr.String())
+		if got.Matched != 0 || got.Released != 0 || got.Forgotten != 0 || got.Items == nil || len(got.Items) != 0 {
+			t.Fatalf("args=%v got=%+v", args, got)
 		}
 	}
 }
 
-// TestRunReleasePortDefaultName proves a bare `--port` targets the default
-// "port" lease, mirroring `lewp port` with no --name.
-func TestRunReleasePortDefaultName(t *testing.T) {
-	socketPath := startTestDaemon(t)
-	dir := t.TempDir()
-
-	var stdout, stderr bytes.Buffer
-	if code := Run(Config{Args: []string{"port"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("port code=%d stderr=%q", code, stderr.String())
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := Run(Config{Args: []string{"release", "--port"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("release --port code=%d stderr=%q", code, stderr.String())
-	}
-	if !strings.Contains(stdout.String(), `released port "port"`) {
-		t.Fatalf("release --port output unexpected: %q", stdout.String())
+func TestRunReleasePathForgetRemovesActiveAndReleasedHistory(t *testing.T) {
+	for _, releasedOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("released_only_%t", releasedOnly), func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			dir := t.TempDir()
+			runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"alias", "add", "tags.app.work.lewp"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"alias", "add", "*.app.work.lewp"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+			// Create historical route lease and bare-port rows, then reactivate each.
+			runOK(t, Config{Args: []string{"release", "--route"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"release", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+			runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+			if releasedOnly {
+				runOK(t, Config{Args: []string{"release"}, WorkDir: dir, SocketPath: socketPath})
+			}
+			var got control.ReleaseResponse
+			out := runOK(t, Config{Args: []string{"release", "--path", dir, "--forget", "--json"}, WorkDir: t.TempDir(), SocketPath: socketPath})
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatal(err)
+			}
+			wantReleased := 2
+			if releasedOnly {
+				wantReleased = 0
+			}
+			if got.Matched != 2 || got.Released != wantReleased || got.Forgotten != 2 {
+				t.Fatalf("got=%+v", got)
+			}
+			for _, item := range got.Items {
+				if releasedOnly && !reflect.DeepEqual(item.Actions, []registry.ReleaseAction{registry.ReleaseActionForget}) {
+					t.Fatalf("actions=%v", item.Actions)
+				}
+				if !releasedOnly && !reflect.DeepEqual(item.Actions, []registry.ReleaseAction{registry.ReleaseActionRelease, registry.ReleaseActionForget}) {
+					t.Fatalf("actions=%v", item.Actions)
+				}
+			}
+			all := runOK(t, Config{Args: []string{"list", "--all"}, WorkDir: dir, SocketPath: socketPath})
+			if strings.Contains(all, dir) {
+				t.Fatalf("history remains:\n%s", all)
+			}
+		})
 	}
 }
 

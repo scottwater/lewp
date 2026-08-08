@@ -5,11 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/scottwater/lewp/internal/control"
 	"github.com/scottwater/lewp/internal/identity"
+	"github.com/scottwater/lewp/internal/registry"
 )
 
 func runLease(cfg Config) int {
@@ -298,112 +300,270 @@ func runMove(cfg Config) int {
 	return 0
 }
 
-// releaseScope selects what `lewp release` frees for the current directory.
-type releaseScope int
+type releaseOptions struct {
+	selectorType registry.ReleaseSelectorType
+	path         string
+	host         string
+	name         string
+	port         int
+	pathSet      bool
+	recursive    bool
+	routeOnly    bool
+	forget       bool
+	dryRun       bool
+	jsonOut      bool
+	assumeYes    bool
+}
 
-const (
-	releaseEverything releaseScope = iota // route + aliases + every bare port
-	releaseRouteOnly                      // route + aliases, keep bare ports
-	releasePortOnly                       // one named bare port
-)
-
-// parseReleaseArgs hand-parses `lewp release` flags because --port takes an
-// optional name and the stdlib flag package supports optional values only for
-// booleans. --all is rejected with pointer text: plain release now covers it.
-func parseReleaseArgs(args []string) (scope releaseScope, portName string, forget bool, err error) {
-	scope = releaseEverything
-	portName = "port"
-	sawRoute, sawPort := false, false
+// parseReleaseArgs hand-parses release flags so valued long flags can provide
+// precise missing-value and numeric-port replacement guidance.
+func parseReleaseArgs(args []string) (releaseOptions, error) {
+	opts := releaseOptions{selectorType: registry.ReleaseSelectorPath}
+	var hostSet, portSet bool
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		value := func(flagName string) (string, error) {
+			if strings.HasPrefix(arg, flagName+"=") {
+				got := strings.TrimPrefix(arg, flagName+"=")
+				if got == "" {
+					return "", fmt.Errorf("%s requires a value", flagName)
+				}
+				return got, nil
+			}
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", fmt.Errorf("%s requires a value", flagName)
+			}
+			i++
+			return args[i], nil
+		}
 		switch {
-		case arg == "--forget":
-			forget = true
+		case arg == "--path" || strings.HasPrefix(arg, "--path="):
+			got, err := value("--path")
+			if err != nil {
+				return releaseOptions{}, err
+			}
+			opts.path, opts.pathSet = got, true
+		case arg == "--host" || strings.HasPrefix(arg, "--host="):
+			got, err := value("--host")
+			if err != nil {
+				return releaseOptions{}, err
+			}
+			opts.host, hostSet = got, true
+		case arg == "--name" || strings.HasPrefix(arg, "--name="):
+			got, err := value("--name")
+			if err != nil {
+				return releaseOptions{}, err
+			}
+			opts.name = got
+		case arg == "--port" || strings.HasPrefix(arg, "--port="):
+			got, valueErr := value("--port")
+			if valueErr != nil {
+				return releaseOptions{}, fmt.Errorf("--port now requires a numeric port; use --name <name>")
+			}
+			port, err := strconv.Atoi(got)
+			if err != nil {
+				return releaseOptions{}, fmt.Errorf("--port now requires a numeric port; use --name %s", got)
+			}
+			if port < 1 || port > 65535 {
+				return releaseOptions{}, fmt.Errorf("--port must be between 1 and 65535")
+			}
+			opts.port, portSet = port, true
+		case arg == "--recursive":
+			opts.recursive = true
 		case arg == "--route":
-			sawRoute = true
-		case arg == "--port":
-			sawPort = true
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				portName = args[i]
-			}
-		case strings.HasPrefix(arg, "--port="):
-			sawPort = true
-			portName = strings.TrimPrefix(arg, "--port=")
-			if portName == "" {
-				return 0, "", false, fmt.Errorf("--port= requires a name")
-			}
+			opts.routeOnly = true
+		case arg == "--forget":
+			opts.forget = true
+		case arg == "--dry-run":
+			opts.dryRun = true
+		case arg == "--json":
+			opts.jsonOut = true
+		case arg == "-y" || arg == "--yes":
+			opts.assumeYes = true
 		case arg == "--all":
-			return 0, "", false, fmt.Errorf(`--all was removed; plain "lewp release" now frees the route and every bare port`)
+			return releaseOptions{}, fmt.Errorf(`--all was removed; plain "lewp release" now frees the route and every bare port`)
 		case strings.HasPrefix(arg, "-"):
-			return 0, "", false, fmt.Errorf("unknown flag %s", arg)
+			return releaseOptions{}, fmt.Errorf("unknown flag %s", arg)
 		default:
-			return 0, "", false, fmt.Errorf("unexpected argument %s", arg)
+			return releaseOptions{}, fmt.Errorf("unexpected argument %s", arg)
 		}
 	}
-	if sawRoute && sawPort {
-		return 0, "", false, fmt.Errorf("--route and --port cannot be combined")
+
+	selectors := 0
+	for _, set := range []bool{opts.pathSet, hostSet, portSet} {
+		if set {
+			selectors++
+		}
 	}
-	if sawRoute {
-		scope = releaseRouteOnly
+	if selectors > 1 {
+		return releaseOptions{}, fmt.Errorf("only one of --path, --host, and --port may be used")
 	}
-	if sawPort {
-		scope = releasePortOnly
+	if (hostSet || portSet) && (opts.routeOnly || opts.name != "") {
+		return releaseOptions{}, fmt.Errorf("--route and --name require a path selector")
 	}
-	return scope, portName, forget, nil
+	if opts.routeOnly && opts.name != "" {
+		return releaseOptions{}, fmt.Errorf("--route and --name cannot be combined")
+	}
+	if opts.recursive && !opts.pathSet {
+		return releaseOptions{}, fmt.Errorf("--recursive requires an explicit --path")
+	}
+	if hostSet {
+		opts.selectorType = registry.ReleaseSelectorHost
+	}
+	if portSet {
+		opts.selectorType = registry.ReleaseSelectorPort
+	}
+	return opts, nil
+}
+
+func releaseRequest(cfg Config, opts releaseOptions) control.ReleaseRequest {
+	req := control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: opts.forget, DryRun: opts.dryRun}
+	switch opts.selectorType {
+	case registry.ReleaseSelectorHost:
+		req.Host = opts.host
+	case registry.ReleaseSelectorPort:
+		req.Port = opts.port
+	default:
+		if opts.pathSet {
+			req.Path = opts.path
+		} else {
+			req.Implicit = true
+		}
+		req.Recursive = opts.recursive
+		req.Scope = registry.ReleaseScopeAll
+		if opts.routeOnly {
+			req.Scope = registry.ReleaseScopeRoute
+		}
+		if opts.name != "" {
+			req.Scope = registry.ReleaseScopeName
+			req.Name = opts.name
+		}
+	}
+	return req
 }
 
 func runRelease(cfg Config) int {
-	scope, portName, forget, err := parseReleaseArgs(cfg.Args[1:])
+	opts, err := parseReleaseArgs(cfg.Args[1:])
 	if err != nil {
 		fmt.Fprintf(cfg.Stderr, "lewp release: %v\n", err)
 		fmt.Fprintln(cfg.Stderr, "Run: lewp release --help")
 		return 2
 	}
-	req := control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: forget}
-	switch scope {
-	case releaseEverything:
-		req.All = true
-	case releasePortOnly:
-		req.Kind = identity.KindPort
-		req.Name = portName
-	}
-	resp, err := call(cfg, control.Request{Command: "release", Release: req})
+	planned, err := call(cfg, control.Request{Command: "release-plan", Release: releaseRequest(cfg, opts)})
 	if err != nil {
 		return daemonError(cfg, err)
 	}
-	var routes, ports int
-	if resp.Release != nil {
-		for _, item := range resp.Release.Items {
-			switch item.Kind {
-			case identity.KindRoute:
-				routes++
-			case identity.KindPort:
-				ports++
+	if planned.Release == nil || planned.ReleasePlan == nil {
+		fmt.Fprintln(cfg.Stderr, "malformed daemon response: missing release result or plan")
+		return 1
+	}
+	if opts.dryRun {
+		result := *planned.Release
+		result.DryRun = true
+		writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
+		return 0
+	}
+	applied, err := call(cfg, control.Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan})
+	if err != nil {
+		return daemonError(cfg, err)
+	}
+	if applied.Release == nil {
+		fmt.Fprintln(cfg.Stderr, "malformed daemon response: missing release result")
+		return 1
+	}
+	result := *applied.Release
+	// The private plan intentionally has no CLI-origin metadata. Preserve the
+	// planned public selector so implicit current-directory output remains exact.
+	result.Selector = planned.Release.Selector
+	writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
+	return 0
+}
+
+func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool, _ string) {
+	if result.Items == nil {
+		result.Items = []control.ReleaseItem{}
+	}
+	if jsonOut {
+		_ = json.NewEncoder(w).Encode(result)
+		return
+	}
+	if len(result.Items) == 0 {
+		fmt.Fprintln(w, releaseNoMatch(result.Selector))
+	} else if len(result.Items) == 1 {
+		writeSingleReleaseResult(w, result.Items[0], result.DryRun)
+	} else {
+		writeReleaseTable(w, result.Items)
+	}
+	if result.DryRun {
+		fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
+	} else {
+		fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
+	}
+}
+
+func releaseNoMatch(selector control.ReleaseSelector) string {
+	if selector.Type == registry.ReleaseSelectorHost && selector.Host != nil {
+		return fmt.Sprintf("no active allocation for host %q", *selector.Host)
+	}
+	if selector.Type == registry.ReleaseSelectorPort && selector.Port != nil {
+		return fmt.Sprintf("no active allocation on port %d", *selector.Port)
+	}
+	if selector.Name != nil {
+		return fmt.Sprintf("no active port named %q for this path", *selector.Name)
+	}
+	if selector.Implicit != nil && *selector.Implicit {
+		return "no active route or port for this directory"
+	}
+	return "no matching route or port for this path"
+}
+
+func writeSingleReleaseResult(w io.Writer, item control.ReleaseItem, dryRun bool) {
+	verbs := make([]string, 0, len(item.Actions))
+	for _, action := range item.Actions {
+		verb := string(action)
+		if dryRun {
+			verb = "would " + verb
+		} else if action == registry.ReleaseActionRelease {
+			verb = "released"
+		} else {
+			verb = "forgotten"
+		}
+		verbs = append(verbs, verb)
+	}
+	verb := strings.Join(verbs, " and ")
+	if item.Kind == identity.KindRoute {
+		fmt.Fprintf(w, "%s route %q at %s\n", verb, item.Host, item.Path)
+	} else {
+		fmt.Fprintf(w, "%s port %q at %s\n", verb, item.Name, item.Path)
+	}
+}
+
+func writeReleaseTable(w io.Writer, items []control.ReleaseItem) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "KIND\tIDENTITY\tPORT\tSTATE\tACTIONS\tPATH")
+	for _, item := range items {
+		identityText := item.Name
+		if item.Kind == identity.KindRoute {
+			hosts := make([]string, 0, len(item.Hosts))
+			for _, host := range item.Hosts {
+				hosts = append(hosts, host.Host)
+			}
+			identityText = strings.Join(hosts, ",")
+			if identityText == "" {
+				identityText = item.Host
 			}
 		}
+		port := "-"
+		if item.Port != nil {
+			port = strconv.Itoa(*item.Port)
+		}
+		actions := make([]string, 0, len(item.Actions))
+		for _, action := range item.Actions {
+			actions = append(actions, string(action))
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", item.Kind, identityText, port, item.State, strings.Join(actions, ","), item.Path)
 	}
-	switch scope {
-	case releasePortOnly:
-		if ports == 0 {
-			fmt.Fprintf(cfg.Stdout, "no active port named %q for this directory\n", portName)
-			return 0
-		}
-		fmt.Fprintf(cfg.Stdout, "released port %q\n", portName)
-	case releaseRouteOnly:
-		if routes == 0 {
-			fmt.Fprintln(cfg.Stdout, "no active route for this directory")
-			return 0
-		}
-		fmt.Fprintf(cfg.Stdout, "released %d route(s)\n", routes)
-	default:
-		if routes == 0 && ports == 0 {
-			fmt.Fprintln(cfg.Stdout, "no active route or port for this directory")
-			return 0
-		}
-		fmt.Fprintf(cfg.Stdout, "released %d route(s) and %d port(s)\n", routes, ports)
-	}
-	return 0
+	_ = tw.Flush()
 }
 
 func runList(cfg Config) int {
