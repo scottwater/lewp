@@ -276,6 +276,15 @@ func assertInfoMissing(t *testing.T, socketPath, workDir, needle string) {
 	}
 }
 
+func assertNoActiveInfo(t *testing.T, socketPath, workDir string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"info"}, WorkDir: workDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr})
+	if code != 1 || !strings.Contains(stderr.String(), "no Lewp route or port is registered") {
+		t.Fatalf("info for %s code=%d stdout=%q stderr=%q", workDir, code, stdout.String(), stderr.String())
+	}
+}
+
 func TestRunReleaseValidatesSelectorsBeforeCallingDaemon(t *testing.T) {
 	cases := []struct {
 		args []string
@@ -437,6 +446,273 @@ func TestRunReleaseJSONContractAndDryRunDoesNotMutate(t *testing.T) {
 	}
 	assertInfoContains(t, socketPath, dir, "app.work.lewp")
 	assertInfoContains(t, socketPath, dir, "vite")
+}
+
+func TestConfirmReleaseDefaultsNoAndAcceptsYes(t *testing.T) {
+	cases := []struct {
+		name                                 string
+		input                                string
+		assumeYes, interactive, want, prompt bool
+	}{
+		{name: "yes flag", assumeYes: true, want: true},
+		{name: "short yes", input: "y\n", interactive: true, want: true, prompt: true},
+		{name: "full yes", input: "YES\n", interactive: true, want: true, prompt: true},
+		{name: "no", input: "n\n", interactive: true, prompt: true},
+		{name: "empty", input: "\n", interactive: true, prompt: true},
+		{name: "eof", interactive: true, prompt: true},
+		{name: "noninteractive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			cfg := Config{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(tc.input)}
+			got := confirmRelease(cfg, tc.assumeYes, tc.interactive)
+			if got != tc.want {
+				t.Fatalf("got=%v want %v stdout=%q stderr=%q", got, tc.want, stdout.String(), stderr.String())
+			}
+			if strings.Contains(stdout.String(), "Proceed? [y/N]") != tc.prompt {
+				t.Fatalf("prompt stdout=%q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestRunReleaseRecursiveDryRunRespectsPathBoundaries(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	root := t.TempDir()
+	app := filepath.Join(root, "app")
+	child := filepath.Join(app, "child")
+	application := filepath.Join(root, "application")
+	for i, dir := range []string{app, child, application} {
+		runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", fmt.Sprintf("app-%d", i)}, WorkDir: dir, SocketPath: socketPath})
+		runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+	}
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"release", "--path", app, "--recursive", "--dry-run", "--json"}, WorkDir: root, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: &bytes.Buffer{}})
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	var got control.ReleaseResponse
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Matched != 4 {
+		t.Fatalf("matched=%d want 4: %s", got.Matched, stdout.String())
+	}
+	for _, item := range got.Items {
+		if item.Path == application {
+			t.Fatalf("raw-prefix sibling matched: %+v", item)
+		}
+	}
+}
+
+func TestRunReleaseRecursiveRequiresYesWhenNoninteractiveOrJSON(t *testing.T) {
+	for _, args := range [][]string{
+		{"release", "--path", "/tmp/tree", "--recursive"},
+		{"release", "--path", "/tmp/tree", "--recursive", "--json"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Run(Config{Args: args, WorkDir: t.TempDir(), SocketPath: t.TempDir() + "/missing.sock", Stdout: &stdout, Stderr: &stderr, Stdin: &bytes.Buffer{}})
+		if code != 1 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "--yes") || strings.Contains(stdout.String(), "Proceed?") || stdout.Len() != 0 {
+			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestRunReleaseRecursiveYesAppliesPreviewedPlan(t *testing.T) {
+	for _, yes := range []string{"--yes", "-y"} {
+		t.Run(yes, func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			root := t.TempDir()
+			for i, dir := range []string{root, filepath.Join(root, "one"), filepath.Join(root, "two")} {
+				runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", fmt.Sprintf("app-%d", i)}, WorkDir: dir, SocketPath: socketPath})
+			}
+			var stdout, stderr bytes.Buffer
+			code := Run(Config{Args: []string{"release", "--path", root, "--recursive", yes}, WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: &bytes.Buffer{}})
+			if code != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if !strings.Contains(stdout.String(), "KIND") || !strings.Contains(stdout.String(), "ACTIONS") || !strings.Contains(stdout.String(), "Released: 3") {
+				t.Fatalf("missing preview/totals:\n%s", stdout.String())
+			}
+			if strings.Contains(stdout.String(), "Proceed?") {
+				t.Fatalf("--yes prompted: %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestRunReleaseRecursiveInteractiveAppliesOnlyAfterAffirmative(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		wantApply   bool
+	}{
+		{name: "yes", input: "yes\n", wantApply: true},
+		{name: "no", input: "no\n"},
+		{name: "empty", input: "\n"},
+		{name: "eof"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			root := t.TempDir()
+			child := filepath.Join(root, "child")
+			for i, dir := range []string{root, child} {
+				runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", fmt.Sprintf("interactive-%d", i)}, WorkDir: dir, SocketPath: socketPath})
+			}
+			opts, err := parseReleaseArgs([]string{"--path", root, "--recursive"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code := executeRelease(Config{WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(tc.input)}, opts, true)
+			if tc.wantApply {
+				if code != 0 {
+					t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+				}
+				preview, prompt, result := strings.Index(stdout.String(), "KIND"), strings.Index(stdout.String(), "Proceed? [y/N] "), strings.Index(stdout.String(), "Released: 2")
+				if preview < 0 || prompt <= preview || result <= prompt {
+					t.Fatalf("preview/prompt/result ordering wrong: %q", stdout.String())
+				}
+				assertNoActiveInfo(t, socketPath, root)
+				assertNoActiveInfo(t, socketPath, child)
+				return
+			}
+			if code != 1 || !strings.Contains(stdout.String(), "release aborted") {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if strings.Index(stdout.String(), "KIND") < 0 || strings.Index(stdout.String(), "KIND") > strings.Index(stdout.String(), "Proceed? [y/N] ") {
+				t.Fatalf("preview was not printed before prompt: %q", stdout.String())
+			}
+			assertInfoContains(t, socketPath, root, "interactive-0.work.lewp")
+			assertInfoContains(t, socketPath, child, "interactive-1.work.lewp")
+		})
+	}
+}
+
+func TestRunReleaseRecursiveRootDryRunPlansAllAbsolutePathsAndStillConfirms(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dirs := []string{t.TempDir(), t.TempDir()}
+	for i, dir := range dirs {
+		runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", fmt.Sprintf("root-%d", i)}, WorkDir: dir, SocketPath: socketPath})
+	}
+	var dry control.ReleaseResponse
+	if err := json.Unmarshal([]byte(runOK(t, Config{Args: []string{"release", "--path", "/", "--recursive", "--dry-run", "--json"}, WorkDir: t.TempDir(), SocketPath: socketPath})), &dry); err != nil {
+		t.Fatal(err)
+	}
+	if dry.Matched != len(dirs) {
+		t.Fatalf("matched=%d want %d: %+v", dry.Matched, len(dirs), dry)
+	}
+	opts, err := parseReleaseArgs([]string{"--path", "/", "--recursive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := executeRelease(Config{WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("n\n")}, opts, true); code != 1 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	for i, dir := range dirs {
+		assertInfoContains(t, socketPath, dir, fmt.Sprintf("root-%d.work.lewp", i))
+	}
+}
+
+func TestRunReleaseRecursiveNameMatchesDuplicateDescendantPorts(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	root := t.TempDir()
+	dirs := []string{root, filepath.Join(root, "one"), filepath.Join(root, "two")}
+	for _, dir := range dirs {
+		runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+		runOK(t, Config{Args: []string{"port", "--name", "keep"}, WorkDir: dir, SocketPath: socketPath})
+	}
+	var got control.ReleaseResponse
+	out := runOK(t, Config{Args: []string{"release", "--path", root, "--recursive", "--name", "vite", "--yes", "--json"}, WorkDir: t.TempDir(), SocketPath: socketPath})
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Matched != len(dirs) || got.Released != len(dirs) {
+		t.Fatalf("got=%+v", got)
+	}
+	for _, dir := range dirs {
+		assertInfoContains(t, socketPath, dir, "keep")
+		assertInfoMissing(t, socketPath, dir, "vite")
+	}
+}
+
+func TestRunReleaseRecursiveYesJSONEmitsExactlyOneObject(t *testing.T) {
+	for _, yes := range []string{"--yes", "-y"} {
+		t.Run(yes, func(t *testing.T) {
+			socketPath := startTestDaemon(t)
+			root := t.TempDir()
+			runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "json"}, WorkDir: root, SocketPath: socketPath})
+			var stdout, stderr bytes.Buffer
+			code := Run(Config{Args: []string{"release", "--path", root, "--recursive", yes, "--json"}, WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: &bytes.Buffer{}})
+			if code != 0 || stderr.Len() != 0 {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			var got control.ReleaseResponse
+			if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+				t.Fatalf("stdout is not exactly one JSON object: %v\n%s", err, stdout.String())
+			}
+			if got.Matched != 1 || strings.Contains(stdout.String(), "Proceed?") || strings.Contains(stdout.String(), "KIND") {
+				t.Fatalf("impure JSON output: %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestRunReleaseRecursiveStalePreviewFailsWithoutReplanning(t *testing.T) {
+	path := "/work/tree/app"
+	port := 42137
+	plannedResult := control.ReleaseResponse{
+		Operation: "release",
+		Matched:   1,
+		Released:  1,
+		Items: []control.ReleaseItem{{
+			Kind: identity.KindRoute, Path: path, State: registry.StateActive,
+			Port: &port, Ports: []int{port}, Actions: []registry.ReleaseAction{registry.ReleaseActionRelease},
+			Host: "app.work.lewp", Hosts: []control.ReleaseHost{{Host: "app.work.lewp", Type: "primary"}},
+		}},
+	}
+	privatePlan := registry.ReleasePlan{Fingerprint: []registry.ReleasePlanItem{{Kind: identity.KindRoute, Path: path}}}
+	socketPath := startFakeControlPayloads(t, controlPayloads(t,
+		control.Response{Release: &plannedResult, ReleasePlan: &privatePlan},
+		control.Response{Error: registry.ErrReleasePlanChanged.Error()},
+	))
+	opts, err := parseReleaseArgs([]string{"--path", "/work/tree", "--recursive"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := executeRelease(Config{WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("yes\n")}, opts, true)
+	if code != 1 || !strings.Contains(stderr.String(), "release plan changed; rerun the release command") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if strings.Count(stdout.String(), "KIND") != 1 || !strings.Contains(stdout.String(), "Proceed? [y/N]") || strings.Contains(stdout.String(), "Released: 1") {
+		t.Fatalf("stale plan output unexpected: %q", stdout.String())
+	}
+}
+
+func TestRunReleaseRecursiveNoOpSkipsPrompt(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"release", "--path", t.TempDir(), "--recursive", "--yes"}, WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("yes\n")})
+	if code != 0 || strings.Contains(stdout.String(), "Proceed?") || !strings.Contains(stdout.String(), "no matching route or port") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestRunReleaseExactPathMultiItemRemainsUnprompted(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+	runOK(t, Config{Args: []string{"lease", "--root", "work", "--name", "exact"}, WorkDir: dir, SocketPath: socketPath})
+	runOK(t, Config{Args: []string{"port", "--name", "vite"}, WorkDir: dir, SocketPath: socketPath})
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{Args: []string{"release", "--path", dir}, WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("n\n")})
+	if code != 0 || strings.Contains(stdout.String(), "Proceed?") || !strings.Contains(stdout.String(), "KIND") || !strings.Contains(stdout.String(), "Released: 2") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
 }
 
 func TestRunReleaseByNumericPortTargetsCurrentOwner(t *testing.T) {

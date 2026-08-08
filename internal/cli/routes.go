@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -503,6 +504,18 @@ func runRelease(cfg Config) int {
 		fmt.Fprintln(cfg.Stderr, "Run: lewp release --help")
 		return 2
 	}
+	return executeRelease(cfg, opts, isTerminal(cfg.Stdin))
+}
+
+// executeRelease separates terminal detection from the release workflow so the
+// interactive confirmation path can be exercised deterministically. Recursive
+// mutations require either an affirmative terminal confirmation or --yes;
+// exact selectors retain their unprompted plan/apply behavior.
+func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
+	if opts.recursive && !opts.dryRun && !opts.assumeYes && (opts.jsonOut || !interactive) {
+		return releaseConfirmationRequired(cfg)
+	}
+
 	planned, err := call(cfg, control.Request{Command: "release-plan", Release: releaseRequest(cfg, opts)})
 	if err != nil {
 		return daemonError(cfg, err)
@@ -517,6 +530,24 @@ func runRelease(cfg Config) int {
 		writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
 		return 0
 	}
+
+	if opts.recursive {
+		// There is no destructive operation to confirm or send when the plan is
+		// empty. Render the normal no-op response and leave the private plan unused.
+		if len(planned.Release.Items) == 0 {
+			writeReleaseResult(cfg.Stdout, *planned.Release, opts.jsonOut, "")
+			return 0
+		}
+		if !opts.jsonOut {
+			writeRecursiveReleasePreview(cfg.Stdout, *planned.Release)
+			if !confirmRelease(cfg, opts.assumeYes, interactive) {
+				return 1
+			}
+		}
+	}
+
+	// Apply the exact private plan that produced the preview. In particular, do
+	// not rebuild a stale recursive plan after the user has approved its output.
 	applied, err := call(cfg, control.Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan})
 	if err != nil {
 		return daemonError(cfg, err)
@@ -531,6 +562,38 @@ func runRelease(cfg Config) int {
 	result.Selector = planned.Release.Selector
 	writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
 	return 0
+}
+
+func releaseConfirmationRequired(cfg Config) int {
+	fmt.Fprintln(cfg.Stderr, "release: refusing recursive mutation without confirmation")
+	fmt.Fprintln(cfg.Stderr, "Re-run with --yes to proceed (required for non-interactive and JSON use)")
+	return 1
+}
+
+// confirmRelease gates a recursive mutation after its complete human preview.
+// Only an explicit yes is affirmative; no, blank input, and EOF all abort.
+func confirmRelease(cfg Config, assumeYes, interactive bool) bool {
+	if assumeYes {
+		return true
+	}
+	if !interactive {
+		releaseConfirmationRequired(cfg)
+		return false
+	}
+	fmt.Fprint(cfg.Stdout, "Proceed? [y/N] ")
+	line, _ := bufio.NewReader(cfg.Stdin).ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		fmt.Fprintln(cfg.Stdout, "release aborted")
+		return false
+	}
+}
+
+func writeRecursiveReleasePreview(w io.Writer, result control.ReleaseResponse) {
+	writeReleaseTable(w, result.Items)
+	fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
 }
 
 func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool, _ string) {
