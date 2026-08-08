@@ -520,6 +520,16 @@ func TestRunReleaseRecursiveRequiresYesWhenNoninteractiveOrJSON(t *testing.T) {
 			t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 		}
 	}
+
+	opts, err := parseReleaseArgs([]string{"--path", "/tmp/tree", "--recursive", "--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := executeRelease(Config{WorkDir: t.TempDir(), SocketPath: t.TempDir() + "/missing.sock", Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader("yes\n")}, opts, true)
+	if code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--yes") {
+		t.Fatalf("interactive JSON refusal contacted daemon or emitted stdout: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
 }
 
 func TestRunReleaseRecursiveYesAppliesPreviewedPlan(t *testing.T) {
@@ -535,11 +545,24 @@ func TestRunReleaseRecursiveYesAppliesPreviewedPlan(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
-			if !strings.Contains(stdout.String(), "KIND") || !strings.Contains(stdout.String(), "ACTIONS") || !strings.Contains(stdout.String(), "Released: 3") {
-				t.Fatalf("missing preview/totals:\n%s", stdout.String())
+			output := stdout.String()
+			if !strings.HasPrefix(output, "Release plan:\n") || !strings.Contains(output, "KIND") || !strings.Contains(output, "ACTIONS") || !strings.Contains(output, "Planned releases: 3\nPlanned forgets: 0\n") || !strings.HasSuffix(output, "Released: 3\nForgotten: 0\n") {
+				t.Fatalf("missing explicit preview/final totals:\n%s", output)
 			}
-			if strings.Contains(stdout.String(), "Proceed?") {
-				t.Fatalf("--yes prompted: %q", stdout.String())
+			for i, dir := range []string{root, filepath.Join(root, "one"), filepath.Join(root, "two")} {
+				host := fmt.Sprintf("app-%d.work.lewp", i)
+				matchingRows := 0
+				for _, line := range strings.Split(output, "\n") {
+					if strings.Contains(line, host) && strings.Contains(line, dir) {
+						matchingRows++
+					}
+				}
+				if matchingRows != 1 {
+					t.Fatalf("preview logical item %q at %q must occur exactly once (no result-table duplicate):\n%s", host, dir, output)
+				}
+			}
+			if strings.Count(output, "KIND") != 1 || strings.Contains(output, "Proceed?") {
+				t.Fatalf("--yes preview was duplicated or prompted: %q", output)
 			}
 		})
 	}
@@ -568,23 +591,48 @@ func TestRunReleaseRecursiveInteractiveAppliesOnlyAfterAffirmative(t *testing.T)
 			}
 			var stdout, stderr bytes.Buffer
 			code := executeRelease(Config{WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(tc.input)}, opts, true)
+			const prompt = "Proceed? [y/N] "
+			prePrompt, postPrompt, found := strings.Cut(stdout.String(), prompt)
+			if !found || strings.Contains(postPrompt, prompt) {
+				t.Fatalf("exact prompt missing or duplicated: %q", stdout.String())
+			}
+			for _, want := range []string{
+				"Release plan:\n",
+				"KIND", "IDENTITY", "ACTIONS", "release",
+				"Planned releases: 2\nPlanned forgets: 0\n",
+			} {
+				if !strings.Contains(prePrompt, want) {
+					t.Fatalf("complete preview before prompt missing %q: %q", want, stdout.String())
+				}
+			}
+			for _, item := range []struct{ host, path string }{
+				{host: "interactive-0.work.lewp", path: root},
+				{host: "interactive-1.work.lewp", path: child},
+			} {
+				foundItem := false
+				for _, line := range strings.Split(prePrompt, "\n") {
+					if strings.Contains(line, item.host) && strings.Contains(line, item.path) {
+						foundItem = true
+						break
+					}
+				}
+				if !foundItem {
+					t.Fatalf("complete preview before prompt missing logical item %+v: %q", item, stdout.String())
+				}
+			}
 			if tc.wantApply {
 				if code != 0 {
 					t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
-				preview, prompt, result := strings.Index(stdout.String(), "KIND"), strings.Index(stdout.String(), "Proceed? [y/N] "), strings.Index(stdout.String(), "Released: 2")
-				if preview < 0 || prompt <= preview || result <= prompt {
-					t.Fatalf("preview/prompt/result ordering wrong: %q", stdout.String())
+				if strings.Contains(postPrompt, "KIND") || strings.Contains(postPrompt, root) || strings.Contains(postPrompt, child) || !strings.Contains(postPrompt, "Released: 2\nForgotten: 0\n") {
+					t.Fatalf("successful result must contain only final totals after prompt: %q", stdout.String())
 				}
 				assertNoActiveInfo(t, socketPath, root)
 				assertNoActiveInfo(t, socketPath, child)
 				return
 			}
-			if code != 1 || !strings.Contains(stdout.String(), "release aborted") {
+			if code != 1 || !strings.Contains(postPrompt, "release aborted") {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-			}
-			if strings.Index(stdout.String(), "KIND") < 0 || strings.Index(stdout.String(), "KIND") > strings.Index(stdout.String(), "Proceed? [y/N] ") {
-				t.Fatalf("preview was not printed before prompt: %q", stdout.String())
 			}
 			assertInfoContains(t, socketPath, root, "interactive-0.work.lewp")
 			assertInfoContains(t, socketPath, child, "interactive-1.work.lewp")
@@ -676,7 +724,7 @@ func TestRunReleaseRecursiveStalePreviewFailsWithoutReplanning(t *testing.T) {
 		}},
 	}
 	privatePlan := registry.ReleasePlan{Fingerprint: []registry.ReleasePlanItem{{Kind: identity.KindRoute, Path: path}}}
-	socketPath := startFakeControlPayloads(t, controlPayloads(t,
+	socketPath, requests := startFakeControlPayloadsCapturing(t, controlPayloads(t,
 		control.Response{Release: &plannedResult, ReleasePlan: &privatePlan},
 		control.Response{Error: registry.ErrReleasePlanChanged.Error()},
 	))
@@ -691,6 +739,29 @@ func TestRunReleaseRecursiveStalePreviewFailsWithoutReplanning(t *testing.T) {
 	}
 	if strings.Count(stdout.String(), "KIND") != 1 || !strings.Contains(stdout.String(), "Proceed? [y/N]") || strings.Contains(stdout.String(), "Released: 1") {
 		t.Fatalf("stale plan output unexpected: %q", stdout.String())
+	}
+	var gotRequests []control.Request
+	for len(gotRequests) < 2 {
+		select {
+		case req := <-requests:
+			gotRequests = append(gotRequests, req)
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for requests: %+v", gotRequests)
+		}
+	}
+	select {
+	case req := <-requests:
+		t.Fatalf("unexpected third/replan request: %+v", req)
+	default:
+	}
+	if gotRequests[0].Command != "release-plan" || gotRequests[1].Command != "release-apply" {
+		t.Fatalf("request sequence=%q, %q; want release-plan then release-apply", gotRequests[0].Command, gotRequests[1].Command)
+	}
+	if gotRequests[0].ReleasePlan != nil {
+		t.Fatalf("plan request unexpectedly carried private plan: %+v", gotRequests[0])
+	}
+	if !reflect.DeepEqual(gotRequests[1].ReleasePlan, &privatePlan) {
+		t.Fatalf("apply plan=%+v want exact original private plan %+v", gotRequests[1].ReleasePlan, privatePlan)
 	}
 }
 
@@ -910,6 +981,12 @@ func controlPayloads(t *testing.T, responses ...control.Response) []string {
 
 func startFakeControlPayloads(t *testing.T, payloads []string) string {
 	t.Helper()
+	socketPath, _ := startFakeControlPayloadsCapturing(t, payloads)
+	return socketPath
+}
+
+func startFakeControlPayloadsCapturing(t *testing.T, payloads []string) (string, <-chan control.Request) {
+	t.Helper()
 	socketDir, err := os.MkdirTemp("/tmp", "lewp-cli-release-fake-")
 	if err != nil {
 		t.Fatal(err)
@@ -923,19 +1000,28 @@ func startFakeControlPayloads(t *testing.T, payloads []string) string {
 		_ = ln.Close()
 		_ = os.RemoveAll(socketDir)
 	})
+	requests := make(chan control.Request, len(payloads)+1)
 	go func() {
-		for _, payload := range payloads {
+		responseIndex := 0
+		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
 			var req control.Request
-			_ = json.NewDecoder(conn).Decode(&req)
+			if err := json.NewDecoder(conn).Decode(&req); err == nil {
+				requests <- req
+			}
+			payload := `{"error":"unexpected extra control request"}`
+			if responseIndex < len(payloads) {
+				payload = payloads[responseIndex]
+			}
+			responseIndex++
 			_, _ = fmt.Fprintln(conn, payload)
 			_ = conn.Close()
 		}
 	}()
-	return socketPath
+	return socketPath, requests
 }
 
 func TestWriteReleaseResultHumanRendering(t *testing.T) {

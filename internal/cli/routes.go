@@ -560,7 +560,11 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	// The private plan intentionally has no CLI-origin metadata. Preserve the
 	// planned public selector so implicit current-directory output remains exact.
 	result.Selector = planned.Release.Selector
-	writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
+	if opts.recursive && !opts.jsonOut {
+		writeReleaseTotals(cfg.Stdout, result)
+	} else {
+		writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
+	}
 	return 0
 }
 
@@ -592,8 +596,13 @@ func confirmRelease(cfg Config, assumeYes, interactive bool) bool {
 }
 
 func writeRecursiveReleasePreview(w io.Writer, result control.ReleaseResponse) {
+	fmt.Fprintln(w, "Release plan:")
 	writeReleaseTable(w, result.Items)
 	fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
+}
+
+func writeReleaseTotals(w io.Writer, result control.ReleaseResponse) {
+	fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
 }
 
 func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool, _ string) {
