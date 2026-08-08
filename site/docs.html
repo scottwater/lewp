@@ -526,7 +526,7 @@ https://&lt;host&gt;   # .lewp and safe-subtree custom suffix hosts</pre>
       <p>Daemon not running: lewp daemon is not running → run lewp system start.</p>
       <p>Target app not running: lewp list shows the route as down, and the browser shows a lewp debug page with host, target, path, and hints. Start your app manually with the leased PORT.</p>
       <p>HTTPS warnings: run lewp setup, restart the browser if it cached trust state, or run lewp system uninstall to remove lewp CA trust, the LaunchAgent plist, and resolver file.</p>
-      <p>Port collisions: lewp never steals another remembered live assignment. Conflicting primary hosts receive deterministic suffixes; conflicting aliases and wildcards are rejected with the conflicting path. Use lewp release --path '/path/to/old/folder' --forget to remove stale ownership; the old path does not need to exist.</p>
+      <p>Port collisions: lewp never steals another remembered live assignment. Conflicting primary hosts receive deterministic suffixes; conflicting aliases and wildcards are rejected with the conflicting path. Use lewp release --path '/path/to/old/folder' --route --forget to remove stale ownership; the old path does not need to exist.</p>
     </section>
 
     <div class="doc-footer">
