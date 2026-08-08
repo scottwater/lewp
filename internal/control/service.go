@@ -329,6 +329,25 @@ func (s *Service) ApplyRelease(ctx context.Context, plan registry.ReleasePlan, d
 // Release preserves the legacy private command as immediate plan plus atomic
 // apply. It does not use the older per-kind mutation methods.
 func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseResponse, error) {
+	// The old protocol allowed root/name to identify a route at the current
+	// path. Resolve that identity before translating to a path selector so a
+	// mismatched name remains a no-op rather than releasing whichever route now
+	// owns the path.
+	var explicitRouteName string
+	if req.Kind != identity.KindPort && (req.Root != "" || req.Name != "") {
+		resolved, err := identity.Resolve(ctx, identity.Options{
+			WorkDir: req.WorkDir,
+			Root:    req.Root,
+			Name:    req.Name,
+			Env:     requestEnv(nil),
+			Kind:    identity.KindRoute,
+		})
+		if err != nil {
+			return ReleaseResponse{}, err
+		}
+		explicitRouteName = resolved.NormalizedName
+	}
+
 	legacy := req
 	legacy.Implicit = true
 	legacy.Path = ""
@@ -347,9 +366,18 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 	} else {
 		legacy.Name = ""
 	}
-	_, plan, err := s.PlanRelease(ctx, legacy)
+	planned, plan, err := s.PlanRelease(ctx, legacy)
 	if err != nil {
 		return ReleaseResponse{}, err
+	}
+	if explicitRouteName != "" {
+		if len(plan.Items) != 1 || plan.Items[0].Kind != identity.KindRoute || plan.Items[0].Name != explicitRouteName {
+			planned.Matched = 0
+			planned.Released = 0
+			planned.Forgotten = 0
+			planned.Items = []ReleaseItem{}
+			return planned, nil
+		}
 	}
 	return s.ApplyRelease(ctx, plan, req.DryRun)
 }
@@ -427,12 +455,10 @@ func publicReleaseSelector(selector registry.ReleaseSelector, implicit bool) Rel
 	public := ReleaseSelector{Type: selector.Type}
 	switch selector.Type {
 	case registry.ReleaseSelectorPath:
+		public.Path = stringPointer(selector.Path)
 		public.Implicit = boolPointer(implicit)
 		public.Recursive = boolPointer(selector.Recursive)
 		public.Scope = releaseScopePointer(selector.Scope)
-		if !implicit {
-			public.Path = stringPointer(selector.Path)
-		}
 		if selector.Scope == registry.ReleaseScopeName {
 			public.Name = stringPointer(selector.Name)
 		}
@@ -452,9 +478,6 @@ func releaseResponse(plan registry.ReleasePlan, selector ReleaseSelector, dryRun
 		Selector:  selector,
 		Matched:   len(plan.Items),
 		Items:     items,
-	}
-	if plan.Forget {
-		response.Operation = "forget"
 	}
 	for _, planned := range plan.Items {
 		item := publicReleaseItem(planned)

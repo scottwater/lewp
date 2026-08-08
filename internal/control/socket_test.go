@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -377,6 +378,43 @@ func TestSocketCallAliasCommands(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server did not stop")
+	}
+}
+
+func TestLegacyReleaseErrorsReturnEmptyDispatchAndSocketResponses(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44351, End: 44360})
+	ctx := context.Background()
+	req := Request{Command: "release", Release: ReleaseRequest{}}
+
+	got, err := dispatch(ctx, svc, req)
+	if err == nil || !reflect.DeepEqual(got, Response{}) {
+		t.Fatalf("dispatch response=%+v err=%v", got, err)
+	}
+
+	client, server := net.Pipe()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serveConn(ctx, server, func(ctx context.Context, req Request) (Response, error) {
+			return dispatch(ctx, svc, req)
+		})
+	}()
+	if err := json.NewEncoder(client).Encode(req); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(client).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 1 || raw["error"] == nil {
+		t.Fatalf("socket error response=%v; want only error", raw)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("serveConn did not return")
 	}
 }
 

@@ -249,7 +249,10 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 		return Response{Lease: &lease}, err
 	case "release":
 		res, err := svc.Release(ctx, req.Release)
-		return Response{Release: &res}, err
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Release: &res}, nil
 	case "release-plan":
 		res, plan, err := svc.PlanRelease(ctx, req.Release)
 		if err != nil {

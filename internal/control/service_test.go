@@ -235,9 +235,9 @@ func TestServiceReleaseJSONVariantsAndNullableFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertReleaseSelectorJSON(t, pathResult.Selector, []string{"type", "path", "implicit", "recursive", "scope"}, []string{"host", "port", "name"})
-	assertReleaseSelectorJSON(t, mustPlanRelease(t, svc, ctx, ReleaseRequest{Host: "APP.WORK.LEWP"}).Selector, []string{"type", "host"}, []string{"path", "implicit", "recursive", "scope", "name", "port"})
-	assertReleaseSelectorJSON(t, mustPlanRelease(t, svc, ctx, ReleaseRequest{Port: *pathResult.Items[0].Port}).Selector, []string{"type", "port"}, []string{"path", "implicit", "recursive", "scope", "name", "host"})
+	assertExactJSONKeys(t, pathResult.Selector, "type", "path", "implicit", "recursive", "scope")
+	assertExactJSONKeys(t, mustPlanRelease(t, svc, ctx, ReleaseRequest{Host: "APP.WORK.LEWP"}).Selector, "type", "host")
+	assertExactJSONKeys(t, mustPlanRelease(t, svc, ctx, ReleaseRequest{Port: *pathResult.Items[0].Port}).Selector, "type", "port")
 
 	if _, err := svc.ApplyRelease(ctx, pathPlan, false); err != nil {
 		t.Fatal(err)
@@ -246,6 +246,17 @@ func TestServiceReleaseJSONVariantsAndNullableFields(t *testing.T) {
 	if err != nil || len(forget.Items) != 2 {
 		t.Fatalf("forget=%+v err=%v", forget, err)
 	}
+	if forget.Operation != "release" || forget.Selector.Path == nil || *forget.Selector.Path != dir || forget.Selector.Implicit == nil || !*forget.Selector.Implicit {
+		t.Fatalf("implicit forget response=%+v", forget)
+	}
+	assertExactJSONKeys(t, forget, "operation", "dry_run", "selector", "matched", "released", "forgotten", "items")
+	assertExactJSONKeys(t, forget.Selector, "type", "path", "implicit", "recursive", "scope")
+	assertExactJSONKeys(t, forget.Items[0], "kind", "path", "state", "port", "ports", "actions", "host", "hosts")
+	assertExactJSONKeys(t, forget.Items[1], "kind", "path", "state", "port", "ports", "actions", "name")
+	for _, host := range forget.Items[0].Hosts {
+		assertExactJSONKeys(t, host, "host", "type")
+	}
+
 	payload, err := json.Marshal(forget)
 	if err != nil {
 		t.Fatal(err)
@@ -259,21 +270,65 @@ func TestServiceReleaseJSONVariantsAndNullableFields(t *testing.T) {
 	if string(object.Items[0]["port"]) != "null" {
 		t.Fatalf("released active port is not null: %s", payload)
 	}
-	if _, ok := object.Items[0]["name"]; ok {
-		t.Fatalf("route leaked port-only name: %s", payload)
+}
+
+func TestServiceReleaseDryRunReportsActionsWithoutMutation(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44321, End: 44329})
+	ctx := context.Background()
+	dir := t.TempDir()
+	lease, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := object.Items[1]["host"]; ok {
-		t.Fatalf("bare port leaked route-only host: %s", payload)
+
+	planned, plan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeRoute, Forget: true, DryRun: true})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := object.Items[1]["hosts"]; ok {
-		t.Fatalf("bare port leaked route-only hosts: %s", payload)
+	applied, err := svc.ApplyRelease(ctx, plan, true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for i, item := range object.Items {
-		for _, key := range []string{"port", "ports", "actions"} {
-			if _, ok := item[key]; !ok {
-				t.Fatalf("item %d omitted %s: %s", i, key, payload)
-			}
+	for label, got := range map[string]ReleaseResponse{"planned": planned, "applied": applied} {
+		if !got.DryRun || got.Operation != "release" || got.Matched != 1 || got.Released != 1 || got.Forgotten != 1 || len(got.Items) != 1 {
+			t.Fatalf("%s dry-run=%+v", label, got)
 		}
+	}
+	stillActive, _, err := svc.PlanRelease(ctx, ReleaseRequest{Host: lease.Host})
+	if err != nil || stillActive.Matched != 1 || stillActive.Items[0].State == registry.StateReleased {
+		t.Fatalf("dry-run mutated route: result=%+v err=%v", stillActive, err)
+	}
+}
+
+func TestServiceLegacyExplicitRouteReleaseRequiresMatchingName(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44341, End: 44350})
+	ctx := context.Background()
+	dir := t.TempDir()
+	lease, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, req := range []ReleaseRequest{
+		{WorkDir: dir, Name: "other"},
+		{WorkDir: dir, Root: "other-root"},
+		{WorkDir: dir, Root: "other-root", Name: "other"},
+	} {
+		got, err := svc.Release(ctx, req)
+		if err != nil || got.Matched != 0 || got.Released != 0 || got.Items == nil {
+			t.Fatalf("mismatched legacy request=%+v result=%+v err=%v", req, got, err)
+		}
+		current, _, err := svc.PlanRelease(ctx, ReleaseRequest{Host: lease.Host})
+		if err != nil || current.Matched != 1 || current.Items[0].State == registry.StateReleased {
+			t.Fatalf("mismatched legacy release mutated route: result=%+v err=%v", current, err)
+		}
+	}
+
+	got, err := svc.Release(ctx, ReleaseRequest{WorkDir: dir, Root: "work", Name: "current"})
+	if err != nil || got.Released != 1 {
+		t.Fatalf("matching legacy release=%+v err=%v", got, err)
 	}
 }
 
@@ -332,9 +387,9 @@ func mustPlanRelease(t *testing.T, svc *Service, ctx context.Context, req Releas
 	return result
 }
 
-func assertReleaseSelectorJSON(t *testing.T, selector ReleaseSelector, present, absent []string) {
+func assertExactJSONKeys(t *testing.T, value any, want ...string) {
 	t.Helper()
-	payload, err := json.Marshal(selector)
+	payload, err := json.Marshal(value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,14 +397,12 @@ func assertReleaseSelectorJSON(t *testing.T, selector ReleaseSelector, present, 
 	if err := json.Unmarshal(payload, &object); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range present {
-		if _, ok := object[key]; !ok {
-			t.Fatalf("selector omitted %q: %s", key, payload)
-		}
+	if len(object) != len(want) {
+		t.Fatalf("JSON keys=%v want=%v: %s", reflect.ValueOf(object).MapKeys(), want, payload)
 	}
-	for _, key := range absent {
-		if _, ok := object[key]; ok {
-			t.Fatalf("selector included %q: %s", key, payload)
+	for _, key := range want {
+		if _, ok := object[key]; !ok {
+			t.Fatalf("JSON omitted %q (want exact keys %v): %s", key, want, payload)
 		}
 	}
 }
