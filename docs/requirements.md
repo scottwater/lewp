@@ -243,7 +243,9 @@ Requirements:
 - a later `lewp lease` from the same folder reuses the same host and port while
   the identity remains remembered
 - plain `lewp release` frees the current folder route and every bare port;
-  `--route` and `--port [name]` scope it down
+  `--route` and `--name <name>` scope the implicit current-directory path
+- `--path <path>` applies the same scopes to an explicit registered path;
+  `--host <host>` and numeric `--port <number>` target the current owner
 - `lewp release --forget` removes remembered identity/history for what was
   released
 
@@ -396,7 +398,10 @@ lewp setup
 lewp system start|stop|status|restart|uninstall
 lewp lease [--root atlas] [--name feature-1] [--host atlas.lewp] [--json] [--shell]
 lewp port [--name vite] [--json] [--shell]
-lewp release [--route | --port [name]] [--forget]
+lewp release [--route | --name <name>] [--forget]
+lewp release --path <path> [--recursive] [--route | --name <name>] [--forget]
+lewp release --host <host> [--forget]
+lewp release --port <number> [--forget]
 lewp list [--all]
 lewp doctor
 ```
@@ -513,7 +518,9 @@ V1 is acceptable when:
 - normalized names are valid DNS labels
 - remembered leases are stable and reclaimed by the same folder
 - plain `lewp release` frees the current folder route and every bare port;
-  `--route` and `--port [name]` scope it down
+  `--route` and `--name <name>` scope the implicit current-directory path
+- `--path <path>` applies the same scopes to an explicit registered path;
+  `--host <host>` and numeric `--port <number>` target the current owner
 - `lewp release --forget` removes remembered identity
 - `lewp system uninstall` removes launchd/resolver integration cleanly
 - V1 cannot proxy remote targets

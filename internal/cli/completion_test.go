@@ -46,6 +46,9 @@ func TestCompletionScriptsContainGlobalReleaseFlags(t *testing.T) {
 				t.Fatalf("%s completion missing %q", shell, want)
 			}
 		}
+		if shell == "fish" && !strings.Contains(got, "-l port -r -d 'Target the current route or bare port by number'") {
+			t.Fatalf("fish completion has stale numeric-port description:\n%s", got)
+		}
 	}
 }
 

@@ -83,6 +83,27 @@ func TestPortAndReleaseHelpDocumentGlobalReleaseTargets(t *testing.T) {
 			t.Fatalf("release help missing %q:\n%s", want, got)
 		}
 	}
+	usage := `Usage:
+  lewp release [--route | --name <name>] [--forget] [--dry-run] [--json]
+  lewp release --path <path> [--recursive] [--route | --name <name>]
+               [--forget] [--dry-run] [--json] [--yes|-y]
+  lewp release --host <host> [--forget] [--dry-run] [--json]
+  lewp release --port <number> [--forget] [--dry-run] [--json]`
+	if !strings.Contains(got, usage) {
+		t.Fatalf("release help usage does not distinguish implicit and explicit targets:\n%s", got)
+	}
+	for _, want := range []string{
+		"A recursive human mutation prints its full plan.",
+		"An interactive run without",
+		"--yes asks for confirmation; a noninteractive run without it refuses the",
+		"Human output with --yes keeps the preview but skips the prompt.",
+		"recursive JSON mutation requires --yes and emits one JSON object",
+		"preview or prompt.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("release help missing recursive output contract %q:\n%s", want, got)
+		}
+	}
 	if strings.Contains(got, "--port [<name>]") {
 		t.Fatalf("release help retains old named-port syntax:\n%s", got)
 	}
@@ -162,14 +183,14 @@ func TestRunReleasePortByName(t *testing.T) {
 		t.Fatalf("release --name code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `released port "vite"`) {
-		t.Fatalf("release --port output unexpected: %q", stdout.String())
+		t.Fatalf("release --name output unexpected: %q", stdout.String())
 	}
 
-	// The route survives a port-scoped release.
+	// The route survives a name-scoped release.
 	stdout.Reset()
 	stderr.Reset()
 	if code := Run(Config{Args: []string{"info"}, WorkDir: dir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
-		t.Fatalf("info after release --port code=%d stderr=%q", code, stderr.String())
+		t.Fatalf("info after release --name code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "app.work.lewp") {
 		t.Fatalf("route missing after port-scoped release: %q", stdout.String())
@@ -182,7 +203,7 @@ func TestRunReleasePortByName(t *testing.T) {
 		t.Fatalf("idempotent release --name code=%d stderr=%q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), `no active port named "vite"`) {
-		t.Fatalf("idempotent release --port output unexpected: %q", stdout.String())
+		t.Fatalf("idempotent release --name output unexpected: %q", stdout.String())
 	}
 }
 

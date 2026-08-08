@@ -159,7 +159,10 @@ lewp setup                                   # resolver file, CA+trust, launchd 
 lewp system start|stop|status|restart|uninstall
 lewp lease [--root R] [--name N] [--host H] [--json|--shell] # routed port + hostname
 lewp port [--name vite] [--json|--shell]            # NEW: bare internal port, no hostname
-lewp release [--route | --port [<name>]] [--forget]
+lewp release [--route | --name <name>] [--forget]   # implicit current-directory path
+lewp release --path <path> [--recursive] [--route | --name <name>] [--forget]
+lewp release --host <host> [--forget]                # target the current owner
+lewp release --port <number> [--forget]              # target the current owner
 lewp list [--all]                            # registry-backed; TCP up/down; no HTTP app probes
 lewp doctor
 ```

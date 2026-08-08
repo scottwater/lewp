@@ -182,9 +182,12 @@ lewp release --path /work/worktrees --recursive --dry-run
 lewp release --path /work/worktrees --recursive --yes
 ```
 
-The dry run never prompts or changes the registry. A recursive change previews
-all matches and asks for confirmation; scripts must pass `--yes` or `-y`.
-Release keeps registry history unless you add `--forget`.
+The dry run never prompts or changes the registry. An interactive recursive
+change without `--yes` previews all matches and asks for confirmation. Human
+output with `--yes` keeps the preview but skips the prompt. Noninteractive
+recursive changes require `--yes` or `-y`. Recursive JSON changes require
+`--yes` and write one JSON object without a human preview or prompt. Release
+keeps registry history unless you add `--forget`.
 
 ## Identity and configuration
 

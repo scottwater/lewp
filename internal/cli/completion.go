@@ -157,7 +157,7 @@ func fishCompletion() string {
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l path -r -d 'Target a registered path'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l recursive -d 'Include registered descendant paths'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l host -r -d 'Target a registered host'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l port -r -d 'Release one bare port by number'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l port -r -d 'Target the current route or bare port by number'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l name -r -d 'Release one bare port by name under a path'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l route -d 'Release only the route under a path'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l forget -d 'Delete matching registry history'\n")

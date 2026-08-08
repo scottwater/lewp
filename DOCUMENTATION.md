@@ -40,8 +40,11 @@ lewp init [--root R] [--name N] [--host H] [--force]
 lewp info [--name N] [--host H] [--json|--shell|--port]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
-lewp release [--path P [--recursive] [--route | --name N] | --host H | --port N]
+lewp release [--route | --name N] [--forget] [--dry-run] [--json]
+lewp release --path P [--recursive] [--route | --name N]
              [--forget] [--dry-run] [--json] [--yes|-y]
+lewp release --host H [--forget] [--dry-run] [--json]
+lewp release --port N [--forget] [--dry-run] [--json]
 lewp list [--all] [--json]
 lewp suffix list
 lewp suffix remove S
@@ -847,9 +850,11 @@ aliases and wildcard hosts, and every bare port. Exact selectors do not prompt.
 A no-op reports no match and exits successfully.
 
 Usage:
-  lewp release [--path <path> [--recursive] [--route | --name <name>] |
-                --host <host> | --port <number>]
+  lewp release [--route | --name <name>] [--forget] [--dry-run] [--json]
+  lewp release --path <path> [--recursive] [--route | --name <name>]
                [--forget] [--dry-run] [--json] [--yes|-y]
+  lewp release --host <host> [--forget] [--dry-run] [--json]
+  lewp release --port <number> [--forget] [--dry-run] [--json]
 
 Targets and scopes:
   --path <path>    Target an exact registered path, including an external or
@@ -869,10 +874,14 @@ Output and safety:
   --yes, -y        Approve a recursive mutation without a prompt. Scripts and
                    recursive JSON mutations require this flag.
 
-A recursive mutation prints its full plan before asking for confirmation. Lewp
-applies that exact plan atomically and refuses it if registry state changes;
-rerun the command to review a new plan. Recursive selection from / is allowed
-for dry runs but remains protected by the same confirmation rules for changes.
+A recursive human mutation prints its full plan. An interactive run without
+--yes asks for confirmation; a noninteractive run without it refuses the
+mutation. Human output with --yes keeps the preview but skips the prompt. A
+recursive JSON mutation requires --yes and emits one JSON object without a human
+preview or prompt. Lewp applies the planned change atomically and refuses it when
+registry state changes; rerun the command to review a new plan. Recursive
+selection from / is allowed for dry runs but uses the same confirmation rules
+for changes.
 
 Examples:
   lewp release
@@ -966,10 +975,13 @@ Repeated release and forget commands therefore succeed as idempotent no-ops.
 `--dry-run` prints the complete plan and never prompts or changes the registry.
 It works without `--yes`, including recursive JSON dry runs.
 
-An interactive recursive mutation prints the complete plan and defaults its
-`Proceed? [y/N]` prompt to no. Pass `--yes` or `-y` to approve it without a
-prompt. Noninteractive recursive mutations and recursive mutations with
-`--json` require `--yes` or `-y`. Exact path, host, and port mutations do not
+An interactive recursive human mutation without `--yes` prints the complete
+plan and defaults its `Proceed? [y/N]` prompt to no. With `--yes` or `-y`, human
+output still prints the preview but skips the prompt. A noninteractive recursive
+human mutation requires `--yes` or `-y`.
+
+A recursive JSON mutation requires `--yes` or `-y` and writes one JSON object.
+It prints no human preview or prompt. Exact path, host, and port mutations do not
 prompt.
 
 The recursive path `/` can match every registered path. Lewp safeguards a `/`
