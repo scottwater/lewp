@@ -97,6 +97,7 @@ func TestPortAndReleaseHelpDocumentGlobalReleaseTargets(t *testing.T) {
 		"An interactive run without",
 		"--yes asks for confirmation; a noninteractive run without it refuses the",
 		"Human output with --yes keeps the preview but skips the prompt.",
+		"recursive mutations in noninteractive or JSON mode.",
 		"recursive JSON mutation requires --yes and emits one JSON object",
 		"preview or prompt.",
 	} {

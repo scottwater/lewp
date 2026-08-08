@@ -294,8 +294,8 @@ Output and safety:
                    history. With a path, forget also deletes released history.
   --dry-run        Show the plan without prompting or changing the registry
   --json           Emit the result as one JSON object
-  --yes, -y        Approve a recursive mutation without a prompt. Scripts and
-                   recursive JSON mutations require this flag.
+  --yes, -y        Approve a recursive mutation without a prompt. Required for
+                   recursive mutations in noninteractive or JSON mode.
 
 A recursive human mutation prints its full plan. An interactive run without
 --yes asks for confirmation; a noninteractive run without it refuses the
