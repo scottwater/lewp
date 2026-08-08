@@ -989,6 +989,47 @@ func TestJoinReleaseRollbackError(t *testing.T) {
 	}
 }
 
+func TestApplyReleaseForgetFailureRollsBackWithContext(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	route, err := store.LeaseRoute(ctx, releaseRouteIdentity(dir, "app", "app.work.lewp"), PortRange{Start: 43380, End: 43399})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LeasePort(ctx, releasePortIdentity(dir, "vite"), PortRange{Start: 43380, End: 43399}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeAll}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(fmt.Sprintf(`create trigger fail_route_forget before delete on routes when old.id=%d begin select raise(abort, 'injected forget failure'); end`, route.RouteID)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.ApplyRelease(ctx, plan)
+	if err == nil {
+		t.Fatal("forget succeeded despite injected delete failure")
+	}
+	for _, want := range []string{`forget route "app"`, dir, "delete route history", "injected forget failure"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("apply error %q missing %q", err, want)
+		}
+	}
+	if got := countRows(t, store.db, `select count(*) from routes where id=?`, route.RouteID); got != 1 {
+		t.Fatalf("route rows=%d want 1 after rollback", got)
+	}
+	if got := countRows(t, store.db, `select count(*) from leases where route_id=? and state=?`, route.RouteID, StateActive); got != 1 {
+		t.Fatalf("active route leases=%d want 1 after rollback", got)
+	}
+	if got := countRows(t, store.db, `select count(*) from events where route_id=?`, route.RouteID); got == 0 {
+		t.Fatal("route events were not restored by rollback")
+	}
+	if got := countRows(t, store.db, `select count(*) from ports where path=? and state=?`, dir, StateActive); got != 1 {
+		t.Fatalf("active bare ports=%d want 1 after rollback", got)
+	}
+}
+
 func TestApplyReleaseRollsBackMultiItemFailure(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

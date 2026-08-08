@@ -2,8 +2,12 @@ package control
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -22,6 +26,7 @@ type Service struct {
 	store           *registry.Store
 	portRange       registry.PortRange
 	managedSuffixes []string
+	releasePlanKey  []byte
 }
 
 type LeaseRequest struct {
@@ -69,7 +74,11 @@ type PortRequest struct {
 }
 
 type ReleaseRequest struct {
-	WorkDir   string                `json:"work_dir,omitempty"`
+	// WorkDir and Env retain their original Go field-name JSON keys so an older
+	// CLI can still use the private legacy release command against a new daemon.
+	WorkDir string
+	Env     map[string]string `json:"Env,omitempty"`
+
 	Path      string                `json:"path,omitempty"`
 	Host      string                `json:"host,omitempty"`
 	Name      string                `json:"name,omitempty"`
@@ -158,6 +167,16 @@ type ReleaseResponse struct {
 	Items     []ReleaseItem   `json:"items"`
 }
 
+// ReleasePlanReference is the compact private apply capability returned by the
+// daemon. Token authenticates the complete registry plan while selector and
+// forget mode give the daemon enough information to rebuild and revalidate it.
+// The full fingerprint never crosses back in an apply request.
+type ReleasePlanReference struct {
+	Selector registry.ReleaseSelector `json:"selector"`
+	Forget   bool                     `json:"forget"`
+	Token    string                   `json:"token"`
+}
+
 type ListEntry struct {
 	Host  string        `json:"host,omitempty"`
 	Port  int           `json:"port"`
@@ -169,7 +188,12 @@ type ListEntry struct {
 }
 
 func NewService(store *registry.Store, portRange registry.PortRange) *Service {
-	return &Service{store: store, portRange: portRange, managedSuffixes: canonicalManagedSuffixes(nil)}
+	return &Service{
+		store:           store,
+		portRange:       portRange,
+		managedSuffixes: canonicalManagedSuffixes(nil),
+		releasePlanKey:  []byte(rand.Text()),
+	}
 }
 
 func (s *Service) SetManagedSuffixes(managed []string) {
@@ -308,6 +332,37 @@ func (s *Service) PlanRelease(ctx context.Context, req ReleaseRequest) (ReleaseR
 	return releaseResponse(plan, publicSelector, req.DryRun), plan, nil
 }
 
+func (s *Service) releasePlanReference(plan registry.ReleasePlan) (ReleasePlanReference, error) {
+	payload, err := json.Marshal(plan)
+	if err != nil {
+		return ReleasePlanReference{}, fmt.Errorf("encode release plan reference: %w", err)
+	}
+	mac := hmac.New(sha256.New, s.releasePlanKey)
+	_, _ = mac.Write(payload)
+	return ReleasePlanReference{
+		Selector: plan.Selector,
+		Forget:   plan.Forget,
+		Token:    hex.EncodeToString(mac.Sum(nil)),
+	}, nil
+}
+
+// applyReleaseReference rebuilds the referenced plan and authenticates its full
+// fingerprint before handing it to the registry's atomic validation/apply path.
+func (s *Service) applyReleaseReference(ctx context.Context, ref ReleasePlanReference, dryRun bool) (ReleaseResponse, error) {
+	plan, err := s.store.PlanRelease(ctx, ref.Selector, ref.Forget)
+	if err != nil {
+		return ReleaseResponse{}, err
+	}
+	expected, err := s.releasePlanReference(plan)
+	if err != nil {
+		return ReleaseResponse{}, err
+	}
+	if !hmac.Equal([]byte(ref.Token), []byte(expected.Token)) {
+		return ReleaseResponse{}, registry.ErrReleasePlanChanged
+	}
+	return s.ApplyRelease(ctx, plan, dryRun)
+}
+
 // ApplyRelease maps the validated plan to its public pre-mutation form before
 // atomically applying it. A failed registry validation/application never returns
 // a successful-looking response.
@@ -339,7 +394,7 @@ func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseRespo
 			WorkDir: req.WorkDir,
 			Root:    req.Root,
 			Name:    req.Name,
-			Env:     requestEnv(nil),
+			Env:     requestEnv(req.Env),
 			Kind:    identity.KindRoute,
 		})
 		if err != nil {

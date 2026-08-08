@@ -747,7 +747,7 @@ func TestRunReleaseRecursiveStalePreviewFailsWithoutReplanning(t *testing.T) {
 			Host: "app.work.lewp", Hosts: []control.ReleaseHost{{Host: "app.work.lewp", Type: "primary"}},
 		}},
 	}
-	privatePlan := registry.ReleasePlan{Fingerprint: []registry.ReleasePlanItem{{Kind: identity.KindRoute, Path: path}}}
+	privatePlan := control.ReleasePlanReference{Token: "stale-preview-reference"}
 	socketPath, requests := startFakeControlPayloadsCapturing(t, controlPayloads(t,
 		control.Response{Release: &plannedResult, ReleasePlan: &privatePlan},
 		control.Response{Error: registry.ErrReleasePlanChanged.Error()},
@@ -951,7 +951,7 @@ func TestRunReleasePathForgetRemovesActiveAndReleasedHistory(t *testing.T) {
 }
 
 func TestRunReleaseOperationalFailures(t *testing.T) {
-	plan := registry.ReleasePlan{}
+	plan := control.ReleasePlanReference{Token: "test-reference"}
 	result := control.ReleaseResponse{Operation: "release", Items: []control.ReleaseItem{}}
 	validPlan := control.Response{Release: &result, ReleasePlan: &plan}
 	cases := []struct {
@@ -1064,7 +1064,7 @@ func TestWriteReleaseResultHumanRendering(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			writeReleaseResult(&out, control.ReleaseResponse{Selector: tc.selector, Items: []control.ReleaseItem{}}, false, "")
+			writeReleaseResult(&out, control.ReleaseResponse{Selector: tc.selector, Items: []control.ReleaseItem{}}, false)
 			if !strings.Contains(out.String(), tc.want) || strings.Contains(out.String(), tc.reject) {
 				t.Fatalf("output=%q", out.String())
 			}
@@ -1082,7 +1082,7 @@ func TestWriteReleaseResultHumanRendering(t *testing.T) {
 		},
 	}
 	var out bytes.Buffer
-	writeReleaseResult(&out, bulk, false, "")
+	writeReleaseResult(&out, bulk, false)
 	got := out.String()
 	for _, want := range []string{"KIND", "IDENTITY", "PORT", "STATE", "ACTIONS", "PATH", "app.work.lewp,tags.app.work.lewp", "vite", "Planned releases: 2", "Planned forgets: 0"} {
 		if !strings.Contains(got, want) {
@@ -1097,7 +1097,7 @@ func TestWriteReleaseResultHumanRendering(t *testing.T) {
 	writeReleaseResult(&out, control.ReleaseResponse{
 		Matched: 1, Forgotten: 1,
 		Items: []control.ReleaseItem{{Kind: identity.KindRoute, Path: path, Host: "app.work.lewp", Actions: []registry.ReleaseAction{registry.ReleaseActionForget}}},
-	}, false, "")
+	}, false)
 	if !strings.Contains(out.String(), `forgotten route "app.work.lewp" at /work/app`) {
 		t.Fatalf("single forget output=%q", out.String())
 	}

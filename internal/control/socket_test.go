@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -418,6 +419,102 @@ func TestLegacyReleaseErrorsReturnEmptyDispatchAndSocketResponses(t *testing.T) 
 	}
 }
 
+func TestLegacyReleaseWirePreservesOldRequestAndResponse(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socketDir, err := os.MkdirTemp("/tmp", fmt.Sprintf("lewp-%d-", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "control.sock")
+	registryPath := filepath.Join(t.TempDir(), "registry.sqlite")
+	workDir := t.TempDir()
+	errs := make(chan error, 1)
+	go func() {
+		errs <- Serve(ctx, socketPath, registryPath, registry.PortRange{Start: 44361, End: 44370})
+	}()
+	waitForSocket(t, socketPath, errs)
+	if _, err := Call(ctx, socketPath, Request{Command: "add", Lease: LeaseRequest{WorkDir: workDir, Root: "work", Name: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Call(ctx, socketPath, Request{Command: "port", Port: PortRequest{WorkDir: workDir, Name: "vite"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	workDirJSON, err := json.Marshal(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLegacyCounts := func(payload []byte, want map[string]int) {
+		t.Helper()
+		var outer map[string]json.RawMessage
+		if err := json.Unmarshal(payload, &outer); err != nil {
+			t.Fatalf("legacy response JSON: %v\n%s", err, payload)
+		}
+		if len(outer) != 1 || outer["release"] == nil {
+			t.Fatalf("legacy outer response=%s", payload)
+		}
+		var release map[string]int
+		if err := json.Unmarshal(outer["release"], &release); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(release, want) {
+			t.Fatalf("legacy release response=%v want %v", release, want)
+		}
+	}
+
+	payload := callRawJSON(t, ctx, socketPath, []byte(fmt.Sprintf(
+		`{"command":"release","release":{"WorkDir":%s,"Root":"work","Env":{"LEWP_NAME":"app"}}}`,
+		workDirJSON,
+	)))
+	assertLegacyCounts(payload, map[string]int{"routes": 1, "ports": 0})
+	info, err := Call(ctx, socketPath, Request{Command: "info", Info: InfoRequest{WorkDir: workDir}})
+	if err != nil || len(info.Entries) != 1 || info.Entries[0].Kind != "port" {
+		t.Fatalf("legacy env-targeted route release entries=%+v err=%v", info.Entries, err)
+	}
+
+	payload = callRawJSON(t, ctx, socketPath, []byte(fmt.Sprintf(
+		`{"command":"release","release":{"WorkDir":%s,"Kind":"port","Name":"vite","Env":{"LEWP_NAME":"ignored"}}}`,
+		workDirJSON,
+	)))
+	assertLegacyCounts(payload, map[string]int{"routes": 0, "ports": 1})
+	info, err = Call(ctx, socketPath, Request{Command: "info", Info: InfoRequest{WorkDir: workDir}})
+	if err != nil || len(info.Entries) != 0 {
+		t.Fatalf("legacy named-port release did not mutate allocation: entries=%+v err=%v", info.Entries, err)
+	}
+}
+
+func TestReleasePlanReferenceKeepsLargeApplyRequestBounded(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44371, End: 44380})
+	plan := registry.ReleasePlan{
+		Selector: registry.ReleaseSelector{Type: registry.ReleaseSelectorPath, Path: "/work", Recursive: true, Scope: registry.ReleaseScopeRoute},
+		Items:    make([]registry.ReleasePlanItem, 2000), Fingerprint: make([]registry.ReleasePlanItem, 2000),
+	}
+	for i := range plan.Items {
+		item := registry.ReleasePlanItem{Kind: "route", Path: fmt.Sprintf("/work/app-%04d", i), Name: fmt.Sprintf("app-%04d", i), Host: fmt.Sprintf("app-%04d.work.lewp", i), RouteID: int64(i + 1)}
+		plan.Items[i] = item
+		plan.Fingerprint[i] = item
+	}
+	ref, err := svc.releasePlanReference(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(Request{Command: "release-apply", ReleasePlan: &ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) >= maxRequestBytes/100 {
+		t.Fatalf("compact apply request=%d bytes, want well below %d", len(payload), maxRequestBytes)
+	}
+	for _, private := range []string{"Fingerprint", "RouteID", "app-1999.work.lewp"} {
+		if bytes.Contains(payload, []byte(private)) {
+			t.Fatalf("compact apply request leaked full plan field %q: %s", private, payload)
+		}
+	}
+}
+
 func TestSocketCallReleasePlanAndApplyKeepsPrivatePlanOuter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -466,6 +563,20 @@ func TestSocketCallReleasePlanAndApplyKeepsPrivatePlanOuter(t *testing.T) {
 		}
 	}
 
+	tamperedToken := *planned.ReleasePlan
+	tamperedToken.Token = "tampered-" + tamperedToken.Token
+	tamperedSelector := *planned.ReleasePlan
+	tamperedSelector.Selector.Path = workDir + "-other"
+	tamperedForget := *planned.ReleasePlan
+	tamperedForget.Forget = true
+	for name, tampered := range map[string]ReleasePlanReference{
+		"token": tamperedToken, "selector": tamperedSelector, "forget": tamperedForget,
+	} {
+		if _, err := Call(ctx, socketPath, Request{Command: "release-apply", ReleasePlan: &tampered}); err == nil || !strings.Contains(err.Error(), registry.ErrReleasePlanChanged.Error()) {
+			t.Fatalf("tampered %s plan reference error=%v", name, err)
+		}
+	}
+
 	applied, err := Call(ctx, socketPath, Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan})
 	if err != nil || applied.Release == nil || applied.Release.Released != 1 {
 		t.Fatalf("applied=%+v err=%v", applied, err)
@@ -487,20 +598,29 @@ func TestSocketCallReleasePlanAndApplyKeepsPrivatePlanOuter(t *testing.T) {
 
 func callRaw(t *testing.T, ctx context.Context, socketPath string, req Request) []byte {
 	t.Helper()
+	payload, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return callRawJSON(t, ctx, socketPath, payload)
+}
+
+func callRawJSON(t *testing.T, ctx context.Context, socketPath string, payload []byte) []byte {
+	t.Helper()
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "unix", socketPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	if err := json.NewEncoder(conn).Encode(req); err != nil {
+	if _, err := conn.Write(append(payload, '\n')); err != nil {
 		t.Fatal(err)
 	}
-	payload, err := io.ReadAll(conn)
+	response, err := io.ReadAll(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return payload
+	return response
 }
 
 func containsJSONKey(payload []byte, key string) bool {

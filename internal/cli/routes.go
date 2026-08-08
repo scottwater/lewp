@@ -527,7 +527,7 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	if opts.dryRun {
 		result := *planned.Release
 		result.DryRun = true
-		writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
+		writeReleaseResult(cfg.Stdout, result, opts.jsonOut)
 		return 0
 	}
 
@@ -535,7 +535,7 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 		// There is no destructive operation to confirm or send when the plan is
 		// empty. Render the normal no-op response and leave the private plan unused.
 		if len(planned.Release.Items) == 0 {
-			writeReleaseResult(cfg.Stdout, *planned.Release, opts.jsonOut, "")
+			writeReleaseResult(cfg.Stdout, *planned.Release, opts.jsonOut)
 			return 0
 		}
 		if !opts.jsonOut {
@@ -563,7 +563,7 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	if opts.recursive && !opts.jsonOut {
 		writeReleaseTotals(cfg.Stdout, result)
 	} else {
-		writeReleaseResult(cfg.Stdout, result, opts.jsonOut, "")
+		writeReleaseResult(cfg.Stdout, result, opts.jsonOut)
 	}
 	return 0
 }
@@ -605,7 +605,7 @@ func writeReleaseTotals(w io.Writer, result control.ReleaseResponse) {
 	fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
 }
 
-func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool, _ string) {
+func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool) {
 	if result.Items == nil {
 		result.Items = []control.ReleaseItem{}
 	}

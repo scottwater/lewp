@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/registry"
 	"github.com/scottwater/lewp/internal/suffix"
 )
@@ -41,7 +42,7 @@ type Request struct {
 	Lease       LeaseRequest          `json:"lease,omitempty"`
 	Port        PortRequest           `json:"port,omitempty"`
 	Release     ReleaseRequest        `json:"release,omitempty"`
-	ReleasePlan *registry.ReleasePlan `json:"release_plan,omitempty"`
+	ReleasePlan *ReleasePlanReference `json:"release_plan,omitempty"`
 	Info        InfoRequest           `json:"info,omitempty"`
 	Move        MoveRequest           `json:"move,omitempty"`
 	Alias       AliasRequest          `json:"alias,omitempty"`
@@ -49,13 +50,14 @@ type Request struct {
 }
 
 type Response struct {
-	Lease       *LeaseResponse        `json:"lease,omitempty"`
-	Release     *ReleaseResponse      `json:"release,omitempty"`
-	ReleasePlan *registry.ReleasePlan `json:"release_plan,omitempty"`
-	AliasRemove *AliasRemoveResponse  `json:"alias_remove,omitempty"`
-	Entries     []ListEntry           `json:"entries,omitempty"`
-	Checks      []string              `json:"checks,omitempty"`
-	Error       string                `json:"error,omitempty"`
+	Lease         *LeaseResponse         `json:"lease,omitempty"`
+	Release       *ReleaseResponse       `json:"release,omitempty"`
+	ReleasePlan   *ReleasePlanReference  `json:"release_plan,omitempty"`
+	LegacyRelease *legacyReleaseResponse `json:"-"`
+	AliasRemove   *AliasRemoveResponse   `json:"alias_remove,omitempty"`
+	Entries       []ListEntry            `json:"entries,omitempty"`
+	Checks        []string               `json:"checks,omitempty"`
+	Error         string                 `json:"error,omitempty"`
 }
 
 func (r Response) MarshalJSON() ([]byte, error) {
@@ -63,7 +65,9 @@ func (r Response) MarshalJSON() ([]byte, error) {
 	if r.Lease != nil {
 		obj["lease"] = r.Lease
 	}
-	if r.Release != nil {
+	if r.LegacyRelease != nil {
+		obj["release"] = r.LegacyRelease
+	} else if r.Release != nil {
 		obj["release"] = r.Release
 	}
 	if r.ReleasePlan != nil {
@@ -239,6 +243,29 @@ func serveConn(ctx context.Context, conn net.Conn, dispatch func(context.Context
 	writeResponse(resp)
 }
 
+type legacyReleaseResponse struct {
+	Routes int `json:"routes"`
+	Ports  int `json:"ports"`
+}
+
+func legacyReleaseCounts(result ReleaseResponse) legacyReleaseResponse {
+	var counts legacyReleaseResponse
+	for _, item := range result.Items {
+		for _, action := range item.Actions {
+			if action != registry.ReleaseActionRelease {
+				continue
+			}
+			if item.Kind == identity.KindRoute {
+				counts.Routes++
+			} else if item.Kind == identity.KindPort {
+				counts.Ports++
+			}
+			break
+		}
+	}
+	return counts
+}
+
 func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) {
 	switch req.Command {
 	case "add":
@@ -252,18 +279,23 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 		if err != nil {
 			return Response{}, err
 		}
-		return Response{Release: &res}, nil
+		legacy := legacyReleaseCounts(res)
+		return Response{Release: &res, LegacyRelease: &legacy}, nil
 	case "release-plan":
 		res, plan, err := svc.PlanRelease(ctx, req.Release)
 		if err != nil {
 			return Response{}, err
 		}
-		return Response{Release: &res, ReleasePlan: &plan}, nil
+		ref, err := svc.releasePlanReference(plan)
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Release: &res, ReleasePlan: &ref}, nil
 	case "release-apply":
 		if req.ReleasePlan == nil {
 			return Response{}, errors.New("release-apply requires a release plan")
 		}
-		res, err := svc.ApplyRelease(ctx, *req.ReleasePlan, req.Release.DryRun)
+		res, err := svc.applyReleaseReference(ctx, *req.ReleasePlan, req.Release.DryRun)
 		if err != nil {
 			return Response{}, err
 		}
