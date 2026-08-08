@@ -1,7 +1,9 @@
 package control
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +14,345 @@ import (
 	"github.com/scottwater/lewp/internal/identity"
 	"github.com/scottwater/lewp/internal/registry"
 )
+
+func TestServicePlansReleaseSelectorsAndCanonicalizesInput(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44000, End: 44030})
+	ctx := context.Background()
+	base := t.TempDir()
+	dir := filepath.Join(base, "gone", "app")
+	lease, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AliasAdd(ctx, AliasRequest{WorkDir: dir, Host: "tags.app.work.lewp"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AliasAdd(ctx, AliasRequest{WorkDir: dir, Host: "*.app.work.lewp"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pathResult, pathPlan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: base, Path: "gone/../gone/app", Scope: registry.ReleaseScopeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pathResult.Selector.Path == nil || *pathResult.Selector.Path != dir || pathResult.Matched != 1 || len(pathPlan.Items) != 1 {
+		t.Fatalf("path result=%+v plan=%+v", pathResult, pathPlan)
+	}
+	for _, raw := range []string{" APP.WORK.LEWP. ", " TAGS.APP.WORK.LEWP. ", " *.APP.WORK.LEWP. "} {
+		got, _, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: base, Host: raw})
+		if err != nil || got.Matched != 1 || got.Items[0].Host != "app.work.lewp" || len(got.Items[0].Hosts) != 3 {
+			t.Fatalf("host %q result=%+v err=%v", raw, got, err)
+		}
+	}
+	byPort, _, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: base, Port: lease.Port})
+	if err != nil || byPort.Matched != 1 || byPort.Items[0].Kind != identity.KindRoute {
+		t.Fatalf("port result=%+v err=%v", byPort, err)
+	}
+}
+
+func TestServicePathForgetIncludesReleasedHistoryAndReportsActions(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44100, End: 44130})
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Port(ctx, PortRequest{WorkDir: dir, Name: "vite"}); err != nil {
+		t.Fatal(err)
+	}
+	routeOnly, plan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if routeOnly.Matched != 1 {
+		t.Fatalf("route plan=%+v", routeOnly)
+	}
+	if _, err := svc.ApplyRelease(ctx, plan, false); err != nil {
+		t.Fatal(err)
+	}
+
+	result, forgetPlan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeAll, Forget: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Matched != 2 || result.Released != 1 || result.Forgotten != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+	if !reflect.DeepEqual(result.Items[0].Actions, []registry.ReleaseAction{registry.ReleaseActionForget}) {
+		t.Fatalf("route actions=%v", result.Items[0].Actions)
+	}
+	if !reflect.DeepEqual(result.Items[1].Actions, []registry.ReleaseAction{registry.ReleaseActionRelease, registry.ReleaseActionForget}) {
+		t.Fatalf("port actions=%v", result.Items[1].Actions)
+	}
+	applied, err := svc.ApplyRelease(ctx, forgetPlan, false)
+	if err != nil || applied.Released != 1 || applied.Forgotten != 2 {
+		t.Fatalf("applied=%+v err=%v", applied, err)
+	}
+}
+
+func TestReleaseControlProtocolKeepsPlanPrivateFromPublicResult(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44200, End: 44220})
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	planned, err := dispatch(ctx, svc, Request{Command: "release-plan", Release: ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeAll}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.Release == nil || planned.ReleasePlan == nil || planned.Release.Matched != 1 {
+		t.Fatalf("planned=%+v", planned)
+	}
+	public, err := json.Marshal(planned.Release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"route_id", "lease_ids", "port_row", "fingerprint", "release_plan"} {
+		if bytes.Contains(public, []byte(private)) {
+			t.Fatalf("public JSON leaked %q: %s", private, public)
+		}
+	}
+	applied, err := dispatch(ctx, svc, Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan})
+	if err != nil || applied.Release == nil || applied.Release.Released != 1 {
+		t.Fatalf("applied=%+v err=%v", applied, err)
+	}
+}
+
+func TestServiceReleaseSelectorsAreExactAndUnknownResultsUseArrays(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44230, End: 44260})
+	ctx := context.Background()
+	dir := t.TempDir()
+	route, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AliasAdd(ctx, AliasRequest{WorkDir: dir, Host: "*.app.work.lewp"}); err != nil {
+		t.Fatal(err)
+	}
+	bare, err := svc.Port(ctx, PortRequest{WorkDir: dir, Name: "VITE Dev"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	concrete, _, err := svc.PlanRelease(ctx, ReleaseRequest{Host: "foo.app.work.lewp"})
+	if err != nil || concrete.Matched != 0 || concrete.Items == nil {
+		t.Fatalf("concrete wildcard result=%+v err=%v", concrete, err)
+	}
+	wildcard, _, err := svc.PlanRelease(ctx, ReleaseRequest{Host: "*.APP.WORK.LEWP."})
+	if err != nil || wildcard.Matched != 1 {
+		t.Fatalf("exact wildcard result=%+v err=%v", wildcard, err)
+	}
+
+	byRoutePort, _, err := svc.PlanRelease(ctx, ReleaseRequest{Port: route.Port})
+	if err != nil || len(byRoutePort.Items) != 1 || byRoutePort.Items[0].Kind != identity.KindRoute {
+		t.Fatalf("route port result=%+v err=%v", byRoutePort, err)
+	}
+	byBarePort, _, err := svc.PlanRelease(ctx, ReleaseRequest{Port: bare.Port})
+	if err != nil || len(byBarePort.Items) != 1 || byBarePort.Items[0].Kind != identity.KindPort || byBarePort.Items[0].Name != "vite-dev" {
+		t.Fatalf("bare port result=%+v err=%v", byBarePort, err)
+	}
+
+	unknown := []ReleaseRequest{
+		{WorkDir: dir, Path: "missing", Scope: registry.ReleaseScopeAll},
+		{Host: "missing.work.lewp"},
+		{Port: 65535},
+	}
+	for _, req := range unknown {
+		got, _, err := svc.PlanRelease(ctx, req)
+		if err != nil || got.Matched != 0 || got.Released != 0 || got.Forgotten != 0 || got.Items == nil || len(got.Items) != 0 {
+			t.Fatalf("unknown request=%+v result=%+v err=%v", req, got, err)
+		}
+	}
+}
+
+func TestServiceReleaseReuseSelectsCurrentOwnerAndPathForgetIsIsolated(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44270, End: 44270})
+	ctx := context.Background()
+	oldDir := t.TempDir()
+	old, err := svc.Lease(ctx, LeaseRequest{WorkDir: oldDir, Root: "work", Name: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, oldPlan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: oldDir, Implicit: true, Scope: registry.ReleaseScopeRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyRelease(ctx, oldPlan, false); err != nil {
+		t.Fatal(err)
+	}
+
+	newDir := t.TempDir()
+	current, err := svc.Lease(ctx, LeaseRequest{WorkDir: newDir, Root: "work", Name: "app"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Host != old.Host || current.Port != old.Port {
+		t.Fatalf("identity not reused: old=%+v current=%+v", old, current)
+	}
+	for _, req := range []ReleaseRequest{{Host: old.Host}, {Port: old.Port}} {
+		got, _, err := svc.PlanRelease(ctx, req)
+		if err != nil || got.Matched != 1 || got.Items[0].Path != newDir {
+			t.Fatalf("current-owner request=%+v result=%+v err=%v", req, got, err)
+		}
+	}
+
+	forgotten, forgetPlan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: oldDir, Implicit: true, Scope: registry.ReleaseScopeAll, Forget: true})
+	if err != nil || forgotten.Matched != 1 || forgotten.Items[0].Path != oldDir {
+		t.Fatalf("old path forget=%+v err=%v", forgotten, err)
+	}
+	if _, err := svc.ApplyRelease(ctx, forgetPlan, false); err != nil {
+		t.Fatal(err)
+	}
+	stillCurrent, _, err := svc.PlanRelease(ctx, ReleaseRequest{Host: old.Host})
+	if err != nil || stillCurrent.Matched != 1 || stillCurrent.Items[0].Path != newDir {
+		t.Fatalf("current owner changed after old forget: %+v err=%v", stillCurrent, err)
+	}
+	gone, _, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: oldDir, Implicit: true, Scope: registry.ReleaseScopeAll, Forget: true})
+	if err != nil || gone.Matched != 0 || gone.Items == nil {
+		t.Fatalf("old history remains: %+v err=%v", gone, err)
+	}
+}
+
+func TestServiceReleaseJSONVariantsAndNullableFields(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44280, End: 44300})
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Port(ctx, PortRequest{WorkDir: dir, Name: "VITE Dev"}); err != nil {
+		t.Fatal(err)
+	}
+
+	pathResult, pathPlan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Path: ".", Scope: registry.ReleaseScopeRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertReleaseSelectorJSON(t, pathResult.Selector, []string{"type", "path", "implicit", "recursive", "scope"}, []string{"host", "port", "name"})
+	assertReleaseSelectorJSON(t, mustPlanRelease(t, svc, ctx, ReleaseRequest{Host: "APP.WORK.LEWP"}).Selector, []string{"type", "host"}, []string{"path", "implicit", "recursive", "scope", "name", "port"})
+	assertReleaseSelectorJSON(t, mustPlanRelease(t, svc, ctx, ReleaseRequest{Port: *pathResult.Items[0].Port}).Selector, []string{"type", "port"}, []string{"path", "implicit", "recursive", "scope", "name", "host"})
+
+	if _, err := svc.ApplyRelease(ctx, pathPlan, false); err != nil {
+		t.Fatal(err)
+	}
+	forget, _, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeAll, Forget: true})
+	if err != nil || len(forget.Items) != 2 {
+		t.Fatalf("forget=%+v err=%v", forget, err)
+	}
+	payload, err := json.Marshal(forget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object struct {
+		Items []map[string]json.RawMessage `json:"items"`
+	}
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatal(err)
+	}
+	if string(object.Items[0]["port"]) != "null" {
+		t.Fatalf("released active port is not null: %s", payload)
+	}
+	if _, ok := object.Items[0]["name"]; ok {
+		t.Fatalf("route leaked port-only name: %s", payload)
+	}
+	if _, ok := object.Items[1]["host"]; ok {
+		t.Fatalf("bare port leaked route-only host: %s", payload)
+	}
+	if _, ok := object.Items[1]["hosts"]; ok {
+		t.Fatalf("bare port leaked route-only hosts: %s", payload)
+	}
+	for i, item := range object.Items {
+		for _, key := range []string{"port", "ports", "actions"} {
+			if _, ok := item[key]; !ok {
+				t.Fatalf("item %d omitted %s: %s", i, key, payload)
+			}
+		}
+	}
+}
+
+func TestServiceReleaseHealthChangeDoesNotInvalidatePlan(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44301, End: 44309})
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "missing", "app")
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	planned, plan, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeRoute})
+	if err != nil || planned.Items[0].State != "stale" {
+		t.Fatalf("planned=%+v err=%v", planned, err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := svc.ApplyRelease(ctx, plan, false)
+	if err != nil || applied.Released != 1 {
+		t.Fatalf("applied=%+v err=%v", applied, err)
+	}
+}
+
+func TestServiceApplyReleasePropagatesChangedPlan(t *testing.T) {
+	store := openStore(t)
+	svc := NewService(store, registry.PortRange{Start: 44310, End: 44320})
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := svc.Lease(ctx, LeaseRequest{WorkDir: dir, Root: "work", Name: "app"}); err != nil {
+		t.Fatal(err)
+	}
+	_, stale, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, current, err := svc.PlanRelease(ctx, ReleaseRequest{WorkDir: dir, Implicit: true, Scope: registry.ReleaseScopeRoute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ApplyRelease(ctx, current, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.ApplyRelease(ctx, stale, false)
+	if !errors.Is(err, registry.ErrReleasePlanChanged) || got.Items != nil {
+		t.Fatalf("result=%+v err=%v", got, err)
+	}
+}
+
+func mustPlanRelease(t *testing.T, svc *Service, ctx context.Context, req ReleaseRequest) ReleaseResponse {
+	t.Helper()
+	result, _, err := svc.PlanRelease(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func assertReleaseSelectorJSON(t *testing.T, selector ReleaseSelector, present, absent []string) {
+	t.Helper()
+	payload, err := json.Marshal(selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range present {
+		if _, ok := object[key]; !ok {
+			t.Fatalf("selector omitted %q: %s", key, payload)
+		}
+	}
+	for _, key := range absent {
+		if _, ok := object[key]; ok {
+			t.Fatalf("selector included %q: %s", key, payload)
+		}
+	}
+}
 
 func TestServiceLeasePortReleaseAndList(t *testing.T) {
 	store := openStore(t)

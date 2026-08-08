@@ -37,23 +37,25 @@ const (
 )
 
 type Request struct {
-	Command string         `json:"command"`
-	Lease   LeaseRequest   `json:"lease,omitempty"`
-	Port    PortRequest    `json:"port,omitempty"`
-	Release ReleaseRequest `json:"release,omitempty"`
-	Info    InfoRequest    `json:"info,omitempty"`
-	Move    MoveRequest    `json:"move,omitempty"`
-	Alias   AliasRequest   `json:"alias,omitempty"`
-	All     bool           `json:"all,omitempty"`
+	Command     string                `json:"command"`
+	Lease       LeaseRequest          `json:"lease,omitempty"`
+	Port        PortRequest           `json:"port,omitempty"`
+	Release     ReleaseRequest        `json:"release,omitempty"`
+	ReleasePlan *registry.ReleasePlan `json:"release_plan,omitempty"`
+	Info        InfoRequest           `json:"info,omitempty"`
+	Move        MoveRequest           `json:"move,omitempty"`
+	Alias       AliasRequest          `json:"alias,omitempty"`
+	All         bool                  `json:"all,omitempty"`
 }
 
 type Response struct {
-	Lease       *LeaseResponse       `json:"lease,omitempty"`
-	Release     *ReleaseResponse     `json:"release,omitempty"`
-	AliasRemove *AliasRemoveResponse `json:"alias_remove,omitempty"`
-	Entries     []ListEntry          `json:"entries,omitempty"`
-	Checks      []string             `json:"checks,omitempty"`
-	Error       string               `json:"error,omitempty"`
+	Lease       *LeaseResponse        `json:"lease,omitempty"`
+	Release     *ReleaseResponse      `json:"release,omitempty"`
+	ReleasePlan *registry.ReleasePlan `json:"release_plan,omitempty"`
+	AliasRemove *AliasRemoveResponse  `json:"alias_remove,omitempty"`
+	Entries     []ListEntry           `json:"entries,omitempty"`
+	Checks      []string              `json:"checks,omitempty"`
+	Error       string                `json:"error,omitempty"`
 }
 
 func (r Response) MarshalJSON() ([]byte, error) {
@@ -63,6 +65,9 @@ func (r Response) MarshalJSON() ([]byte, error) {
 	}
 	if r.Release != nil {
 		obj["release"] = r.Release
+	}
+	if r.ReleasePlan != nil {
+		obj["release_plan"] = r.ReleasePlan
 	}
 	if r.AliasRemove != nil {
 		obj["alias_remove"] = r.AliasRemove
@@ -245,6 +250,21 @@ func dispatch(ctx context.Context, svc *Service, req Request) (Response, error) 
 	case "release":
 		res, err := svc.Release(ctx, req.Release)
 		return Response{Release: &res}, err
+	case "release-plan":
+		res, plan, err := svc.PlanRelease(ctx, req.Release)
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Release: &res, ReleasePlan: &plan}, nil
+	case "release-apply":
+		if req.ReleasePlan == nil {
+			return Response{}, errors.New("release-apply requires a release plan")
+		}
+		res, err := svc.ApplyRelease(ctx, *req.ReleasePlan, req.Release.DryRun)
+		if err != nil {
+			return Response{}, err
+		}
+		return Response{Release: &res}, nil
 	case "list":
 		entries, err := svc.List(ctx, req.All)
 		return Response{Entries: entries}, err

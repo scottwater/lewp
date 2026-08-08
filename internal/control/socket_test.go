@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -366,6 +367,73 @@ func TestSocketCallAliasCommands(t *testing.T) {
 	}
 	if remove.AliasRemove == nil || remove.AliasRemove.Removed != 1 {
 		t.Fatalf("bad alias remove response: %+v", remove)
+	}
+
+	cancel()
+	select {
+	case err := <-errs:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop")
+	}
+}
+
+func TestSocketCallReleasePlanAndApplyKeepsPrivatePlanOuter(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	socketDir, err := os.MkdirTemp("/tmp", fmt.Sprintf("lewp-%d-", time.Now().UnixNano()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(socketDir) })
+	socketPath := filepath.Join(socketDir, "control.sock")
+	registryPath := t.TempDir() + "/registry.sqlite"
+	workDir := t.TempDir()
+
+	errs := make(chan error, 1)
+	go func() {
+		errs <- Serve(ctx, socketPath, registryPath, registry.PortRange{Start: 44330, End: 44340})
+	}()
+	waitForSocket(t, socketPath, errs)
+	if _, err := Call(ctx, socketPath, Request{Command: "add", Lease: LeaseRequest{WorkDir: workDir, Root: "work", Name: "app"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	planned, err := Call(ctx, socketPath, Request{
+		Command: "release-plan",
+		Release: ReleaseRequest{WorkDir: workDir, Implicit: true, Scope: registry.ReleaseScopeAll},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planned.Release == nil || planned.ReleasePlan == nil || planned.Release.Matched != 1 {
+		t.Fatalf("planned=%+v", planned)
+	}
+	outer, err := json.Marshal(planned)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsJSONKey(outer, "release_plan") {
+		t.Fatalf("private plan missing from outer protocol: %s", outer)
+	}
+	public, err := json.Marshal(planned.Release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"RouteID", "Leases", "PortRows", "Fingerprint", "release_plan"} {
+		if bytes.Contains(public, []byte(private)) {
+			t.Fatalf("public response leaked %q: %s", private, public)
+		}
+	}
+
+	applied, err := Call(ctx, socketPath, Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan})
+	if err != nil || applied.Release == nil || applied.Release.Released != 1 {
+		t.Fatalf("applied=%+v err=%v", applied, err)
+	}
+	if _, err := Call(ctx, socketPath, Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan}); err == nil {
+		t.Fatal("stale plan apply succeeded")
 	}
 
 	cancel()

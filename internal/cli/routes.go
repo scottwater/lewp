@@ -360,7 +360,7 @@ func runRelease(cfg Config) int {
 		fmt.Fprintln(cfg.Stderr, "Run: lewp release --help")
 		return 2
 	}
-	req := control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: forget, Env: cfg.Env}
+	req := control.ReleaseRequest{WorkDir: cfg.WorkDir, Forget: forget}
 	switch scope {
 	case releaseEverything:
 		req.All = true
@@ -374,7 +374,14 @@ func runRelease(cfg Config) int {
 	}
 	var routes, ports int
 	if resp.Release != nil {
-		routes, ports = resp.Release.Routes, resp.Release.Ports
+		for _, item := range resp.Release.Items {
+			switch item.Kind {
+			case identity.KindRoute:
+				routes++
+			case identity.KindPort:
+				ports++
+			}
+		}
 	}
 	switch scope {
 	case releasePortOnly:

@@ -69,17 +69,22 @@ type PortRequest struct {
 }
 
 type ReleaseRequest struct {
-	WorkDir string
-	Root    string
-	Name    string
-	Forget  bool
-	// Env carries client-process identity environment values; see LeaseRequest.
-	Env map[string]string
-	// Kind selects what to release; empty means route. KindPort releases a bare
-	// port lease (by Name, defaulting to "port") for the current directory.
-	Kind identity.Kind
-	// All releases the route and every bare port for the current directory.
-	All bool
+	WorkDir   string                `json:"work_dir,omitempty"`
+	Path      string                `json:"path,omitempty"`
+	Host      string                `json:"host,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Port      int                   `json:"port,omitempty"`
+	Recursive bool                  `json:"recursive,omitempty"`
+	Forget    bool                  `json:"forget,omitempty"`
+	DryRun    bool                  `json:"dry_run,omitempty"`
+	Implicit  bool                  `json:"implicit,omitempty"`
+	Scope     registry.ReleaseScope `json:"scope,omitempty"`
+
+	// Root, Kind, and All are private-protocol compatibility fields used only by
+	// the legacy internal release dispatch until the CLI adopts selectors.
+	Root string        `json:"root,omitempty"`
+	Kind identity.Kind `json:"kind,omitempty"`
+	All  bool          `json:"all,omitempty"`
 }
 
 type InfoRequest struct {
@@ -112,11 +117,45 @@ type LeaseResponse struct {
 	ReleaseState string `json:"release_state"`
 }
 
-// ReleaseResponse reports how many active leases a release call freed, split by
-// kind so the CLI can report no-op cases and counts.
+// ReleaseSelector is the public, ID-free description of a planned selector.
+// Pointer fields make selector variants encode exactly: path-only booleans are
+// present even when false, while fields belonging to other variants are absent.
+type ReleaseSelector struct {
+	Type      registry.ReleaseSelectorType `json:"type"`
+	Path      *string                      `json:"path,omitempty"`
+	Implicit  *bool                        `json:"implicit,omitempty"`
+	Recursive *bool                        `json:"recursive,omitempty"`
+	Scope     *registry.ReleaseScope       `json:"scope,omitempty"`
+	Name      *string                      `json:"name,omitempty"`
+	Host      *string                      `json:"host,omitempty"`
+	Port      *int                         `json:"port,omitempty"`
+}
+
+type ReleaseHost struct {
+	Host string `json:"host"`
+	Type string `json:"type"`
+}
+
+type ReleaseItem struct {
+	Kind    identity.Kind            `json:"kind"`
+	Path    string                   `json:"path"`
+	State   string                   `json:"state"`
+	Port    *int                     `json:"port"`
+	Ports   []int                    `json:"ports"`
+	Actions []registry.ReleaseAction `json:"actions"`
+	Host    string                   `json:"host,omitempty"`
+	Hosts   []ReleaseHost            `json:"hosts,omitempty"`
+	Name    string                   `json:"name,omitempty"`
+}
+
 type ReleaseResponse struct {
-	Routes int `json:"routes"`
-	Ports  int `json:"ports"`
+	Operation string          `json:"operation"`
+	DryRun    bool            `json:"dry_run"`
+	Selector  ReleaseSelector `json:"selector"`
+	Matched   int             `json:"matched"`
+	Released  int             `json:"released"`
+	Forgotten int             `json:"forgotten"`
+	Items     []ReleaseItem   `json:"items"`
 }
 
 type ListEntry struct {
@@ -254,61 +293,240 @@ func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, err
 	return response(resolved, lease.Port, leaseState(lease, false)), nil
 }
 
-func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseResponse, error) {
-	kind := req.Kind
-	if kind == "" {
-		kind = identity.KindRoute
-	}
-	// Bare-port release targets a single named port lease for this directory.
-	if kind == identity.KindPort {
-		name := req.Name
-		if name == "" {
-			name = "port"
-		}
-		resolved, err := identity.Resolve(ctx, identity.Options{
-			WorkDir: req.WorkDir,
-			Name:    name,
-			Env:     requestEnv(req.Env),
-			Kind:    identity.KindPort,
-		})
-		if err != nil {
-			return ReleaseResponse{}, err
-		}
-		n, err := s.store.Release(ctx, resolved.Path, identity.KindPort, resolved.NormalizedName, req.Forget)
-		return ReleaseResponse{Ports: n}, err
-	}
-	// Explicit root/name releases a single named route.
-	if req.Root != "" || req.Name != "" {
-		resolved, err := identity.Resolve(ctx, identity.Options{
-			WorkDir: req.WorkDir,
-			Root:    req.Root,
-			Name:    req.Name,
-			Env:     requestEnv(req.Env),
-			Kind:    identity.KindRoute,
-		})
-		if err != nil {
-			return ReleaseResponse{}, err
-		}
-		n, err := s.store.Release(ctx, resolved.Path, identity.KindRoute, resolved.NormalizedName, req.Forget)
-		return ReleaseResponse{Routes: n}, err
-	}
-	abs, err := absWorkDir(req.WorkDir)
+// PlanRelease canonicalizes a public selector and asks the registry for one
+// deterministic snapshot. The returned public response intentionally contains
+// no registry row IDs or fingerprint data.
+func (s *Service) PlanRelease(ctx context.Context, req ReleaseRequest) (ReleaseResponse, registry.ReleasePlan, error) {
+	selector, publicSelector, err := canonicalReleaseSelector(req)
 	if err != nil {
-		return ReleaseResponse{}, err
+		return ReleaseResponse{}, registry.ReleasePlan{}, err
 	}
-	routes, err := s.store.ReleasePath(ctx, abs, identity.KindRoute, req.Forget)
+	plan, err := s.store.PlanRelease(ctx, selector, req.Forget)
 	if err != nil {
-		return ReleaseResponse{}, err
+		return ReleaseResponse{}, registry.ReleasePlan{}, err
 	}
-	if !req.All {
-		return ReleaseResponse{Routes: routes}, nil
-	}
-	ports, err := s.store.ReleasePath(ctx, abs, identity.KindPort, req.Forget)
-	if err != nil {
-		return ReleaseResponse{}, err
-	}
-	return ReleaseResponse{Routes: routes, Ports: ports}, nil
+	return releaseResponse(plan, publicSelector, req.DryRun), plan, nil
 }
+
+// ApplyRelease maps the validated plan to its public pre-mutation form before
+// atomically applying it. A failed registry validation/application never returns
+// a successful-looking response.
+func (s *Service) ApplyRelease(ctx context.Context, plan registry.ReleasePlan, dryRun bool) (ReleaseResponse, error) {
+	publicSelector := publicReleaseSelector(plan.Selector, false)
+	result := releaseResponse(plan, publicSelector, dryRun)
+	if dryRun {
+		return result, nil
+	}
+	applied, err := s.store.ApplyRelease(ctx, plan)
+	if err != nil {
+		return ReleaseResponse{}, err
+	}
+	result.Released = applied.Released
+	result.Forgotten = applied.Forgotten
+	return result, nil
+}
+
+// Release preserves the legacy private command as immediate plan plus atomic
+// apply. It does not use the older per-kind mutation methods.
+func (s *Service) Release(ctx context.Context, req ReleaseRequest) (ReleaseResponse, error) {
+	legacy := req
+	legacy.Implicit = true
+	legacy.Path = ""
+	legacy.Host = ""
+	legacy.Port = 0
+	legacy.Recursive = false
+	legacy.Scope = registry.ReleaseScopeRoute
+	if req.All {
+		legacy.Scope = registry.ReleaseScopeAll
+	}
+	if req.Kind == identity.KindPort {
+		legacy.Scope = registry.ReleaseScopeName
+		if legacy.Name == "" {
+			legacy.Name = "port"
+		}
+	} else {
+		legacy.Name = ""
+	}
+	_, plan, err := s.PlanRelease(ctx, legacy)
+	if err != nil {
+		return ReleaseResponse{}, err
+	}
+	return s.ApplyRelease(ctx, plan, req.DryRun)
+}
+
+func canonicalReleaseSelector(req ReleaseRequest) (registry.ReleaseSelector, ReleaseSelector, error) {
+	pathSelected := req.Path != "" || req.Implicit
+	hostSelected := req.Host != ""
+	portSelected := req.Port != 0
+	selected := 0
+	for _, present := range []bool{pathSelected, hostSelected, portSelected} {
+		if present {
+			selected++
+		}
+	}
+	if selected != 1 {
+		return registry.ReleaseSelector{}, ReleaseSelector{}, errors.New("release requires exactly one path, host, or port selector")
+	}
+	if req.Path != "" && req.Implicit {
+		return registry.ReleaseSelector{}, ReleaseSelector{}, errors.New("release path and implicit current-directory selectors cannot be combined")
+	}
+
+	if pathSelected {
+		var path string
+		var err error
+		if req.Implicit {
+			path, err = absWorkDir(req.WorkDir)
+		} else if filepath.IsAbs(req.Path) {
+			path = filepath.Clean(req.Path)
+		} else {
+			if req.WorkDir == "" {
+				return registry.ReleaseSelector{}, ReleaseSelector{}, errors.New("request has no working directory")
+			}
+			path, err = filepath.Abs(filepath.Join(req.WorkDir, req.Path))
+		}
+		if err != nil {
+			return registry.ReleaseSelector{}, ReleaseSelector{}, fmt.Errorf("resolve release path: %w", err)
+		}
+		name := req.Name
+		if req.Scope == registry.ReleaseScopeName {
+			name, _, err = identity.NormalizeLabel(name)
+			if err != nil {
+				return registry.ReleaseSelector{}, ReleaseSelector{}, fmt.Errorf("invalid release name %q: %w", req.Name, err)
+			}
+		}
+		selector := registry.ReleaseSelector{
+			Type:      registry.ReleaseSelectorPath,
+			Path:      path,
+			Recursive: req.Recursive,
+			Scope:     req.Scope,
+			Name:      name,
+		}
+		return selector, publicReleaseSelector(selector, req.Implicit), nil
+	}
+
+	if hostSelected {
+		if req.Recursive || req.Scope != "" || req.Name != "" {
+			return registry.ReleaseSelector{}, ReleaseSelector{}, errors.New("release host selector cannot include recursive, scope, or name values")
+		}
+		host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(req.Host)), ".")
+		if host == "" {
+			return registry.ReleaseSelector{}, ReleaseSelector{}, errors.New("release host selector requires a host")
+		}
+		selector := registry.ReleaseSelector{Type: registry.ReleaseSelectorHost, Host: host}
+		return selector, publicReleaseSelector(selector, false), nil
+	}
+
+	if req.Recursive || req.Scope != "" || req.Name != "" {
+		return registry.ReleaseSelector{}, ReleaseSelector{}, errors.New("release port selector cannot include recursive, scope, or name values")
+	}
+	selector := registry.ReleaseSelector{Type: registry.ReleaseSelectorPort, Port: req.Port}
+	return selector, publicReleaseSelector(selector, false), nil
+}
+
+func publicReleaseSelector(selector registry.ReleaseSelector, implicit bool) ReleaseSelector {
+	public := ReleaseSelector{Type: selector.Type}
+	switch selector.Type {
+	case registry.ReleaseSelectorPath:
+		public.Implicit = boolPointer(implicit)
+		public.Recursive = boolPointer(selector.Recursive)
+		public.Scope = releaseScopePointer(selector.Scope)
+		if !implicit {
+			public.Path = stringPointer(selector.Path)
+		}
+		if selector.Scope == registry.ReleaseScopeName {
+			public.Name = stringPointer(selector.Name)
+		}
+	case registry.ReleaseSelectorHost:
+		public.Host = stringPointer(selector.Host)
+	case registry.ReleaseSelectorPort:
+		public.Port = intPointer(selector.Port)
+	}
+	return public
+}
+
+func releaseResponse(plan registry.ReleasePlan, selector ReleaseSelector, dryRun bool) ReleaseResponse {
+	items := make([]ReleaseItem, 0, len(plan.Items))
+	response := ReleaseResponse{
+		Operation: "release",
+		DryRun:    dryRun,
+		Selector:  selector,
+		Matched:   len(plan.Items),
+		Items:     items,
+	}
+	if plan.Forget {
+		response.Operation = "forget"
+	}
+	for _, planned := range plan.Items {
+		item := publicReleaseItem(planned)
+		response.Items = append(response.Items, item)
+		for _, action := range item.Actions {
+			switch action {
+			case registry.ReleaseActionRelease:
+				response.Released++
+			case registry.ReleaseActionForget:
+				response.Forgotten++
+			}
+		}
+	}
+	return response
+}
+
+func publicReleaseItem(planned registry.ReleasePlanItem) ReleaseItem {
+	ports := append([]int{}, planned.Ports...)
+	actions := append([]registry.ReleaseAction{}, planned.Actions...)
+	item := ReleaseItem{
+		Kind:    planned.Kind,
+		Path:    planned.Path,
+		State:   releaseItemState(planned),
+		Ports:   ports,
+		Actions: actions,
+	}
+	if planned.ActivePort != nil {
+		port := *planned.ActivePort
+		item.Port = &port
+	}
+	if planned.Kind == identity.KindRoute {
+		item.Host = planned.Host
+		item.Hosts = make([]ReleaseHost, 0, len(planned.Hosts))
+		seen := make(map[string]struct{}, len(planned.Hosts))
+		for _, host := range planned.Hosts {
+			key := host.Host + "\x00" + host.Type
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			item.Hosts = append(item.Hosts, ReleaseHost{Host: host.Host, Type: host.Type})
+		}
+	} else {
+		item.Name = planned.Name
+	}
+	return item
+}
+
+func releaseItemState(item registry.ReleasePlanItem) string {
+	if item.RegistryState != registry.StateActive {
+		return registry.StateReleased
+	}
+	if item.Path != "" {
+		if _, err := os.Stat(item.Path); os.IsNotExist(err) {
+			return "stale"
+		}
+	}
+	if item.ActivePort == nil {
+		return "down"
+	}
+	conn, err := net.Dial("tcp", net.JoinHostPort("127.0.0.1", fmt.Sprint(*item.ActivePort)))
+	if err != nil {
+		return "down"
+	}
+	_ = conn.Close()
+	return "up"
+}
+
+func boolPointer(value bool) *bool                                           { return &value }
+func stringPointer(value string) *string                                     { return &value }
+func intPointer(value int) *int                                              { return &value }
+func releaseScopePointer(value registry.ReleaseScope) *registry.ReleaseScope { return &value }
 
 // describeReset compares the previously remembered identity for a directory
 // against the freshly re-resolved one and, when --reset actually changes a
