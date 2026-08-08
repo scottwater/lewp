@@ -98,7 +98,7 @@ var ErrReleasePlanChanged = errors.New("release plan changed; rerun the release 
 
 // PlanRelease builds a deterministic logical-allocation plan from one registry
 // snapshot. It does not mutate the registry.
-func (s *Store) PlanRelease(ctx context.Context, selector ReleaseSelector, forget bool) (ReleasePlan, error) {
+func (s *Store) PlanRelease(ctx context.Context, selector ReleaseSelector, forget bool) (plan ReleasePlan, err error) {
 	canonical, err := validateReleaseSelector(selector)
 	if err != nil {
 		return ReleasePlan{}, err
@@ -107,21 +107,25 @@ func (s *Store) PlanRelease(ctx context.Context, selector ReleaseSelector, forge
 	if err != nil {
 		return ReleasePlan{}, err
 	}
-	defer tx.Rollback()
-	plan, err := buildReleasePlan(ctx, tx, canonical, forget)
+	committed := false
+	defer func() {
+		err = joinReleaseRollbackError(err, tx.Rollback(), committed, "plan release")
+	}()
+	plan, err = buildReleasePlan(ctx, tx, canonical, forget)
 	if err != nil {
 		return ReleasePlan{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return ReleasePlan{}, err
 	}
+	committed = true
 	return plan, nil
 }
 
 // ApplyRelease validates and applies a previously built plan atomically. The
 // DSN's _txlock=immediate setting makes this transaction take SQLite's writer
 // lock before rebuilding the plan, serializing validation with later writers.
-func (s *Store) ApplyRelease(ctx context.Context, plan ReleasePlan) (ReleaseApplyResult, error) {
+func (s *Store) ApplyRelease(ctx context.Context, plan ReleasePlan) (result ReleaseApplyResult, err error) {
 	selector, err := validateReleaseSelector(plan.Selector)
 	if err != nil {
 		return ReleaseApplyResult{}, err
@@ -130,7 +134,10 @@ func (s *Store) ApplyRelease(ctx context.Context, plan ReleasePlan) (ReleaseAppl
 	if err != nil {
 		return ReleaseApplyResult{}, err
 	}
-	defer tx.Rollback()
+	committed := false
+	defer func() {
+		err = joinReleaseRollbackError(err, tx.Rollback(), committed, "apply release")
+	}()
 
 	current, err := buildReleasePlan(ctx, tx, selector, plan.Forget)
 	if err != nil {
@@ -141,7 +148,6 @@ func (s *Store) ApplyRelease(ctx context.Context, plan ReleasePlan) (ReleaseAppl
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	var result ReleaseApplyResult
 	for _, item := range current.Items {
 		for _, action := range item.Actions {
 			switch action {
@@ -160,10 +166,22 @@ func (s *Store) ApplyRelease(ctx context.Context, plan ReleasePlan) (ReleaseAppl
 			}
 		}
 	}
-	if err := tx.Commit(); err != nil {
+	if err = tx.Commit(); err != nil {
 		return ReleaseApplyResult{}, err
 	}
+	committed = true
 	return result, nil
+}
+
+func joinReleaseRollbackError(original, rollbackErr error, committed bool, operation string) error {
+	if rollbackErr == nil || committed && errors.Is(rollbackErr, sql.ErrTxDone) {
+		return original
+	}
+	rollbackErr = fmt.Errorf("%s transaction rollback: %w", operation, rollbackErr)
+	if original == nil {
+		return rollbackErr
+	}
+	return errors.Join(original, rollbackErr)
 }
 
 func validateReleaseSelector(selector ReleaseSelector) (ReleaseSelector, error) {
@@ -339,11 +357,16 @@ order by case host_type when 'primary' then 0 when 'alias' then 1 when 'wildcard
 				_ = leaseRows.Close()
 				return nil, err
 			}
-			item.Leases = append(item.Leases, lease)
-			if lease.State == StateActive {
+			switch lease.State {
+			case StateActive:
 				port := lease.Port
 				item.ActivePort = &port
+			case StateReleased:
+			default:
+				_ = leaseRows.Close()
+				return nil, fmt.Errorf("route %q at path %q lease row %d has invalid state %q", item.Name, item.Path, lease.ID, lease.State)
 			}
+			item.Leases = append(item.Leases, lease)
 		}
 		if err := leaseRows.Err(); err != nil {
 			_ = leaseRows.Close()
@@ -374,6 +397,11 @@ func readReleasePorts(ctx context.Context, tx *sql.Tx) ([]ReleasePlanItem, error
 		var path string
 		if err := rows.Scan(&row.ID, &path, &row.Name, &row.NormalizedName, &row.Port, &row.State); err != nil {
 			return nil, err
+		}
+		switch row.State {
+		case StateActive, StateReleased:
+		default:
+			return nil, fmt.Errorf("port %q at path %q row %d has invalid state %q", row.NormalizedName, path, row.ID, row.State)
 		}
 		key := path + "\x00" + row.NormalizedName
 		index, ok := byIdentity[key]
@@ -469,71 +497,82 @@ func uniqueReleasePortsFromRows(rows []ReleasePortVersion) []int {
 }
 
 func applyLogicalRelease(ctx context.Context, tx *sql.Tx, item ReleasePlanItem, now string) error {
+	logicalIdentity := releaseLogicalIdentity(item)
 	switch item.Kind {
 	case identity.KindRoute:
 		res, err := tx.ExecContext(ctx, `update leases set state=?, released_at=?, updated_at=? where route_id=? and state=?`, StateReleased, now, now, item.RouteID, StateActive)
 		if err != nil {
-			return err
+			return fmt.Errorf("release %s: update active lease: %w", logicalIdentity, err)
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return err
+			return fmt.Errorf("release %s: count updated leases: %w", logicalIdentity, err)
 		}
 		if affected == 0 {
-			return ErrReleasePlanChanged
+			return fmt.Errorf("release %s: %w", logicalIdentity, ErrReleasePlanChanged)
 		}
-		_, err = tx.ExecContext(ctx, `insert into events(route_id, event_type, message, created_at) values(?, ?, ?, ?)`, item.RouteID, "released", "released lease", now)
-		return err
+		if _, err := tx.ExecContext(ctx, `insert into events(route_id, event_type, message, created_at) values(?, ?, ?, ?)`, item.RouteID, "released", "released lease", now); err != nil {
+			return fmt.Errorf("release %s: record event: %w", logicalIdentity, err)
+		}
+		return nil
 	case identity.KindPort:
 		res, err := tx.ExecContext(ctx, `update ports set state=?, released_at=?, updated_at=? where path=? and normalized_name=? and state=?`, StateReleased, now, now, item.Path, item.Name, StateActive)
 		if err != nil {
-			return err
+			return fmt.Errorf("release %s: update active row: %w", logicalIdentity, err)
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return err
+			return fmt.Errorf("release %s: count updated rows: %w", logicalIdentity, err)
 		}
 		if affected == 0 {
-			return ErrReleasePlanChanged
+			return fmt.Errorf("release %s: %w", logicalIdentity, ErrReleasePlanChanged)
 		}
 		return nil
 	default:
-		return fmt.Errorf("invalid release item kind %q", item.Kind)
+		return fmt.Errorf("release %s: invalid item kind %q", logicalIdentity, item.Kind)
 	}
 }
 
 func applyLogicalForget(ctx context.Context, tx *sql.Tx, item ReleasePlanItem) error {
+	logicalIdentity := releaseLogicalIdentity(item)
 	switch item.Kind {
 	case identity.KindRoute:
 		if _, err := tx.ExecContext(ctx, `delete from events where route_id=?`, item.RouteID); err != nil {
-			return err
+			return fmt.Errorf("forget %s: delete events: %w", logicalIdentity, err)
 		}
 		res, err := tx.ExecContext(ctx, `delete from routes where id=?`, item.RouteID)
 		if err != nil {
-			return err
+			return fmt.Errorf("forget %s: delete route history: %w", logicalIdentity, err)
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return err
+			return fmt.Errorf("forget %s: count deleted routes: %w", logicalIdentity, err)
 		}
 		if affected == 0 {
-			return ErrReleasePlanChanged
+			return fmt.Errorf("forget %s: %w", logicalIdentity, ErrReleasePlanChanged)
 		}
 		return nil
 	case identity.KindPort:
 		res, err := tx.ExecContext(ctx, `delete from ports where path=? and normalized_name=?`, item.Path, item.Name)
 		if err != nil {
-			return err
+			return fmt.Errorf("forget %s: delete port history: %w", logicalIdentity, err)
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
-			return err
+			return fmt.Errorf("forget %s: count deleted rows: %w", logicalIdentity, err)
 		}
 		if affected == 0 {
-			return ErrReleasePlanChanged
+			return fmt.Errorf("forget %s: %w", logicalIdentity, ErrReleasePlanChanged)
 		}
 		return nil
 	default:
-		return fmt.Errorf("invalid release item kind %q", item.Kind)
+		return fmt.Errorf("forget %s: invalid item kind %q", logicalIdentity, item.Kind)
 	}
+}
+
+func releaseLogicalIdentity(item ReleasePlanItem) string {
+	if item.Kind == identity.KindRoute {
+		return fmt.Sprintf("route %q at path %q (row %d)", item.Name, item.Path, item.RouteID)
+	}
+	return fmt.Sprintf("port %q at path %q", item.Name, item.Path)
 }

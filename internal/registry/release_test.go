@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -23,6 +25,135 @@ func releaseRouteIdentity(path, name, host string) identity.Result {
 
 func releasePortIdentity(path, name string) identity.Result {
 	return identity.Result{Name: name, NormalizedName: name, Path: path, Kind: identity.KindPort}
+}
+
+func TestPlanReleaseRejectsInvalidSelectorsWithoutMutation(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	lease, err := store.LeaseRoute(ctx, releaseRouteIdentity(dir, "app", "app.work.lewp"), PortRange{Start: 42900, End: 42920})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name     string
+		selector ReleaseSelector
+	}{
+		{name: "invalid type", selector: ReleaseSelector{Type: ReleaseSelectorType("invalid")}},
+		{name: "path missing path", selector: ReleaseSelector{Type: ReleaseSelectorPath, Scope: ReleaseScopeAll}},
+		{name: "path invalid scope", selector: ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScope("invalid")}},
+		{name: "path all with name", selector: ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeAll, Name: "app"}},
+		{name: "path route with name", selector: ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeRoute, Name: "app"}},
+		{name: "path name missing name", selector: ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeName}},
+		{name: "path with host", selector: ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Host: "app.work.lewp", Scope: ReleaseScopeAll}},
+		{name: "path with port", selector: ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Port: lease.Port, Scope: ReleaseScopeAll}},
+		{name: "host missing host", selector: ReleaseSelector{Type: ReleaseSelectorHost}},
+		{name: "host with path", selector: ReleaseSelector{Type: ReleaseSelectorHost, Host: "app.work.lewp", Path: dir}},
+		{name: "host with port", selector: ReleaseSelector{Type: ReleaseSelectorHost, Host: "app.work.lewp", Port: lease.Port}},
+		{name: "host recursive", selector: ReleaseSelector{Type: ReleaseSelectorHost, Host: "app.work.lewp", Recursive: true}},
+		{name: "host with scope", selector: ReleaseSelector{Type: ReleaseSelectorHost, Host: "app.work.lewp", Scope: ReleaseScopeAll}},
+		{name: "host with name", selector: ReleaseSelector{Type: ReleaseSelectorHost, Host: "app.work.lewp", Name: "app"}},
+		{name: "port missing port", selector: ReleaseSelector{Type: ReleaseSelectorPort}},
+		{name: "port negative", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: -1}},
+		{name: "port too high", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: 65536}},
+		{name: "port with path", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: lease.Port, Path: dir}},
+		{name: "port with host", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: lease.Port, Host: "app.work.lewp"}},
+		{name: "port recursive", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: lease.Port, Recursive: true}},
+		{name: "port with scope", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: lease.Port, Scope: ReleaseScopeRoute}},
+		{name: "port with name", selector: ReleaseSelector{Type: ReleaseSelectorPort, Port: lease.Port, Name: "app"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := store.PlanRelease(ctx, tc.selector, true); err == nil {
+				t.Fatal("PlanRelease accepted invalid selector")
+			}
+			if _, err := store.ApplyRelease(ctx, ReleasePlan{Selector: tc.selector, Forget: true}); err == nil {
+				t.Fatal("ApplyRelease accepted invalid selector")
+			}
+			if got := countRows(t, store.db, `select count(*) from routes where id=?`, lease.RouteID); got != 1 {
+				t.Fatalf("routes=%d want 1 after rejected selector", got)
+			}
+			if got := countRows(t, store.db, `select count(*) from leases where id=? and state=?`, lease.ID, StateActive); got != 1 {
+				t.Fatalf("active leases=%d want 1 after rejected selector", got)
+			}
+		})
+	}
+}
+
+func TestPlanReleaseRejectsInvalidPersistedStatesWithoutForgetting(t *testing.T) {
+	cases := []struct {
+		name       string
+		create     func(context.Context, *Store, string) (int64, error)
+		corrupt    func(*Store, int64) error
+		rowTable   string
+		identityIn string
+	}{
+		{
+			name: "route lease",
+			create: func(ctx context.Context, store *Store, path string) (int64, error) {
+				lease, err := store.LeaseRoute(ctx, releaseRouteIdentity(path, "app", "app.work.lewp"), PortRange{Start: 42930, End: 42950})
+				return lease.ID, err
+			},
+			corrupt: func(store *Store, id int64) error {
+				_, err := store.db.Exec(`update leases set state='corrupt' where id=?`, id)
+				return err
+			},
+			rowTable:   "leases",
+			identityIn: "route",
+		},
+		{
+			name: "bare port row",
+			create: func(ctx context.Context, store *Store, path string) (int64, error) {
+				lease, err := store.LeasePort(ctx, releasePortIdentity(path, "vite"), PortRange{Start: 42930, End: 42950})
+				return lease.ID, err
+			},
+			corrupt: func(store *Store, id int64) error {
+				_, err := store.db.Exec(`update ports set state='corrupt' where id=?`, id)
+				return err
+			},
+			rowTable:   "ports",
+			identityIn: "port",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			ctx := context.Background()
+			dir := t.TempDir()
+			rowID, err := tc.create(ctx, store, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			selector := ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeAll}
+			validPlan, err := store.PlanRelease(ctx, selector, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.corrupt(store, rowID); err != nil {
+				t.Fatal(err)
+			}
+
+			assertInvalidStateError := func(label string, err error) {
+				t.Helper()
+				if err == nil {
+					t.Fatalf("%s accepted corrupt persisted state", label)
+				}
+				for _, want := range []string{tc.identityIn, dir, fmt.Sprintf("row %d", rowID), `state "corrupt"`} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("%s error %q missing %q", label, err, want)
+					}
+				}
+			}
+			_, err = store.PlanRelease(ctx, selector, true)
+			assertInvalidStateError("PlanRelease", err)
+			_, err = store.ApplyRelease(ctx, validPlan)
+			assertInvalidStateError("ApplyRelease", err)
+			if got := countRows(t, store.db, fmt.Sprintf(`select count(*) from %s where id=? and state='corrupt'`, tc.rowTable), rowID); got != 1 {
+				t.Fatalf("corrupt history rows=%d want 1 after rejected forget", got)
+			}
+		})
+	}
 }
 
 func TestPlanReleaseGroupsRoutesAndPortHistoryAtPath(t *testing.T) {
@@ -111,6 +242,112 @@ func TestPlanReleaseSelectorsRespectBoundariesAndCurrentOwnership(t *testing.T) 
 	historical, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorHost, Host: "app-0.work.lewp"}, true)
 	if err != nil || len(historical.Items) != 0 {
 		t.Fatalf("released host matched: %+v err=%v", historical, err)
+	}
+}
+
+func TestPlanReleaseRecursiveRootMatchesAbsoluteStoredPaths(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	routePath := filepath.Join(root, "route")
+	portPath := filepath.Join(root, "port")
+	if _, err := store.LeaseRoute(ctx, releaseRouteIdentity(routePath, "app", "app.work.lewp"), PortRange{Start: 43131, End: 43139}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LeasePort(ctx, releasePortIdentity(portPath, "vite"), PortRange{Start: 43131, End: 43139}); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorPath, Path: string(filepath.Separator), Recursive: true, Scope: ReleaseScopeAll}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPaths := []string{routePath, portPath}
+	sort.Strings(wantPaths)
+	if got := []string{plan.Items[0].Path, plan.Items[1].Path}; !reflect.DeepEqual(got, wantPaths) {
+		t.Fatalf("recursive root paths=%v want %v", got, wantPaths)
+	}
+	for _, item := range plan.Items {
+		if !filepath.IsAbs(item.Path) {
+			t.Fatalf("stored path %q is not absolute", item.Path)
+		}
+	}
+}
+
+func TestPlanReleaseNumericPortUsesOnlyCurrentOwner(t *testing.T) {
+	cases := []struct {
+		name       string
+		createOld  func(context.Context, *Store, string, int) error
+		releaseOld func(context.Context, *Store, string) error
+		createNew  func(context.Context, *Store, string, int) error
+		wantKind   identity.Kind
+		wantName   string
+	}{
+		{
+			name: "released route then current bare port",
+			createOld: func(ctx context.Context, store *Store, path string, port int) error {
+				return store.Remember(ctx, releaseRouteIdentity(path, "old-route", "old-route.work.lewp"), port)
+			},
+			releaseOld: func(ctx context.Context, store *Store, path string) error {
+				_, err := store.Release(ctx, path, identity.KindRoute, "old-route", false)
+				return err
+			},
+			createNew: func(ctx context.Context, store *Store, path string, port int) error {
+				return store.Remember(ctx, releasePortIdentity(path, "new-port"), port)
+			},
+			wantKind: identity.KindPort,
+			wantName: "new-port",
+		},
+		{
+			name: "released bare port then current route",
+			createOld: func(ctx context.Context, store *Store, path string, port int) error {
+				return store.Remember(ctx, releasePortIdentity(path, "old-port"), port)
+			},
+			releaseOld: func(ctx context.Context, store *Store, path string) error {
+				_, err := store.Release(ctx, path, identity.KindPort, "old-port", false)
+				return err
+			},
+			createNew: func(ctx context.Context, store *Store, path string, port int) error {
+				return store.Remember(ctx, releaseRouteIdentity(path, "new-route", "new-route.work.lewp"), port)
+			},
+			wantKind: identity.KindRoute,
+			wantName: "new-route",
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			ctx := context.Background()
+			root := t.TempDir()
+			oldPath := filepath.Join(root, "old")
+			newPath := filepath.Join(root, "new")
+			port := 43161 + i
+			if err := tc.createOld(ctx, store, oldPath, port); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.releaseOld(ctx, store, oldPath); err != nil {
+				t.Fatal(err)
+			}
+
+			historical, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorPort, Port: port}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(historical.Items) != 0 || len(historical.Fingerprint) != 0 {
+				t.Fatalf("released historical owner matched numeric port: %+v", historical)
+			}
+
+			if err := tc.createNew(ctx, store, newPath, port); err != nil {
+				t.Fatal(err)
+			}
+			current, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorPort, Port: port}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(current.Items) != 1 || current.Items[0].Path != newPath || current.Items[0].Kind != tc.wantKind || current.Items[0].Name != tc.wantName {
+				t.Fatalf("current owner plan=%+v", current)
+			}
+		})
 	}
 }
 
@@ -210,6 +447,92 @@ func TestApplyReleaseCountsActiveAndReleasedForgetTargets(t *testing.T) {
 	}
 	if got := countRows(t, store.db, `select count(*) from ports where path=?`, dir); got != 0 {
 		t.Fatalf("ports=%d", got)
+	}
+}
+
+func TestApplyReleaseForgetsReactivatedRouteHistory(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	route, err := store.LeaseRoute(ctx, releaseRouteIdentity(dir, "app", "app.work.lewp"), PortRange{Start: 43230, End: 43250})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, route.RouteID, "tags.app.work.lewp", HostTypeAlias, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Release(ctx, dir, identity.KindRoute, "app", false); err != nil {
+		t.Fatal(err)
+	}
+	reactivated, err := store.LeaseRoute(ctx, releaseRouteIdentity(dir, "app", "app.work.lewp"), PortRange{Start: 43230, End: 43250})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reactivated.ID == route.ID {
+		t.Fatalf("reactivated lease reused row ID %d", route.ID)
+	}
+
+	plan, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeRoute}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 1 || len(plan.Items[0].Leases) != 2 {
+		t.Fatalf("reactivated route history not grouped: %+v", plan.Items)
+	}
+	if got := []string{plan.Items[0].Leases[0].State, plan.Items[0].Leases[1].State}; !reflect.DeepEqual(got, []string{StateReleased, StateActive}) {
+		t.Fatalf("lease history states=%v", got)
+	}
+	result, err := store.ApplyRelease(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Released != 1 || result.Forgotten != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	assertRouteHistoryDeleted(t, store, route.RouteID)
+}
+
+func TestApplyReleaseForgetsReleasedOnlyRouteHistory(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	route, err := store.LeaseRoute(ctx, releaseRouteIdentity(dir, "app", "app.work.lewp"), PortRange{Start: 43260, End: 43280})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.AddRouteHost(ctx, route.RouteID, "*.app.work.lewp", HostTypeWildcard, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Release(ctx, dir, identity.KindRoute, "app", false); err != nil {
+		t.Fatal(err)
+	}
+	if got := countRows(t, store.db, `select count(*) from events where route_id=?`, route.RouteID); got < 2 {
+		t.Fatalf("events=%d want released route history before forget", got)
+	}
+
+	plan, err := store.PlanRelease(ctx, ReleaseSelector{Type: ReleaseSelectorPath, Path: dir, Scope: ReleaseScopeRoute}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Items) != 1 || plan.Items[0].RegistryState != StateReleased || !reflect.DeepEqual(plan.Items[0].Actions, []ReleaseAction{ReleaseActionForget}) {
+		t.Fatalf("released-only plan=%+v", plan)
+	}
+	result, err := store.ApplyRelease(ctx, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Released != 0 || result.Forgotten != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	assertRouteHistoryDeleted(t, store, route.RouteID)
+}
+
+func assertRouteHistoryDeleted(t *testing.T, store *Store, routeID int64) {
+	t.Helper()
+	for table, column := range map[string]string{"routes": "id", "route_hosts": "route_id", "leases": "route_id", "events": "route_id"} {
+		if got := countRows(t, store.db, fmt.Sprintf("select count(*) from %s where %s=?", table, column), routeID); got != 0 {
+			t.Fatalf("%s rows=%d want 0", table, got)
+		}
 	}
 }
 
@@ -445,6 +768,28 @@ func TestConcurrentApplyAndInScopeLeaseAreSerializable(t *testing.T) {
 	}
 }
 
+func TestJoinReleaseRollbackError(t *testing.T) {
+	original := errors.New("original failure")
+	rollback := errors.New("rollback failure")
+
+	joined := joinReleaseRollbackError(original, rollback, false, "apply release")
+	if !errors.Is(joined, original) || !errors.Is(joined, rollback) {
+		t.Fatalf("joined error=%v does not preserve both failures", joined)
+	}
+	if !strings.Contains(joined.Error(), "apply release transaction rollback") {
+		t.Fatalf("joined error=%q missing rollback context", joined)
+	}
+
+	notCommitted := joinReleaseRollbackError(original, sql.ErrTxDone, false, "plan release")
+	if !errors.Is(notCommitted, original) || !errors.Is(notCommitted, sql.ErrTxDone) {
+		t.Fatalf("pre-commit ErrTxDone was incorrectly ignored: %v", notCommitted)
+	}
+	committed := joinReleaseRollbackError(nil, sql.ErrTxDone, true, "plan release")
+	if committed != nil {
+		t.Fatalf("post-commit ErrTxDone=%v want nil", committed)
+	}
+}
+
 func TestApplyReleaseRollsBackMultiItemFailure(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -463,6 +808,12 @@ func TestApplyReleaseRollsBackMultiItemFailure(t *testing.T) {
 	}
 	if _, err := store.ApplyRelease(ctx, plan); err == nil {
 		t.Fatal("apply succeeded despite injected failure")
+	} else {
+		for _, want := range []string{`release port "two"`, dir, "injected apply failure"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("apply error %q missing %q", err, want)
+			}
+		}
 	}
 	if got := countRows(t, store.db, `select count(*) from ports where path=? and state=?`, dir, StateActive); got != 2 {
 		t.Fatalf("active rows=%d want 2 after rollback", got)
