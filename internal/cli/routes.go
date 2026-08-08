@@ -334,6 +334,9 @@ func parseReleaseArgs(args []string) (releaseOptions, error) {
 				return "", fmt.Errorf("%s requires a value", flagName)
 			}
 			i++
+			if args[i] == "" {
+				return "", fmt.Errorf("%s requires a value", flagName)
+			}
 			return args[i], nil
 		}
 		switch {
@@ -348,11 +351,21 @@ func parseReleaseArgs(args []string) (releaseOptions, error) {
 			if err != nil {
 				return releaseOptions{}, err
 			}
+			got, err = canonicalReleaseHost(got)
+			if err != nil {
+				return releaseOptions{}, err
+			}
 			opts.host, hostSet = got, true
 		case arg == "--name" || strings.HasPrefix(arg, "--name="):
 			got, err := value("--name")
 			if err != nil {
 				return releaseOptions{}, err
+			}
+			if strings.TrimSpace(got) == "" {
+				return releaseOptions{}, fmt.Errorf("--name requires a value")
+			}
+			if _, _, err := identity.NormalizeLabel(got); err != nil {
+				return releaseOptions{}, fmt.Errorf("--name must identify a valid port name: %w", err)
 			}
 			opts.name = got
 		case arg == "--port" || strings.HasPrefix(arg, "--port="):
@@ -414,6 +427,47 @@ func parseReleaseArgs(args []string) (releaseOptions, error) {
 		opts.selectorType = registry.ReleaseSelectorPort
 	}
 	return opts, nil
+}
+
+// canonicalReleaseHost performs the CLI's one normalization pass and then
+// validates generic DNS syntax. Suffix membership is intentionally left to the
+// daemon because configured custom suffixes are daemon-owned state.
+func canonicalReleaseHost(input string) (string, error) {
+	host := strings.ToLower(strings.TrimSpace(input))
+	if host == "" {
+		return "", fmt.Errorf("--host requires a value")
+	}
+	if strings.HasSuffix(host, ".") {
+		host = strings.TrimSuffix(host, ".")
+	}
+	invalid := func() (string, error) {
+		return "", fmt.Errorf("--host must be a valid DNS host or leading wildcard pattern")
+	}
+	if host == "" || strings.HasSuffix(host, ".") || len(host) > 253 {
+		return invalid()
+	}
+	labels := strings.Split(host, ".")
+	for i, label := range labels {
+		if label == "*" {
+			if i != 0 || len(labels) == 1 {
+				return invalid()
+			}
+			continue
+		}
+		if label == "" || len(label) > 63 || strings.Contains(label, "*") || !isDNSAlphaNumeric(label[0]) || !isDNSAlphaNumeric(label[len(label)-1]) {
+			return invalid()
+		}
+		for j := 1; j < len(label)-1; j++ {
+			if !isDNSAlphaNumeric(label[j]) && label[j] != '-' {
+				return invalid()
+			}
+		}
+	}
+	return host, nil
+}
+
+func isDNSAlphaNumeric(char byte) bool {
+	return char >= 'a' && char <= 'z' || char >= '0' && char <= '9'
 }
 
 func releaseRequest(cfg Config, opts releaseOptions) control.ReleaseRequest {
@@ -510,6 +564,12 @@ func releaseNoMatch(selector control.ReleaseSelector) string {
 	}
 	if selector.Name != nil {
 		return fmt.Sprintf("no active port named %q for this path", *selector.Name)
+	}
+	if selector.Scope != nil && *selector.Scope == registry.ReleaseScopeRoute {
+		if selector.Implicit != nil && *selector.Implicit {
+			return "no active route for this directory"
+		}
+		return "no matching route for this path"
 	}
 	if selector.Implicit != nil && *selector.Implicit {
 		return "no active route or port for this directory"

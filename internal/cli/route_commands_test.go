@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -243,6 +244,22 @@ func parseEnvPort(t *testing.T, output string) int {
 	return 0
 }
 
+func assertExactJSONKeys(t *testing.T, got map[string]json.RawMessage, keys ...string) {
+	t.Helper()
+	want := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		want[key] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("JSON keys=%v want=%v", reflect.ValueOf(got).MapKeys(), keys)
+	}
+	for key := range got {
+		if !want[key] {
+			t.Fatalf("unexpected JSON key %q; keys=%v", key, reflect.ValueOf(got).MapKeys())
+		}
+	}
+}
+
 func assertInfoContains(t *testing.T, socketPath, workDir, needle string) {
 	t.Helper()
 	out := runOK(t, Config{Args: []string{"info"}, WorkDir: workDir, SocketPath: socketPath})
@@ -270,8 +287,18 @@ func TestRunReleaseValidatesSelectorsBeforeCallingDaemon(t *testing.T) {
 		{[]string{"release", "--route", "--name", "vite"}, "--route and --name cannot be combined"},
 		{[]string{"release", "--recursive"}, "--recursive requires an explicit --path"},
 		{[]string{"release", "--path"}, "--path requires a value"},
+		{[]string{"release", "--path", ""}, "--path requires a value"},
 		{[]string{"release", "--host"}, "--host requires a value"},
+		{[]string{"release", "--host", ""}, "--host requires a value"},
+		{[]string{"release", "--host", "   "}, "--host requires a value"},
+		{[]string{"release", "--host", "app.work.lewp.."}, "--host must be a valid DNS host"},
+		{[]string{"release", "--host", "app..work.lewp"}, "--host must be a valid DNS host"},
+		{[]string{"release", "--host", "tags.*.work.lewp"}, "--host must be a valid DNS host"},
+		{[]string{"release", "--host", "*app.work.lewp"}, "--host must be a valid DNS host"},
 		{[]string{"release", "--name"}, "--name requires a value"},
+		{[]string{"release", "--name", ""}, "--name requires a value"},
+		{[]string{"release", "--name", "   "}, "--name requires a value"},
+		{[]string{"release", "--name", "/"}, "--name must identify a valid port name"},
 		{[]string{"release", "--port"}, "--port now requires a numeric port; use --name <name>"},
 		{[]string{"release", "--port", "vite"}, "--port now requires a numeric port; use --name vite"},
 		{[]string{"release", "--port", "0"}, "--port must be between 1 and 65535"},
@@ -290,6 +317,20 @@ func TestRunReleaseValidatesSelectorsBeforeCallingDaemon(t *testing.T) {
 				t.Fatalf("stderr=%q want %q", stderr.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestParseReleaseCanonicalizesGenericCustomSuffixHostOnce(t *testing.T) {
+	opts, err := parseReleaseArgs([]string{"--host", " *.APP.Local.Example.COM. "})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.host != "*.app.local.example.com" {
+		t.Fatalf("host=%q", opts.host)
+	}
+	req := releaseRequest(Config{WorkDir: t.TempDir()}, opts)
+	if req.Host != opts.host {
+		t.Fatalf("request host=%q want canonical %q", req.Host, opts.host)
 	}
 }
 
@@ -338,26 +379,61 @@ func TestRunReleaseJSONContractAndDryRunDoesNotMutate(t *testing.T) {
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("code=%d stderr=%q", code, stderr.String())
 	}
-	var got struct {
-		Operation string           `json:"operation"`
-		DryRun    bool             `json:"dry_run"`
-		Selector  map[string]any   `json:"selector"`
-		Matched   int              `json:"matched"`
-		Released  int              `json:"released"`
-		Forgotten int              `json:"forgotten"`
-		Items     []map[string]any `json:"items"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
 		t.Fatalf("JSON: %v\n%s", err, stdout.String())
+	}
+	assertExactJSONKeys(t, document, "operation", "dry_run", "selector", "matched", "released", "forgotten", "items")
+	if string(document["items"]) == "null" {
+		t.Fatal("items must be a non-null array")
+	}
+	var got control.ReleaseResponse
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatal(err)
 	}
 	if got.Operation != "release" || !got.DryRun || got.Matched != 2 || got.Released != 2 || got.Forgotten != 0 || len(got.Items) != 2 {
 		t.Fatalf("got=%+v", got)
 	}
-	if got.Selector["type"] != "path" || got.Selector["path"] != dir || got.Selector["implicit"] != false || got.Selector["recursive"] != false || got.Selector["scope"] != "all" {
-		t.Fatalf("selector=%v", got.Selector)
+	var selector map[string]json.RawMessage
+	if err := json.Unmarshal(document["selector"], &selector); err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(stdout.String(), "release_plan") || strings.Contains(stdout.String(), "route_id") {
-		t.Fatalf("private IDs leaked: %s", stdout.String())
+	assertExactJSONKeys(t, selector, "type", "path", "implicit", "recursive", "scope")
+	if got.Selector.Type != registry.ReleaseSelectorPath || got.Selector.Path == nil || *got.Selector.Path != dir || got.Selector.Implicit == nil || *got.Selector.Implicit || got.Selector.Recursive == nil || *got.Selector.Recursive || got.Selector.Scope == nil || *got.Selector.Scope != registry.ReleaseScopeAll {
+		t.Fatalf("selector=%+v", got.Selector)
+	}
+	var items []map[string]json.RawMessage
+	if err := json.Unmarshal(document["items"], &items); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"release_plan", "route_id", "fingerprint", `"id"`} {
+		if strings.Contains(stdout.String(), private) {
+			t.Fatalf("private field %q leaked: %s", private, stdout.String())
+		}
+	}
+	for _, item := range items {
+		var kind identity.Kind
+		if err := json.Unmarshal(item["kind"], &kind); err != nil {
+			t.Fatal(err)
+		}
+		if string(item["ports"]) == "null" || string(item["actions"]) == "null" {
+			t.Fatalf("item arrays must be non-null: %s", stdout.String())
+		}
+		if kind == identity.KindRoute {
+			assertExactJSONKeys(t, item, "kind", "path", "state", "port", "ports", "actions", "host", "hosts")
+			if string(item["hosts"]) == "null" {
+				t.Fatal("route hosts must be a non-null array")
+			}
+			var hosts []map[string]json.RawMessage
+			if err := json.Unmarshal(item["hosts"], &hosts); err != nil {
+				t.Fatal(err)
+			}
+			for _, host := range hosts {
+				assertExactJSONKeys(t, host, "host", "type")
+			}
+		} else {
+			assertExactJSONKeys(t, item, "kind", "path", "state", "port", "ports", "actions", "name")
+		}
 	}
 	assertInfoContains(t, socketPath, dir, "app.work.lewp")
 	assertInfoContains(t, socketPath, dir, "vite")
@@ -500,6 +576,144 @@ func TestRunReleasePathForgetRemovesActiveAndReleasedHistory(t *testing.T) {
 				t.Fatalf("history remains:\n%s", all)
 			}
 		})
+	}
+}
+
+func TestRunReleaseOperationalFailures(t *testing.T) {
+	plan := registry.ReleasePlan{}
+	result := control.ReleaseResponse{Operation: "release", Items: []control.ReleaseItem{}}
+	validPlan := control.Response{Release: &result, ReleasePlan: &plan}
+	cases := []struct {
+		name     string
+		payloads []string
+		want     string
+	}{
+		{"missing plan", controlPayloads(t, control.Response{Release: &result}), "missing release result or plan"},
+		{"missing plan result", controlPayloads(t, control.Response{ReleasePlan: &plan}), "missing release result or plan"},
+		{"missing apply result", controlPayloads(t, validPlan, control.Response{}), "missing release result"},
+		{"plan daemon error", controlPayloads(t, control.Response{Error: "release planning failed"}), "release planning failed"},
+		{"apply daemon error", controlPayloads(t, validPlan, control.Response{Error: "release apply failed"}), "release apply failed"},
+		{"plan changed", controlPayloads(t, validPlan, control.Response{Error: registry.ErrReleasePlanChanged.Error()}), "release plan changed; rerun the release command"},
+		{"malformed protocol", []string{"{not-json"}, "invalid character"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := Run(Config{
+				Args:       []string{"release"},
+				WorkDir:    t.TempDir(),
+				SocketPath: startFakeControlPayloads(t, tc.payloads),
+				Stdout:     &stdout,
+				Stderr:     &stderr,
+			})
+			if code != 1 {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("operational failure wrote successful stdout: %q", stdout.String())
+			}
+			if !strings.Contains(stderr.String(), tc.want) {
+				t.Fatalf("stderr=%q want %q", stderr.String(), tc.want)
+			}
+		})
+	}
+}
+
+func controlPayloads(t *testing.T, responses ...control.Response) []string {
+	t.Helper()
+	payloads := make([]string, 0, len(responses))
+	for _, response := range responses {
+		payload, err := json.Marshal(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payloads = append(payloads, string(payload))
+	}
+	return payloads
+}
+
+func startFakeControlPayloads(t *testing.T, payloads []string) string {
+	t.Helper()
+	socketDir, err := os.MkdirTemp("/tmp", "lewp-cli-release-fake-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(socketDir, "control.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		_ = os.RemoveAll(socketDir)
+	})
+	go func() {
+		for _, payload := range payloads {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			var req control.Request
+			_ = json.NewDecoder(conn).Decode(&req)
+			_, _ = fmt.Fprintln(conn, payload)
+			_ = conn.Close()
+		}
+	}()
+	return socketPath
+}
+
+func TestWriteReleaseResultHumanRendering(t *testing.T) {
+	path := "/work/app"
+	implicit := true
+	explicit := false
+	routeScope := registry.ReleaseScopeRoute
+	for _, tc := range []struct {
+		name     string
+		selector control.ReleaseSelector
+		want     string
+		reject   string
+	}{
+		{"implicit route no-op", control.ReleaseSelector{Type: registry.ReleaseSelectorPath, Path: &path, Implicit: &implicit, Scope: &routeScope}, "no active route for this directory", "port"},
+		{"explicit route no-op", control.ReleaseSelector{Type: registry.ReleaseSelectorPath, Path: &path, Implicit: &explicit, Scope: &routeScope}, "no matching route for this path", "port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			writeReleaseResult(&out, control.ReleaseResponse{Selector: tc.selector, Items: []control.ReleaseItem{}}, false, "")
+			if !strings.Contains(out.String(), tc.want) || strings.Contains(out.String(), tc.reject) {
+				t.Fatalf("output=%q", out.String())
+			}
+		})
+	}
+
+	port := 42137
+	bulk := control.ReleaseResponse{
+		DryRun:   true,
+		Matched:  2,
+		Released: 2,
+		Items: []control.ReleaseItem{
+			{Kind: identity.KindRoute, Path: path, State: registry.StateActive, Port: &port, Ports: []int{41001, port}, Actions: []registry.ReleaseAction{registry.ReleaseActionRelease}, Host: "app.work.lewp", Hosts: []control.ReleaseHost{{Host: "app.work.lewp", Type: "primary"}, {Host: "tags.app.work.lewp", Type: "alias"}}},
+			{Kind: identity.KindPort, Path: path, State: registry.StateReleased, Ports: []int{41002, 41003}, Actions: []registry.ReleaseAction{registry.ReleaseActionRelease}, Name: "vite"},
+		},
+	}
+	var out bytes.Buffer
+	writeReleaseResult(&out, bulk, false, "")
+	got := out.String()
+	for _, want := range []string{"KIND", "IDENTITY", "PORT", "STATE", "ACTIONS", "PATH", "app.work.lewp,tags.app.work.lewp", "vite", "Planned releases: 2", "Planned forgets: 0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("bulk output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Count(got, "app.work.lewp,tags.app.work.lewp") != 1 || strings.Count(got, "vite") != 1 || strings.Contains(got, "41001") || strings.Contains(got, "41002") || strings.Contains(got, "41003") {
+		t.Fatalf("bulk output duplicated logical or historical rows:\n%s", got)
+	}
+
+	out.Reset()
+	writeReleaseResult(&out, control.ReleaseResponse{
+		Matched: 1, Forgotten: 1,
+		Items: []control.ReleaseItem{{Kind: identity.KindRoute, Path: path, Host: "app.work.lewp", Actions: []registry.ReleaseAction{registry.ReleaseActionForget}}},
+	}, false, "")
+	if !strings.Contains(out.String(), `forgotten route "app.work.lewp" at /work/app`) {
+		t.Fatalf("single forget output=%q", out.String())
 	}
 }
 
