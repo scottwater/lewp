@@ -550,7 +550,11 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	// not rebuild a stale recursive plan after the user has approved its output.
 	applied, err := call(cfg, control.Request{Command: "release-apply", ReleasePlan: planned.ReleasePlan})
 	if err != nil {
-		return daemonError(cfg, err)
+		code := daemonError(cfg, err)
+		if control.IsTransportError(err) {
+			fmt.Fprintln(cfg.Stderr, "release outcome unknown; inspect current state before retrying")
+		}
+		return code
 	}
 	if applied.Release == nil {
 		fmt.Fprintln(cfg.Stderr, "malformed daemon response: missing release result")

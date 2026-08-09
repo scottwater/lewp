@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -87,9 +88,116 @@ func TestCallHonorsContextDeadline(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected Call to fail against an unresponsive daemon")
 		}
+		if !IsTransportError(err) {
+			t.Fatalf("deadline error %T (%v) is not a TransportError", err, err)
+		}
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("deadline error %T (%v) does not preserve os.ErrDeadlineExceeded", err, err)
+		}
+		var transportErr *TransportError
+		if !errors.As(err, &transportErr) {
+			t.Fatalf("deadline error %T (%v) does not preserve TransportError type", err, err)
+		}
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("deadline error %T (%v) does not preserve a timeout net.Error", err, err)
+		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Call did not return after context deadline; connection deadline not applied")
 	}
+}
+
+func TestCallTransportErrorContract(t *testing.T) {
+	t.Run("receive failure", func(t *testing.T) {
+		socketPath := startCallTestServer(t, func(conn net.Conn) {
+			var req Request
+			_ = json.NewDecoder(conn).Decode(&req)
+		})
+
+		_, err := Call(context.Background(), socketPath, Request{Command: "doctor"})
+		if err == nil {
+			t.Fatal("expected Call to fail when the daemon closes without a response")
+		}
+		if !IsTransportError(err) {
+			t.Fatalf("receive error %T (%v) is not a TransportError", err, err)
+		}
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("receive error %T (%v) does not preserve io.EOF", err, err)
+		}
+		var transportErr *TransportError
+		if !errors.As(err, &transportErr) {
+			t.Fatalf("receive error %T (%v) does not preserve TransportError type", err, err)
+		}
+	})
+
+	t.Run("dial failure", func(t *testing.T) {
+		socketPath := filepath.Join(t.TempDir(), "missing.sock")
+		_, err := Call(context.Background(), socketPath, Request{Command: "doctor"})
+		if err == nil {
+			t.Fatal("expected Call to fail when the control socket is missing")
+		}
+		if IsTransportError(err) {
+			t.Fatalf("dial error %T (%v) was classified as a TransportError", err, err)
+		}
+		var opErr *net.OpError
+		if !errors.As(err, &opErr) {
+			t.Fatalf("dial error %T (%v) does not preserve net.OpError classification", err, err)
+		}
+		if opErr.Op != "dial" {
+			t.Fatalf("net.OpError operation = %q, want dial", opErr.Op)
+		}
+	})
+
+	t.Run("explicit daemon error", func(t *testing.T) {
+		const message = "release planning failed exactly"
+		socketPath := startCallTestServer(t, func(conn net.Conn) {
+			var req Request
+			if json.NewDecoder(conn).Decode(&req) == nil {
+				_ = json.NewEncoder(conn).Encode(Response{Error: message})
+			}
+		})
+
+		resp, err := Call(context.Background(), socketPath, Request{Command: "release-plan"})
+		if err == nil {
+			t.Fatal("expected Call to return the daemon's explicit error")
+		}
+		if IsTransportError(err) {
+			t.Fatalf("daemon response error %T (%v) was classified as a TransportError", err, err)
+		}
+		if err.Error() != message {
+			t.Fatalf("daemon response error = %q, want %q", err, message)
+		}
+		if resp.Error != message {
+			t.Fatalf("response error = %q, want %q", resp.Error, message)
+		}
+	})
+}
+
+func startCallTestServer(t *testing.T, serve func(net.Conn)) string {
+	t.Helper()
+	socketDir, err := os.MkdirTemp("/tmp", "lewp-control-call-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(socketDir, "control.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		_ = os.RemoveAll(socketDir)
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		_ = os.RemoveAll(socketDir)
+	})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		serve(conn)
+	}()
+	return socketPath
 }
 
 // TestServeRejectsOversizedRequest covers the request-size cap: a client that

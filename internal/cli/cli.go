@@ -1224,9 +1224,11 @@ func clientEnv() map[string]string {
 
 // controlCallTimeout bounds a single CLI control request end-to-end so a hung or
 // wedged daemon (one that accepts the connection but never replies) cannot stall
-// a command indefinitely. control.Call applies the deadline to the connection
-// after dialing, so it covers the encode/decode as well as the dial.
-const controlCallTimeout = 10 * time.Second
+// a command indefinitely. Its response margin keeps the client listening after
+// the daemon's dispatch timeout, and deriving it from that exported bound keeps
+// the ordering from drifting. control.Call applies the deadline to the
+// connection after dialing, so it covers the encode/decode as well as the dial.
+const controlCallTimeout = control.DispatchTimeout + 5*time.Second
 
 func call(cfg Config, req control.Request) (control.Response, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), controlCallTimeout)

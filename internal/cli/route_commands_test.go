@@ -955,17 +955,19 @@ func TestRunReleaseOperationalFailures(t *testing.T) {
 	result := control.ReleaseResponse{Operation: "release", Items: []control.ReleaseItem{}}
 	validPlan := control.Response{Release: &result, ReleasePlan: &plan}
 	cases := []struct {
-		name     string
-		payloads []string
-		want     string
+		name           string
+		payloads       []string
+		want           string
+		outcomeUnknown bool
 	}{
-		{"missing plan", controlPayloads(t, control.Response{Release: &result}), "missing release result or plan"},
-		{"missing plan result", controlPayloads(t, control.Response{ReleasePlan: &plan}), "missing release result or plan"},
-		{"missing apply result", controlPayloads(t, validPlan, control.Response{}), "missing release result"},
-		{"plan daemon error", controlPayloads(t, control.Response{Error: "release planning failed"}), "release planning failed"},
-		{"apply daemon error", controlPayloads(t, validPlan, control.Response{Error: "release apply failed"}), "release apply failed"},
-		{"plan changed", controlPayloads(t, validPlan, control.Response{Error: registry.ErrReleasePlanChanged.Error()}), "release plan changed; rerun the release command"},
-		{"malformed protocol", []string{"{not-json"}, "invalid character"},
+		{"missing plan", controlPayloads(t, control.Response{Release: &result}), "missing release result or plan", false},
+		{"missing plan result", controlPayloads(t, control.Response{ReleasePlan: &plan}), "missing release result or plan", false},
+		{"missing apply result", controlPayloads(t, validPlan, control.Response{}), "missing release result", false},
+		{"plan daemon error", controlPayloads(t, control.Response{Error: "release planning failed"}), "release planning failed", false},
+		{"apply daemon error", controlPayloads(t, validPlan, control.Response{Error: "release apply failed"}), "release apply failed", false},
+		{"plan changed", controlPayloads(t, validPlan, control.Response{Error: registry.ErrReleasePlanChanged.Error()}), "release plan changed; rerun the release command", false},
+		{"malformed plan protocol", []string{"{not-json"}, "invalid character", false},
+		{"truncated apply response", append(controlPayloads(t, validPlan), `{"release":`), "unexpected EOF", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -986,7 +988,35 @@ func TestRunReleaseOperationalFailures(t *testing.T) {
 			if !strings.Contains(stderr.String(), tc.want) {
 				t.Fatalf("stderr=%q want %q", stderr.String(), tc.want)
 			}
+			const warning = "release outcome unknown; inspect current state before retrying"
+			if got := strings.Contains(stderr.String(), warning); got != tc.outcomeUnknown {
+				t.Fatalf("stderr=%q outcome warning=%t want %t", stderr.String(), got, tc.outcomeUnknown)
+			}
 		})
+	}
+}
+
+func TestRunReleaseApplyDialFailureDoesNotWarnOutcomeUnknown(t *testing.T) {
+	plan := control.ReleasePlanReference{Token: "test-reference"}
+	result := control.ReleaseResponse{Operation: "release", Items: []control.ReleaseItem{}}
+	socketPath := startFakeControlThenClose(t, control.Response{Release: &result, ReleasePlan: &plan})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:       []string{"release"},
+		WorkDir:    t.TempDir(),
+		SocketPath: socketPath,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	})
+	if code != 1 || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "lewp daemon is not running") {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "release outcome unknown") {
+		t.Fatalf("dial failure was described as possibly committed: %q", stderr.String())
 	}
 }
 
@@ -1006,6 +1036,36 @@ func controlPayloads(t *testing.T, responses ...control.Response) []string {
 func startFakeControlPayloads(t *testing.T, payloads []string) string {
 	t.Helper()
 	socketPath, _ := startFakeControlPayloadsCapturing(t, payloads)
+	return socketPath
+}
+
+func startFakeControlThenClose(t *testing.T, response control.Response) string {
+	t.Helper()
+	socketDir, err := os.MkdirTemp("/tmp", "lewp-cli-release-close-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	socketPath := filepath.Join(socketDir, "control.sock")
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		_ = os.RemoveAll(socketDir)
+	})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		var req control.Request
+		if json.NewDecoder(conn).Decode(&req) == nil {
+			_ = ln.Close()
+			_ = json.NewEncoder(conn).Encode(response)
+		}
+		_ = conn.Close()
+	}()
 	return socketPath
 }
 

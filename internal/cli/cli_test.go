@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/scottwater/lewp/internal/control"
 	"github.com/scottwater/lewp/internal/dns"
@@ -20,6 +21,13 @@ import (
 	localtls "github.com/scottwater/lewp/internal/tls"
 	"github.com/scottwater/lewp/internal/update"
 )
+
+func TestControlCallTimeoutExceedsDaemonDispatchTimeout(t *testing.T) {
+	const minimumResponseMargin = 5 * time.Second
+	if margin := controlCallTimeout - control.DispatchTimeout; margin < minimumResponseMargin {
+		t.Fatalf("control call timeout margin %s must be at least %s", margin, minimumResponseMargin)
+	}
+}
 
 func TestRunAddReportsDaemonNotRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer

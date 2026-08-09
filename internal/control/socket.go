@@ -24,9 +24,10 @@ const (
 	// writeTimeout bounds how long writing the response may block on a client
 	// that stops reading.
 	writeTimeout = 10 * time.Second
-	// requestTimeout bounds the dispatched command itself so a wedged registry
-	// operation cannot hang a handler indefinitely.
-	requestTimeout = 15 * time.Second
+	// DispatchTimeout bounds the dispatched command itself so a wedged registry
+	// operation cannot hang a handler indefinitely. Control clients should allow
+	// additional time to receive the daemon's bounded response.
+	DispatchTimeout = 15 * time.Second
 	// maxRequestBytes caps a single request body. Control requests are small JSON
 	// objects; this rejects an oversized/never-ending body well before it can
 	// exhaust memory.
@@ -36,6 +37,24 @@ const (
 	// block daemon shutdown forever.
 	handlerDrainTimeout = 5 * time.Second
 )
+
+// TransportError reports a failure sending a request or receiving its response
+// after the control socket connection was established. The daemon may already
+// have acted on a successfully sent request when a response cannot be read.
+type TransportError struct {
+	err error
+}
+
+func (e *TransportError) Error() string { return e.err.Error() }
+func (e *TransportError) Unwrap() error { return e.err }
+
+// IsTransportError reports whether err is a post-dial control transport failure.
+// Dial errors and explicit error responses from the daemon are not transport
+// errors.
+func IsTransportError(err error) bool {
+	var transportErr *TransportError
+	return errors.As(err, &transportErr)
+}
 
 type Request struct {
 	Command     string                `json:"command"`
@@ -179,11 +198,11 @@ func Call(ctx context.Context, socketPath string, req Request) (Response, error)
 		_ = conn.SetDeadline(deadline)
 	}
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
-		return Response{}, err
+		return Response{}, &TransportError{err: err}
 	}
 	var resp Response
 	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
-		return Response{}, err
+		return Response{}, &TransportError{err: err}
 	}
 	if resp.Error != "" {
 		return resp, errors.New(resp.Error)
@@ -234,7 +253,7 @@ func serveConn(ctx context.Context, conn net.Conn, dispatch func(context.Context
 		writeResponse(Response{Error: err.Error()})
 		return
 	}
-	reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, DispatchTimeout)
 	defer cancel()
 	resp, err := dispatch(reqCtx, req)
 	if err != nil {
