@@ -521,6 +521,11 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 
 	planned, err := call(cfg, control.Request{Command: "release-plan", Release: releaseRequest(cfg, opts)})
 	if err != nil {
+		if err.Error() == "unknown command" {
+			fmt.Fprintln(cfg.Stderr, "running daemon does not support the release protocol")
+			fmt.Fprintln(cfg.Stderr, "Run: lewp system restart")
+			return 1
+		}
 		return daemonError(cfg, err)
 	}
 	if planned.Release == nil || planned.ReleasePlan == nil {

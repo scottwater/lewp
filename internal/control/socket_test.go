@@ -591,6 +591,22 @@ func TestLegacyReleaseWirePreservesOldRequestAndResponse(t *testing.T) {
 	if err != nil || len(info.Entries) != 0 {
 		t.Fatalf("legacy named-port release did not mutate allocation: entries=%+v err=%v", info.Entries, err)
 	}
+
+	if _, err := Call(ctx, socketPath, Request{Command: "add", Lease: LeaseRequest{WorkDir: workDir, Root: "work", Name: "fresh"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Call(ctx, socketPath, Request{Command: "port", Port: PortRequest{WorkDir: workDir, Name: "webpack"}}); err != nil {
+		t.Fatal(err)
+	}
+	payload = callRawJSON(t, ctx, socketPath, []byte(fmt.Sprintf(
+		`{"command":"release","release":{"WorkDir":%s,"All":true}}`,
+		workDirJSON,
+	)))
+	assertLegacyCounts(payload, map[string]int{"routes": 1, "ports": 1})
+	info, err = Call(ctx, socketPath, Request{Command: "info", Info: InfoRequest{WorkDir: workDir}})
+	if err != nil || len(info.Entries) != 0 {
+		t.Fatalf("legacy capitalized All release left active entries: entries=%+v err=%v", info.Entries, err)
+	}
 }
 
 func TestReleasePlanReferenceKeepsLargeApplyRequestBounded(t *testing.T) {

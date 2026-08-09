@@ -474,6 +474,42 @@ func TestRunReleaseJSONContractAndDryRunDoesNotMutate(t *testing.T) {
 	assertInfoContains(t, socketPath, dir, "vite")
 }
 
+func TestRunReleaseNameSelectorJSONIsExactAndCanonical(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	dir := t.TempDir()
+	runOK(t, Config{Args: []string{"port", "--name", "VITE Dev"}, WorkDir: dir, SocketPath: socketPath})
+
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:       []string{"release", "--name", "VITE Dev", "--dry-run", "--json"},
+		WorkDir:    dir,
+		SocketPath: socketPath,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	})
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(stdout.Bytes(), &document); err != nil {
+		t.Fatalf("JSON: %v\n%s", err, stdout.String())
+	}
+	var selector map[string]json.RawMessage
+	if err := json.Unmarshal(document["selector"], &selector); err != nil {
+		t.Fatal(err)
+	}
+	assertExactJSONKeys(t, selector, "type", "path", "implicit", "recursive", "scope", "name")
+	want := fmt.Sprintf(`{"implicit":true,"name":"vite-dev","path":%q,"recursive":false,"scope":"name","type":"path"}`, dir)
+	encoded, err := json.Marshal(selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != want {
+		t.Fatalf("selector JSON=%s want %s", encoded, want)
+	}
+	assertInfoContains(t, socketPath, dir, "VITE Dev")
+}
+
 func TestConfirmReleaseDefaultsNoAndAcceptsYes(t *testing.T) {
 	cases := []struct {
 		name                                 string
@@ -1001,6 +1037,39 @@ func TestRunReleaseOperationalFailures(t *testing.T) {
 	}
 }
 
+func TestRunReleaseOlderDaemonRequiresRestartWithoutLegacyFallback(t *testing.T) {
+	socketPath, requests := startFakeControlPayloadsCapturing(t, controlPayloads(t,
+		control.Response{Error: "unknown command"},
+	))
+	var stdout, stderr bytes.Buffer
+	code := Run(Config{
+		Args:       []string{"release"},
+		WorkDir:    t.TempDir(),
+		SocketPath: socketPath,
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+	})
+	if code != 1 || stdout.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "running daemon does not support the release protocol") || !strings.Contains(got, "lewp system restart") {
+		t.Fatalf("stderr lacks older-daemon restart guidance: %q", got)
+	}
+	select {
+	case req := <-requests:
+		if req.Command != "release-plan" {
+			t.Fatalf("only request=%q want release-plan", req.Command)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("release-plan request not received")
+	}
+	select {
+	case req := <-requests:
+		t.Fatalf("older-daemon error must not fall back; unexpected request: %+v", req)
+	default:
+	}
+}
+
 func TestRunReleaseApplyDialFailureDoesNotWarnOutcomeUnknown(t *testing.T) {
 	plan := control.ReleasePlanReference{Token: "test-reference"}
 	result := control.ReleaseResponse{Operation: "release", Items: []control.ReleaseItem{}}
@@ -1294,6 +1363,43 @@ func TestConfirmReleaseReturnsPromptAndAbortWriterErrors(t *testing.T) {
 			}, false, true)
 			if confirmed || !errors.Is(err, writeErr) {
 				t.Fatalf("confirmed=%v err=%v want writer error %v", confirmed, err, writeErr)
+			}
+		})
+	}
+}
+
+func TestWriteReleaseResultSingleItemDryRunRendering(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action registry.ReleaseAction
+		result control.ReleaseResponse
+		want   string
+	}{
+		{
+			name: "release", action: registry.ReleaseActionRelease,
+			result: control.ReleaseResponse{DryRun: true, Matched: 1, Released: 1},
+			want:   "would release route \"app.work.lewp\" at /work/app\nPlanned releases: 1\nPlanned forgets: 0\n",
+		},
+		{
+			name: "forget", action: registry.ReleaseActionForget,
+			result: control.ReleaseResponse{DryRun: true, Matched: 1, Forgotten: 1},
+			want:   "would forget route \"app.work.lewp\" at /work/app\nPlanned releases: 0\nPlanned forgets: 1\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.result.Items = []control.ReleaseItem{{
+				Kind: identity.KindRoute, Path: "/work/app", Host: "app.work.lewp",
+				Actions: []registry.ReleaseAction{tc.action},
+			}}
+			var out bytes.Buffer
+			if err := writeReleaseResult(&out, tc.result, false); err != nil {
+				t.Fatal(err)
+			}
+			if got := out.String(); got != tc.want {
+				t.Fatalf("output=%q want %q", got, tc.want)
+			}
+			if strings.Contains(out.String(), "released route") || strings.Contains(out.String(), "forgotten route") {
+				t.Fatalf("dry-run output claimed a past action: %q", out.String())
 			}
 		})
 	}
