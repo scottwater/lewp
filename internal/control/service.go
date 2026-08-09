@@ -60,10 +60,14 @@ type HostConflictError struct {
 
 func (e *HostConflictError) Error() string {
 	return fmt.Sprintf("host %s is already assigned to %q\n"+
-		"Free it:        lewp release --path %q --route --forget\n"+
+		"Free it:        lewp release --path %s --route --forget\n"+
 		"Use another:    lewp lease --host <name>.lewp\n"+
 		"Suffix anyway:  lewp lease --host %s --auto-suffix",
-		e.Host, e.OwnerPath, e.OwnerPath, e.Host)
+		e.Host, e.OwnerPath, quotePOSIXShellArgument(e.OwnerPath), e.Host)
+}
+
+func quotePOSIXShellArgument(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 type PortRequest struct {

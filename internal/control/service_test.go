@@ -602,6 +602,18 @@ func TestServiceDeterministicConflictSuffix(t *testing.T) {
 	}
 }
 
+func TestHostConflictErrorQuotesCleanupPathForPOSIXShell(t *testing.T) {
+	ownerPath := "/tmp/owner's $HOME `touch pwned` $(touch pwned)\nnext line"
+	got := (&HostConflictError{Host: "audit.lewp", OwnerPath: ownerPath}).Error()
+	want := "host audit.lewp is already assigned to \"/tmp/owner's $HOME `touch pwned` $(touch pwned)\\nnext line\"\n" +
+		"Free it:        lewp release --path '/tmp/owner'\\''s $HOME `touch pwned` $(touch pwned)\nnext line' --route --forget\n" +
+		"Use another:    lewp lease --host <name>.lewp\n" +
+		"Suffix anyway:  lewp lease --host audit.lewp --auto-suffix"
+	if got != want {
+		t.Fatalf("HostConflictError.Error() mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
+
 func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
 	store := openStore(t)
 	svc := NewService(store, registry.PortRange{Start: 41000, End: 41020})
@@ -628,7 +640,7 @@ func TestServiceExplicitHostConflictFailsByDefault(t *testing.T) {
 		t.Fatalf("conflict owner path=%q want %q", conflict.OwnerPath, firstDir)
 	}
 	msg := err.Error()
-	cleanup := fmt.Sprintf("lewp release --path %q --route --forget", firstDir)
+	cleanup := fmt.Sprintf("lewp release --path '%s' --route --forget", firstDir)
 	if !strings.Contains(msg, cleanup) || strings.Contains(msg, "cd ") || !strings.Contains(msg, "--auto-suffix") {
 		t.Fatalf("conflict message missing cleanup guidance: %q", msg)
 	}
