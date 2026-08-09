@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -490,7 +492,10 @@ func TestConfirmReleaseDefaultsNoAndAcceptsYes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cfg := Config{Stdout: &stdout, Stderr: &stderr, Stdin: strings.NewReader(tc.input)}
-			got := confirmRelease(cfg, tc.assumeYes, tc.interactive)
+			got, err := confirmRelease(cfg, tc.assumeYes, tc.interactive)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got != tc.want {
 				t.Fatalf("got=%v want %v stdout=%q stderr=%q", got, tc.want, stdout.String(), stderr.String())
 			}
@@ -1069,6 +1074,18 @@ func startFakeControlThenClose(t *testing.T, response control.Response) string {
 	return socketPath
 }
 
+type releaseFailWriter struct {
+	failOn string
+	err    error
+}
+
+func (w releaseFailWriter) Write(p []byte) (int, error) {
+	if w.failOn == "" || strings.Contains(string(p), w.failOn) {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
 func startFakeControlPayloadsCapturing(t *testing.T, payloads []string) (string, <-chan control.Request) {
 	t.Helper()
 	socketDir, err := os.MkdirTemp("/tmp", "lewp-cli-release-fake-")
@@ -1106,6 +1123,180 @@ func startFakeControlPayloadsCapturing(t *testing.T, payloads []string) (string,
 		}
 	}()
 	return socketPath, requests
+}
+
+func TestExecuteReleaseOutputFailuresBeforeApply(t *testing.T) {
+	writeErr := fmt.Errorf("deterministic release write failure")
+	path := "/work/tree/app"
+	port := 42137
+	plannedItem := control.ReleaseItem{
+		Kind: identity.KindRoute, Path: path, State: registry.StateActive,
+		Port: &port, Ports: []int{port}, Actions: []registry.ReleaseAction{registry.ReleaseActionRelease},
+		Host: "app.work.lewp", Hosts: []control.ReleaseHost{{Host: "app.work.lewp", Type: "primary"}},
+	}
+	privatePlan := control.ReleasePlanReference{Token: "output-failure-plan"}
+
+	for _, tc := range []struct {
+		name        string
+		args        []string
+		planned     control.ReleaseResponse
+		stdout      releaseFailWriter
+		stdin       string
+		interactive bool
+	}{
+		{
+			name: "dry-run JSON", args: []string{"--path", path, "--dry-run", "--json"},
+			planned: control.ReleaseResponse{Matched: 1, Released: 1, Items: []control.ReleaseItem{plannedItem}},
+			stdout:  releaseFailWriter{err: writeErr},
+		},
+		{
+			name: "recursive preview table flush", args: []string{"--path", "/work/tree", "--recursive"},
+			planned: control.ReleaseResponse{Matched: 1, Released: 1, Items: []control.ReleaseItem{plannedItem}},
+			stdout:  releaseFailWriter{failOn: "KIND", err: writeErr}, stdin: "yes\n", interactive: true,
+		},
+		{
+			name: "recursive prompt", args: []string{"--path", "/work/tree", "--recursive"},
+			planned: control.ReleaseResponse{Matched: 1, Released: 1, Items: []control.ReleaseItem{plannedItem}},
+			stdout:  releaseFailWriter{failOn: "Proceed?", err: writeErr}, stdin: "yes\n", interactive: true,
+		},
+		{
+			name: "recursive no-op", args: []string{"--path", "/work/tree", "--recursive", "--yes"},
+			planned: control.ReleaseResponse{Items: []control.ReleaseItem{}},
+			stdout:  releaseFailWriter{err: writeErr},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			socketPath, requests := startFakeControlPayloadsCapturing(t, controlPayloads(t,
+				control.Response{Release: &tc.planned, ReleasePlan: &privatePlan},
+				control.Response{Release: &tc.planned},
+			))
+			opts, err := parseReleaseArgs(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			code := executeRelease(Config{WorkDir: t.TempDir(), SocketPath: socketPath, Stdout: tc.stdout, Stderr: &stderr, Stdin: strings.NewReader(tc.stdin)}, opts, tc.interactive)
+			if code != 1 {
+				t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "could not be written") || !strings.Contains(stderr.String(), writeErr.Error()) {
+				t.Fatalf("unclear output failure: %q", stderr.String())
+			}
+			select {
+			case req := <-requests:
+				if req.Command != "release-plan" {
+					t.Fatalf("first request=%q", req.Command)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("release plan request not received")
+			}
+			select {
+			case req := <-requests:
+				t.Fatalf("output failure must prevent apply; unexpected request: %+v", req)
+			default:
+			}
+		})
+	}
+}
+
+func TestExecuteReleasePostApplyOutputFailureReportsCommittedMutation(t *testing.T) {
+	writeErr := fmt.Errorf("deterministic release write failure")
+	path := "/work/app"
+	planned := control.ReleaseResponse{Matched: 1, Released: 1, Items: []control.ReleaseItem{{
+		Kind: identity.KindRoute, Path: path, Host: "app.work.lewp", Actions: []registry.ReleaseAction{registry.ReleaseActionRelease},
+	}}}
+	applied := planned
+	privatePlan := control.ReleasePlanReference{Token: "applied-output-failure-plan"}
+	socketPath, requests := startFakeControlPayloadsCapturing(t, controlPayloads(t,
+		control.Response{Release: &planned, ReleasePlan: &privatePlan},
+		control.Response{Release: &applied},
+	))
+	opts, err := parseReleaseArgs([]string{"--path", path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	code := executeRelease(Config{
+		WorkDir: t.TempDir(), SocketPath: socketPath,
+		Stdout: releaseFailWriter{err: writeErr}, Stderr: &stderr, Stdin: strings.NewReader(""),
+	}, opts, false)
+	if code != 1 {
+		t.Fatalf("code=%d want 1 stderr=%q", code, stderr.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "release was applied") || !strings.Contains(got, "could not be written") || !strings.Contains(got, writeErr.Error()) {
+		t.Fatalf("post-apply error must state committed mutation and output failure: %q", got)
+	}
+	for _, want := range []string{"release-plan", "release-apply"} {
+		select {
+		case req := <-requests:
+			if req.Command != want {
+				t.Fatalf("request=%q want %q", req.Command, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("request %q not received", want)
+		}
+	}
+	select {
+	case req := <-requests:
+		t.Fatalf("unexpected third request: %+v", req)
+	default:
+	}
+}
+
+func TestWriteReleaseRenderersReturnWriterErrors(t *testing.T) {
+	writeErr := fmt.Errorf("deterministic release write failure")
+	item := control.ReleaseItem{Kind: identity.KindRoute, Host: "app.work.lewp", Path: "/work/app", Actions: []registry.ReleaseAction{registry.ReleaseActionRelease}}
+	for _, tc := range []struct {
+		name   string
+		failOn string
+		call   func(io.Writer) error
+	}{
+		{name: "JSON", call: func(w io.Writer) error { return writeReleaseResult(w, control.ReleaseResponse{}, true) }},
+		{name: "no match", call: func(w io.Writer) error {
+			return writeReleaseResult(w, control.ReleaseResponse{Items: []control.ReleaseItem{}}, false)
+		}},
+		{name: "single item", call: func(w io.Writer) error {
+			return writeReleaseResult(w, control.ReleaseResponse{Items: []control.ReleaseItem{item}}, false)
+		}},
+		{name: "table flush", call: func(w io.Writer) error { return writeReleaseTable(w, []control.ReleaseItem{item, item}) }},
+		{name: "recursive preview", call: func(w io.Writer) error {
+			return writeRecursiveReleasePreview(w, control.ReleaseResponse{Items: []control.ReleaseItem{item}})
+		}},
+		{name: "planned totals", failOn: "Planned releases:", call: func(w io.Writer) error {
+			return writeReleaseResult(w, control.ReleaseResponse{DryRun: true, Items: []control.ReleaseItem{item}}, false)
+		}},
+		{name: "final totals", failOn: "Released:", call: func(w io.Writer) error {
+			return writeReleaseResult(w, control.ReleaseResponse{Items: []control.ReleaseItem{item}}, false)
+		}},
+		{name: "recursive final totals", call: func(w io.Writer) error { return writeReleaseTotals(w, control.ReleaseResponse{}) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.call(releaseFailWriter{failOn: tc.failOn, err: writeErr}); !errors.Is(err, writeErr) {
+				t.Fatalf("err=%v want %v", err, writeErr)
+			}
+		})
+	}
+}
+
+func TestConfirmReleaseReturnsPromptAndAbortWriterErrors(t *testing.T) {
+	writeErr := fmt.Errorf("deterministic release write failure")
+	for _, tc := range []struct {
+		name, failOn, input string
+	}{
+		{name: "prompt", failOn: "Proceed?", input: "yes\n"},
+		{name: "abort", failOn: "release aborted", input: "no\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			confirmed, err := confirmRelease(Config{
+				Stdout: releaseFailWriter{failOn: tc.failOn, err: writeErr},
+				Stderr: io.Discard,
+				Stdin:  strings.NewReader(tc.input),
+			}, false, true)
+			if confirmed || !errors.Is(err, writeErr) {
+				t.Fatalf("confirmed=%v err=%v want writer error %v", confirmed, err, writeErr)
+			}
+		})
+	}
 }
 
 func TestWriteReleaseResultHumanRendering(t *testing.T) {

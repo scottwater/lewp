@@ -513,7 +513,10 @@ func runRelease(cfg Config) int {
 // exact selectors retain their unprompted plan/apply behavior.
 func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	if opts.recursive && !opts.dryRun && !opts.assumeYes && (opts.jsonOut || !interactive) {
-		return releaseConfirmationRequired(cfg)
+		if err := releaseConfirmationRequired(cfg); err != nil {
+			return releaseOutputError(cfg, err, false)
+		}
+		return 1
 	}
 
 	planned, err := call(cfg, control.Request{Command: "release-plan", Release: releaseRequest(cfg, opts)})
@@ -527,7 +530,9 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	if opts.dryRun {
 		result := *planned.Release
 		result.DryRun = true
-		writeReleaseResult(cfg.Stdout, result, opts.jsonOut)
+		if err := writeReleaseResult(cfg.Stdout, result, opts.jsonOut); err != nil {
+			return releaseOutputError(cfg, err, false)
+		}
 		return 0
 	}
 
@@ -535,12 +540,20 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 		// There is no destructive operation to confirm or send when the plan is
 		// empty. Render the normal no-op response and leave the private plan unused.
 		if len(planned.Release.Items) == 0 {
-			writeReleaseResult(cfg.Stdout, *planned.Release, opts.jsonOut)
+			if err := writeReleaseResult(cfg.Stdout, *planned.Release, opts.jsonOut); err != nil {
+				return releaseOutputError(cfg, err, false)
+			}
 			return 0
 		}
 		if !opts.jsonOut {
-			writeRecursiveReleasePreview(cfg.Stdout, *planned.Release)
-			if !confirmRelease(cfg, opts.assumeYes, interactive) {
+			if err := writeRecursiveReleasePreview(cfg.Stdout, *planned.Release); err != nil {
+				return releaseOutputError(cfg, err, false)
+			}
+			confirmed, err := confirmRelease(cfg, opts.assumeYes, interactive)
+			if err != nil {
+				return releaseOutputError(cfg, err, false)
+			}
+			if !confirmed {
 				return 1
 			}
 		}
@@ -565,70 +578,95 @@ func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
 	// planned public selector so implicit current-directory output remains exact.
 	result.Selector = planned.Release.Selector
 	if opts.recursive && !opts.jsonOut {
-		writeReleaseTotals(cfg.Stdout, result)
+		err = writeReleaseTotals(cfg.Stdout, result)
 	} else {
-		writeReleaseResult(cfg.Stdout, result, opts.jsonOut)
+		err = writeReleaseResult(cfg.Stdout, result, opts.jsonOut)
+	}
+	if err != nil {
+		return releaseOutputError(cfg, err, true)
 	}
 	return 0
 }
 
-func releaseConfirmationRequired(cfg Config) int {
-	fmt.Fprintln(cfg.Stderr, "release: refusing recursive mutation without confirmation")
-	fmt.Fprintln(cfg.Stderr, "Re-run with --yes to proceed (required for non-interactive and JSON use)")
+func releaseOutputError(cfg Config, err error, applied bool) int {
+	if applied {
+		fmt.Fprintf(cfg.Stderr, "release was applied, but its result could not be written: %v\n", err)
+	} else {
+		fmt.Fprintf(cfg.Stderr, "release was not applied because its output could not be written: %v\n", err)
+	}
 	return 1
+}
+
+func releaseConfirmationRequired(cfg Config) error {
+	if _, err := fmt.Fprintln(cfg.Stderr, "release: refusing recursive mutation without confirmation"); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintln(cfg.Stderr, "Re-run with --yes to proceed (required for non-interactive and JSON use)")
+	return err
 }
 
 // confirmRelease gates a recursive mutation after its complete human preview.
 // Only an explicit yes is affirmative; no, blank input, and EOF all abort.
-func confirmRelease(cfg Config, assumeYes, interactive bool) bool {
+func confirmRelease(cfg Config, assumeYes, interactive bool) (bool, error) {
 	if assumeYes {
-		return true
+		return true, nil
 	}
 	if !interactive {
-		releaseConfirmationRequired(cfg)
-		return false
+		return false, releaseConfirmationRequired(cfg)
 	}
-	fmt.Fprint(cfg.Stdout, "Proceed? [y/N] ")
+	if _, err := fmt.Fprint(cfg.Stdout, "Proceed? [y/N] "); err != nil {
+		return false, err
+	}
 	line, _ := bufio.NewReader(cfg.Stdin).ReadString('\n')
 	switch strings.ToLower(strings.TrimSpace(line)) {
 	case "y", "yes":
-		return true
+		return true, nil
 	default:
-		fmt.Fprintln(cfg.Stdout, "release aborted")
-		return false
+		_, err := fmt.Fprintln(cfg.Stdout, "release aborted")
+		return false, err
 	}
 }
 
-func writeRecursiveReleasePreview(w io.Writer, result control.ReleaseResponse) {
-	fmt.Fprintln(w, "Release plan:")
-	writeReleaseTable(w, result.Items)
-	fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
+func writeRecursiveReleasePreview(w io.Writer, result control.ReleaseResponse) error {
+	if _, err := fmt.Fprintln(w, "Release plan:"); err != nil {
+		return err
+	}
+	if err := writeReleaseTable(w, result.Items); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
+	return err
 }
 
-func writeReleaseTotals(w io.Writer, result control.ReleaseResponse) {
-	fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
+func writeReleaseTotals(w io.Writer, result control.ReleaseResponse) error {
+	_, err := fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
+	return err
 }
 
-func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool) {
+func writeReleaseResult(w io.Writer, result control.ReleaseResponse, jsonOut bool) error {
 	if result.Items == nil {
 		result.Items = []control.ReleaseItem{}
 	}
 	if jsonOut {
-		_ = json.NewEncoder(w).Encode(result)
-		return
+		return json.NewEncoder(w).Encode(result)
 	}
+	var err error
 	if len(result.Items) == 0 {
-		fmt.Fprintln(w, releaseNoMatch(result.Selector))
+		_, err = fmt.Fprintln(w, releaseNoMatch(result.Selector))
 	} else if len(result.Items) == 1 {
-		writeSingleReleaseResult(w, result.Items[0], result.DryRun)
+		err = writeSingleReleaseResult(w, result.Items[0], result.DryRun)
 	} else {
-		writeReleaseTable(w, result.Items)
+		err = writeReleaseTable(w, result.Items)
+	}
+	if err != nil {
+		return err
 	}
 	if result.DryRun {
-		fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
+		_, err = fmt.Fprintf(w, "Planned releases: %d\nPlanned forgets: %d\n", result.Released, result.Forgotten)
 	} else {
-		fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
+		_, err = fmt.Fprintf(w, "Released: %d\nForgotten: %d\n", result.Released, result.Forgotten)
 	}
+	return err
 }
 
 func releaseNoMatch(selector control.ReleaseSelector) string {
@@ -653,7 +691,7 @@ func releaseNoMatch(selector control.ReleaseSelector) string {
 	return "no matching route or port for this path"
 }
 
-func writeSingleReleaseResult(w io.Writer, item control.ReleaseItem, dryRun bool) {
+func writeSingleReleaseResult(w io.Writer, item control.ReleaseItem, dryRun bool) error {
 	verbs := make([]string, 0, len(item.Actions))
 	for _, action := range item.Actions {
 		verb := string(action)
@@ -668,15 +706,18 @@ func writeSingleReleaseResult(w io.Writer, item control.ReleaseItem, dryRun bool
 	}
 	verb := strings.Join(verbs, " and ")
 	if item.Kind == identity.KindRoute {
-		fmt.Fprintf(w, "%s route %q at %s\n", verb, item.Host, item.Path)
-	} else {
-		fmt.Fprintf(w, "%s port %q at %s\n", verb, item.Name, item.Path)
+		_, err := fmt.Fprintf(w, "%s route %q at %s\n", verb, item.Host, item.Path)
+		return err
 	}
+	_, err := fmt.Fprintf(w, "%s port %q at %s\n", verb, item.Name, item.Path)
+	return err
 }
 
-func writeReleaseTable(w io.Writer, items []control.ReleaseItem) {
+func writeReleaseTable(w io.Writer, items []control.ReleaseItem) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "KIND\tIDENTITY\tPORT\tSTATE\tACTIONS\tPATH")
+	if _, err := fmt.Fprintln(tw, "KIND\tIDENTITY\tPORT\tSTATE\tACTIONS\tPATH"); err != nil {
+		return err
+	}
 	for _, item := range items {
 		identityText := item.Name
 		if item.Kind == identity.KindRoute {
@@ -697,9 +738,11 @@ func writeReleaseTable(w io.Writer, items []control.ReleaseItem) {
 		for _, action := range item.Actions {
 			actions = append(actions, string(action))
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", item.Kind, identityText, port, item.State, strings.Join(actions, ","), item.Path)
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", item.Kind, identityText, port, item.State, strings.Join(actions, ","), item.Path); err != nil {
+			return err
+		}
 	}
-	_ = tw.Flush()
+	return tw.Flush()
 }
 
 func runList(cfg Config) int {
