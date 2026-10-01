@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Added `lewp release --pick` to choose one or more registered paths from an interactive checklist and release them together. It previews the combined plan and confirms before applying, and supports `--forget`, `--dry-run`, and `--yes`.
+
 ## 0.2.0
 
 ### Added

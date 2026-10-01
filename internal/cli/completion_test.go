@@ -34,7 +34,7 @@ func TestRunCompletionEmitsShellScripts(t *testing.T) {
 }
 
 func TestCompletionScriptsContainGlobalReleaseFlags(t *testing.T) {
-	wants := []string{"--path", "--recursive", "--host", "--port", "--name", "--route", "--forget", "--dry-run", "--json", "--yes"}
+	wants := []string{"--pick", "--path", "--recursive", "--host", "--port", "--name", "--route", "--forget", "--dry-run", "--json", "--yes"}
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		var stdout, stderr bytes.Buffer
 		if code := Run(Config{Args: []string{"completion", shell}, Stdout: &stdout, Stderr: &stderr}); code != 0 {

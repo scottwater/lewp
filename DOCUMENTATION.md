@@ -45,6 +45,7 @@ lewp release --path P [--recursive] [--route | --name N]
              [--forget] [--dry-run] [--json] [--yes|-y]
 lewp release --host H [--forget] [--dry-run] [--json]
 lewp release --port N [--forget] [--dry-run] [--json]
+lewp release --pick [--forget] [--dry-run] [--yes|-y]
 lewp list [--all] [--json]
 lewp suffix list
 lewp suffix remove S
@@ -855,6 +856,7 @@ Usage:
                [--forget] [--dry-run] [--json] [--yes|-y]
   lewp release --host <host> [--forget] [--dry-run] [--json]
   lewp release --port <number> [--forget] [--dry-run] [--json]
+  lewp release --pick [--forget] [--dry-run] [--yes|-y]
 
 Targets and scopes:
   --path <path>    Target an exact registered path, including an external or
@@ -865,6 +867,9 @@ Targets and scopes:
   --port <number>  Target the current owner of a numeric port
   --name <name>    Release one named bare port under a path
   --route          Release only the route under a path, keeping bare ports
+  --pick           Choose one or more registered paths from a checklist and
+                   release everything at each. With --forget, the list also
+                   includes released history.
 
 Output and safety:
   --forget         Delete matching registry history. Release otherwise keeps
@@ -883,6 +888,11 @@ registry state changes; rerun the command to review a new plan. Recursive
 selection from / is allowed for dry runs but uses the same confirmation rules
 for changes.
 
+--pick requires a terminal. Move with the arrow keys or j/k, toggle with space,
+toggle everything with a, and press enter to continue (q or Esc cancels). Lewp
+previews the combined plan and asks for confirmation unless --yes is given, then
+applies each selected path's plan in turn.
+
 Examples:
   lewp release
   lewp release --path /work/deleted-worktree
@@ -895,6 +905,8 @@ Examples:
   lewp release --port 42137
   lewp release --path /work/deleted-worktree --forget
   lewp release --path /work/worktrees --recursive --yes --json
+  lewp release --pick
+  lewp release --pick --forget
 ```
 
 ### Targets and path matching
@@ -944,6 +956,33 @@ lewp release --port 42137
 You may combine `--recursive` only with an explicit `--path`. The `--route` and
 `--name` scopes also require a path selector and cannot be combined with each
 other. Without a scope, a path selects its route and all bare ports.
+
+### Picking several paths
+
+`--pick` lists every registered path and lets you check off the ones to
+release, which is handy after deleting a batch of worktrees. Each row shows the
+path's main host and the end of its folder; deleted paths are marked `stale`.
+Aliases and bare ports at a path are released with it and counted in the plan
+totals. Add
+`--forget` to include released history and delete it too.
+
+```sh
+lewp release --pick
+lewp release --pick --forget
+lewp release --pick --dry-run
+```
+
+In the checklist, use the arrow keys or `j`/`k` to move, space to toggle, `a` to
+toggle every row, and enter to continue. `q`, Esc, or Ctrl-C cancels. When input
+is not a raw terminal, Lewp prints a numbered list and accepts numbers and
+ranges such as `1 3 5-7`, or `all`.
+
+After selection Lewp plans every chosen path, prints one line per path, and
+asks `Proceed? [y/N]` unless you pass `--yes`. It then applies each path's plan
+in turn. Each path applies atomically; if one fails, Lewp reports how many paths
+it released before the failure. `--pick` requires an interactive terminal and
+cannot be combined with `--path`, `--host`, `--port`, `--route`, `--name`,
+`--recursive`, or `--json`.
 
 ### Release, forget, and counts
 

@@ -309,6 +309,7 @@ type releaseOptions struct {
 	port         int
 	pathSet      bool
 	recursive    bool
+	pick         bool
 	routeOnly    bool
 	forget       bool
 	dryRun       bool
@@ -384,6 +385,8 @@ func parseReleaseArgs(args []string) (releaseOptions, error) {
 			opts.port, portSet = port, true
 		case arg == "--recursive":
 			opts.recursive = true
+		case arg == "--pick":
+			opts.pick = true
 		case arg == "--route":
 			opts.routeOnly = true
 		case arg == "--forget":
@@ -420,6 +423,9 @@ func parseReleaseArgs(args []string) (releaseOptions, error) {
 	}
 	if opts.recursive && !opts.pathSet {
 		return releaseOptions{}, fmt.Errorf("--recursive requires an explicit --path")
+	}
+	if opts.pick && (selectors > 0 || opts.recursive || opts.routeOnly || opts.name != "" || opts.jsonOut) {
+		return releaseOptions{}, fmt.Errorf("--pick can only be combined with --forget, --dry-run, and --yes")
 	}
 	if hostSet {
 		opts.selectorType = registry.ReleaseSelectorHost
@@ -512,6 +518,9 @@ func runRelease(cfg Config) int {
 // mutations require either an affirmative terminal confirmation or --yes;
 // exact selectors retain their unprompted plan/apply behavior.
 func executeRelease(cfg Config, opts releaseOptions, interactive bool) int {
+	if opts.pick {
+		return executePickRelease(cfg, opts, interactive)
+	}
 	if opts.recursive && !opts.dryRun && !opts.assumeYes && (opts.jsonOut || !interactive) {
 		if err := releaseConfirmationRequired(cfg); err != nil {
 			return releaseOutputError(cfg, err, false)

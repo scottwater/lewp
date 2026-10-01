@@ -78,7 +78,7 @@ _lewp() {
     alias)  COMPREPLY=( $(compgen -W "add remove list --json --help" -- "$cur") ) ;;
     info)   COMPREPLY=( $(compgen -W "--name --host --json --shell --port --help" -- "$cur") ) ;;
     port)   COMPREPLY=( $(compgen -W "--name --json --shell --help" -- "$cur") ) ;;
-    release) COMPREPLY=( $(compgen -W "--route --port --forget --path --recursive --host --name --dry-run --json --yes -y --help" -- "$cur") ) ;;
+    release) COMPREPLY=( $(compgen -W "--pick --route --port --forget --path --recursive --host --name --dry-run --json --yes -y --help" -- "$cur") ) ;;
     version) COMPREPLY=( $(compgen -W "--detailed --help" -- "$cur") ) ;;
     upgrade) COMPREPLY=( $(compgen -W "--help" -- "$cur") ) ;;
     completion) COMPREPLY=( $(compgen -W "bash zsh fish --help" -- "$cur") ) ;;
@@ -111,7 +111,7 @@ func zshCompletion() string {
 	b.WriteString("      alias) _values 'alias subcommand/options' add remove list --json --help ;;\n")
 	b.WriteString("      info) _values 'info options' --name --host --json --shell --port --help ;;\n")
 	b.WriteString("      port) _values 'port options' --name --json --shell --help ;;\n")
-	b.WriteString("      release) _values 'release options' --path --recursive --host --port --name --route --forget --dry-run --json --yes -y --help ;;\n")
+	b.WriteString("      release) _values 'release options' --pick --path --recursive --host --port --name --route --forget --dry-run --json --yes -y --help ;;\n")
 	b.WriteString("      version) _values 'version options' --detailed --help ;;\n")
 	b.WriteString("      upgrade) _values 'upgrade options' --help ;;\n")
 	b.WriteString("      completion) _values 'shell' bash zsh fish ;;\n")
@@ -127,7 +127,7 @@ func fishCompletion() string {
 	var b strings.Builder
 	b.WriteString("# fish completion for lewp\n")
 	b.WriteString("# Install: lewp completion fish > ~/.config/fish/completions/lewp.fish\n")
-	b.WriteString("# release options: --path --recursive --host --port --name --route --forget --dry-run --json --yes\n")
+	b.WriteString("# release options: --pick --path --recursive --host --port --name --route --forget --dry-run --json --yes\n")
 	b.WriteString("complete -c lewp -f\n")
 	for _, c := range completionCommands {
 		fmt.Fprintf(&b, "complete -c lewp -n __fish_use_subcommand -a %s -d '%s'\n", c.name, c.desc)
@@ -154,6 +154,7 @@ func fishCompletion() string {
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l name -r -d 'Logical port name'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l json -d 'Emit JSON'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from port' -l shell -d 'Emit shell exports'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l pick -d 'Choose paths to release from a checklist'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l path -r -d 'Target a registered path'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l recursive -d 'Include registered descendant paths'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l host -r -d 'Target a registered host'\n")
@@ -163,7 +164,7 @@ func fishCompletion() string {
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l forget -d 'Delete matching registry history'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l dry-run -d 'Show the plan without changing the registry'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l json -d 'Emit JSON'\n")
-	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l yes -s y -d 'Approve a recursive mutation'\n")
+	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from release' -l yes -s y -d 'Approve a recursive or picked mutation'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from version' -l detailed -d 'Include build metadata'\n")
 	b.WriteString("complete -c lewp -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'\n")
 	return b.String()

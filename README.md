@@ -189,6 +189,13 @@ recursive changes require `--yes` or `-y`. Recursive JSON changes require
 `--yes` and write one JSON object without a human preview or prompt. Release
 keeps registry history unless you add `--forget`.
 
+To choose several paths from a checklist instead, such as a batch of deleted
+worktrees, run:
+
+```sh
+lewp release --pick
+```
+
 ## Identity and configuration
 
 A route's hostname is `<name>.<root>.lewp`. Lewp resolves `root`, `name`, and an
