@@ -136,6 +136,7 @@ lewp release --path P [--recursive] [--route | --name N]
              [--forget] [--dry-run] [--json] [--yes|-y]
 lewp release --host H [--forget] [--dry-run] [--json]
 lewp release --port N [--forget] [--dry-run] [--json]
+lewp release --pick [--forget] [--dry-run] [--yes|-y]
 lewp list [--all] [--json]
 lewp suffix list
 lewp suffix remove S
@@ -374,6 +375,9 @@ lewp release --path /work/worktrees --recursive --yes --json</pre>
       <pre>lewp release --path /work/app --route
 lewp release --path /work/app --name vite
 lewp release --path /work/deleted-worktree --forget</pre>
+      <p>Use --pick to choose one or more registered paths from an interactive checklist and release everything at each. Move with the arrow keys or j/k, toggle with space, toggle all with a, and press enter to continue; q or Esc cancels. Lewp previews the combined plan and asks for confirmation unless you pass --yes. With --forget, the checklist also includes released history. --pick requires a terminal.</p>
+      <pre>lewp release --pick
+lewp release --pick --forget</pre>
       <p>Host and numeric-port selectors target current owners only. Dry runs never change the registry. Lewp applies each plan atomically and refuses it if registry state changes. A selector with no matches exits 0.</p>
     </section>
 
