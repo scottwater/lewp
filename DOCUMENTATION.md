@@ -1156,8 +1156,8 @@ cli binary: /usr/local/bin/lewp
 launchd plist: /Users/scott/Library/LaunchAgents/dev.lewp.daemon.plist
 installed program: /usr/local/bin/lewp
 installed program matches this CLI
-current version: 0.1.0
-installed version: 0.1.0
+current version: 0.4.0
+installed version: 0.4.0
 daemon log: /Users/scott/Library/Logs/lewp/daemon.err.log
 ```
 
@@ -1325,13 +1325,13 @@ lewp version --detailed
 Example:
 
 ```text
-lewp version 0.1.0
+lewp version 0.4.0
 ```
 
 Detailed example:
 
 ```text
-lewp version 0.1.0
+lewp version 0.4.0
 commit:  0a778ce
 built:   2026-06-27T23:08:00Z
 go:      go1.25.1
