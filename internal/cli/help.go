@@ -204,11 +204,12 @@ directory. Default output is the same table shape as lewp list, scoped to this
 directory.
 
 Usage:
-  lewp info [--name <name>] [--host <host>] [--json|--shell|--port]
+  lewp info [--name <name>] [--host <host>] [--kind <kind>] [--json|--shell|--port]
 
 Flags:
   --name <name>  Filter entries by logical name
   --host <host>  Filter entries by exact host
+  --kind <kind>  Filter entries by kind: route, alias, or port
   --json         Emit matching entries as a JSON array
   --shell        Emit shell "export" lines; requires exactly one match
   --port         Emit only the port digits; requires exactly one match
@@ -217,6 +218,7 @@ Examples:
   lewp info
   lewp info --host app.atlas.lewp --port
   eval "$(lewp info --host app.atlas.lewp --shell)"
+  eval "$(lewp info --kind route --shell)"
 `
 
 	moveHelp = `lewp move — move a route from another directory to this one

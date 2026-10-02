@@ -37,7 +37,7 @@ lewp alias add <host> [--json]
 lewp alias remove <host>
 lewp alias list [--json]
 lewp init [--root R] [--name N] [--host H] [--force]
-lewp info [--name N] [--host H] [--json|--shell|--port]
+lewp info [--name N] [--host H] [--kind K] [--json|--shell|--port]
 lewp move --from <path> [--json]
 lewp port [--name N] [--json|--shell]
 lewp release [--route | --name N] [--forget] [--dry-run] [--json]
@@ -668,11 +668,12 @@ directory. Default output is the same table shape as lewp list, scoped to this
 directory.
 
 Usage:
-  lewp info [--name <name>] [--host <host>] [--json|--shell|--port]
+  lewp info [--name <name>] [--host <host>] [--kind <kind>] [--json|--shell|--port]
 
 Flags:
   --name <name>  Filter entries by logical name
   --host <host>  Filter entries by exact host
+  --kind <kind>  Filter entries by kind: route, alias, or port
   --json         Emit matching entries as a JSON array
   --shell        Emit shell "export" lines; requires exactly one match
   --port         Emit only the port digits; requires exactly one match
@@ -681,6 +682,7 @@ Examples:
   lewp info
   lewp info --host app.atlas.lewp --port
   eval "$(lewp info --host app.atlas.lewp --shell)"
+  eval "$(lewp info --kind route --shell)"
 ```
 
 Show routes and bare ports registered for the current directory. `info` reads
@@ -705,7 +707,9 @@ tags.feature-1.atlas.lewp  feature-1  alias  42137  up     /Users/scott/projects
 
 Use `--json` for machine-readable entries. `--name` filters by logical name;
 aliases share their route's name. `--host` filters by exact host, which is the
-clearest way to select a route or alias.
+clearest way to select a route or alias. `--kind` filters by entry kind
+(`route`, `alias`, or `port`); `--kind route` selects the directory's primary
+route without repeating its hostname.
 
 `--port` emits only the port digits with no trailing newline. It requires
 exactly one matching entry:
@@ -719,6 +723,7 @@ VITE_RUBY_PORT="$(lewp info --name vite --port)"
 
 ```sh
 eval "$(lewp info --host feature-1.atlas.lewp --shell)"
+eval "$(lewp info --kind route --shell)"
 ```
 
 If no route or port is registered for the current directory, `info` exits

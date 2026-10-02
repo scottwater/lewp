@@ -128,7 +128,7 @@ lewp alias add &lt;host&gt; [--json]
 lewp alias remove &lt;host&gt;
 lewp alias list [--json]
 lewp init [--root R] [--name N] [--host H] [--force]
-lewp info [--name N] [--host H] [--json|--shell|--port]
+lewp info [--name N] [--host H] [--kind K] [--json|--shell|--port]
 lewp move --from &lt;path&gt; [--json]
 lewp port [--name N] [--json|--shell]
 lewp release [--route | --name N] [--forget] [--dry-run] [--json]
@@ -317,9 +317,10 @@ host = "atlas.lewp"</pre>
 feature-1.atlas.lewp       feature-1  route  42137  up     .../atlas/feature-1
 tags.feature-1.atlas.lewp  feature-1  alias  42137  up     .../atlas/feature-1
 -                          vite       port   42138  down   .../atlas/feature-1</pre>
-      <p>--name filters by logical name; --host filters by exact host. --port emits only the port digits (requires exactly one match); --shell emits eval-safe exports for exactly one match. If nothing is registered, info exits non-zero and points you at lewp lease, lewp port, or lewp move.</p>
+      <p>--name filters by logical name; --host filters by exact host; --kind filters by route, alias, or port. --port emits only the port digits (requires exactly one match); --shell emits eval-safe exports for exactly one match. If nothing is registered, info exits non-zero and points you at lewp lease, lewp port, or lewp move.</p>
       <pre>PORT="$(lewp info --host feature-1.atlas.lewp --port)"
-eval "$(lewp info --host feature-1.atlas.lewp --shell)"</pre>
+eval "$(lewp info --host feature-1.atlas.lewp --shell)"
+eval "$(lewp info --kind route --shell)"</pre>
     </section>
 
     <section id="move" class="doc-section doc-scroll">

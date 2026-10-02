@@ -206,7 +206,14 @@ func runInfo(cfg Config) int {
 	portOnly := fs.Bool("port", false, "")
 	name := fs.String("name", "", "")
 	host := fs.String("host", "", "")
+	kind := fs.String("kind", "", "")
 	if !parseFlags(cfg, fs, "info") {
+		return 2
+	}
+	switch identity.Kind(*kind) {
+	case "", identity.KindRoute, control.KindAlias, identity.KindPort:
+	default:
+		fmt.Fprintf(cfg.Stderr, "lewp info: --kind must be route, alias, or port (got %q)\n", *kind)
 		return 2
 	}
 	if *jsonOut && *shellOut {
@@ -232,7 +239,7 @@ func runInfo(cfg Config) int {
 		fmt.Fprintln(cfg.Stderr, "Or move an existing route here: lewp move --from <path>")
 		return 1
 	}
-	entries := filterInfoEntries(resp.Entries, *name, *host)
+	entries := filterInfoEntries(resp.Entries, *name, *host, identity.Kind(*kind))
 	if *jsonOut {
 		if entries == nil {
 			entries = []control.ListEntry{}
@@ -246,7 +253,7 @@ func runInfo(cfg Config) int {
 	}
 	if *portOnly {
 		if len(entries) != 1 {
-			fmt.Fprintln(cfg.Stderr, "lewp info --port requires exactly one matching entry; pass --host <host> or --name <name>")
+			fmt.Fprintln(cfg.Stderr, "lewp info --port requires exactly one matching entry; pass --host <host>, --name <name>, or --kind <kind>")
 			return 2
 		}
 		fmt.Fprintf(cfg.Stdout, "%d", entries[0].Port)
@@ -254,7 +261,7 @@ func runInfo(cfg Config) int {
 	}
 	if *shellOut {
 		if len(entries) != 1 {
-			fmt.Fprintln(cfg.Stderr, "lewp info --shell requires exactly one matching entry; pass --host <host> or --name <name>")
+			fmt.Fprintln(cfg.Stderr, "lewp info --shell requires exactly one matching entry; pass --host <host>, --name <name>, or --kind <kind>")
 			return 2
 		}
 		writeInfoShell(cfg.Stdout, entries[0])
@@ -264,8 +271,8 @@ func runInfo(cfg Config) int {
 	return 0
 }
 
-func filterInfoEntries(entries []control.ListEntry, name, host string) []control.ListEntry {
-	if name == "" && host == "" {
+func filterInfoEntries(entries []control.ListEntry, name, host string, kind identity.Kind) []control.ListEntry {
+	if name == "" && host == "" && kind == "" {
 		return entries
 	}
 	filtered := make([]control.ListEntry, 0, len(entries))
@@ -274,6 +281,9 @@ func filterInfoEntries(entries []control.ListEntry, name, host string) []control
 			continue
 		}
 		if host != "" && entry.Host != host {
+			continue
+		}
+		if kind != "" && entry.Kind != kind {
 			continue
 		}
 		filtered = append(filtered, entry)

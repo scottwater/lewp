@@ -1943,6 +1943,53 @@ func TestRunInfoShellRequiresSingleFilteredEntry(t *testing.T) {
 	}
 }
 
+func TestRunInfoShellKindRouteSelectsPrimaryRoute(t *testing.T) {
+	socketPath := startTestDaemon(t)
+	appDir := t.TempDir()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Config{Args: []string{"lease", "--root", "work", "--name", "app"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("add app code=%d stderr=%q", code, stderr.String())
+	}
+	for _, args := range [][]string{{"alias", "add", "tags.app.work.lewp"}, {"alias", "add", "*.app.work.lewp"}, {"port", "--name", "vite"}} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := Run(Config{Args: args, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+			t.Fatalf("%v code=%d stderr=%q", args, code, stderr.String())
+		}
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--kind", "route", "--shell"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --kind route --shell code=%d stderr=%q", code, stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "export HOST=app.work.lewp\n") {
+		t.Fatalf("info --kind route --shell should export the primary host:\n%s", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--kind", "alias", "--shell"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 2 {
+		t.Fatalf("info --kind alias --shell code=%d want 2 stdout=%q", code, stdout.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--kind", "port", "--port"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 0 {
+		t.Fatalf("info --kind port --port code=%d stderr=%q", code, stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run(Config{Args: []string{"info", "--kind", "bogus"}, WorkDir: appDir, SocketPath: socketPath, Stdout: &stdout, Stderr: &stderr}); code != 2 {
+		t.Fatalf("info --kind bogus code=%d want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--kind must be route, alias, or port") {
+		t.Fatalf("info --kind bogus stderr=%q", stderr.String())
+	}
+}
+
 func TestRunInfoJSONAndTableFilters(t *testing.T) {
 	socketPath := startTestDaemon(t)
 	appDir := t.TempDir()
