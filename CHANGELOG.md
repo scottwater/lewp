@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+
+- Added `lewp info --kind route|alias|port` to filter entries by kind. `eval "$(lewp info --kind route --shell)"` now selects the directory's route without repeating its hostname, even when the route has aliases or the directory has bare ports.
+
+### Changed
+
+- Brought the docs site up to date with the CLI reference: fuller `lewp release` coverage (selector rules, `--forget` with paths, counts, `--pick` details), explicit-host conflict handling and `--auto-suffix` on `lewp lease`, and current version strings.
+
 ## 0.3.0
 
 ### Added
