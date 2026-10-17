@@ -114,11 +114,12 @@ func TestRunSystemStartPrintsLaunchdPlan(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var ran []string
 	code := Run(Config{
-		Args:      []string{"system", "start"},
-		WorkDir:   t.TempDir(),
-		PlistPath: writeTempPlist(t),
-		Stdout:    &stdout,
-		Stderr:    &stderr,
+		Args:       []string{"system", "start"},
+		WorkDir:    t.TempDir(),
+		SocketPath: startTestDaemon(t),
+		PlistPath:  writeTempPlist(t),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
 		RunCommand: func(_ context.Context, argv []string) error {
 			ran = argv
 			return nil
@@ -140,11 +141,12 @@ func TestRunSystemStartKickstartsLoadedJob(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	var ran []string
 	code := Run(Config{
-		Args:      []string{"system", "start"},
-		WorkDir:   t.TempDir(),
-		PlistPath: writeTempPlist(t),
-		Stdout:    &stdout,
-		Stderr:    &stderr,
+		Args:       []string{"system", "start"},
+		WorkDir:    t.TempDir(),
+		SocketPath: startTestDaemon(t),
+		PlistPath:  writeTempPlist(t),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
 		RunCommand: func(_ context.Context, argv []string) error {
 			ran = append(ran, strings.Join(argv, " "))
 			if len(ran) == 1 {

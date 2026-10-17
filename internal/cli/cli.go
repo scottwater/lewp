@@ -764,6 +764,9 @@ func runSystem(cfg Config) int {
 			return 1
 		}
 		fmt.Fprintln(cfg.Stdout, strings.Join(plan, " "))
+		if cfg.Args[1] == "restart" {
+			return confirmDaemonReady(cfg)
+		}
 		return 0
 	default:
 		fmt.Fprintf(cfg.Stderr, "unknown system action: %s\n", cfg.Args[1])
@@ -1045,10 +1048,10 @@ func runSystemStart(cfg Config) int {
 			return reportSystemStartFailure(cfg, fallback, err)
 		}
 		fmt.Fprintln(cfg.Stdout, strings.Join(fallback, " "))
-		return 0
+		return confirmDaemonReady(cfg)
 	}
 	fmt.Fprintln(cfg.Stdout, strings.Join(plan, " "))
-	return 0
+	return confirmDaemonReady(cfg)
 }
 
 // reportSystemStartFailure prints the exact failing launchctl command, the
