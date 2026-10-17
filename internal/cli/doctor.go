@@ -443,7 +443,8 @@ func inferenceCheck(cfg Config) doctorCheck {
 }
 
 // targetPortChecks reports the health of routes registered for the current
-// directory, using the daemon's TCP-based state. A down target gets a concrete
+// directory, using the daemon's state: a TCP check for proxied routes and a
+// directory check for static ones. A down proxied target gets a concrete
 // "start your app" hint.
 func targetPortChecks(cfg Config) []doctorCheck {
 	resp, err := call(cfg, control.Request{Command: "info", Info: control.InfoRequest{WorkDir: cfg.WorkDir}})
@@ -465,14 +466,22 @@ func targetPortChecks(cfg Config) []doctorCheck {
 			label = entry.Name
 		}
 		c := doctorCheck{Name: "target " + label}
-		switch entry.State {
-		case "up":
-			c.Status = statusOK
-			c.Detail = fmt.Sprintf("127.0.0.1:%d is up", entry.Port)
-		case "stale":
+		static := entry.StaticDir != ""
+		switch {
+		case entry.State == "stale":
 			c.Status = statusWarn
 			c.Detail = fmt.Sprintf("path %s is missing", entry.Path)
 			c.Run = "lewp release --forget"
+		case static && entry.State == "up":
+			c.Status = statusOK
+			c.Detail = fmt.Sprintf("serving files from %s", entry.StaticDir)
+		case static:
+			c.Status = statusWarn
+			c.Detail = fmt.Sprintf("static directory %s is missing", entry.StaticDir)
+			c.Run = "build the directory, or lewp lease --static <dir>"
+		case entry.State == "up":
+			c.Status = statusOK
+			c.Detail = fmt.Sprintf("127.0.0.1:%d is up", entry.Port)
 		default:
 			c.Status = statusWarn
 			c.Detail = fmt.Sprintf("127.0.0.1:%d is not responding", entry.Port)

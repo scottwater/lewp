@@ -72,6 +72,7 @@ type ReleasePlanItem struct {
 	Path          string
 	Name          string
 	Host          string
+	StaticDir     string
 	RegistryState string
 	ActivePort    *int
 	Ports         []int
@@ -299,14 +300,14 @@ func buildReleasePlan(ctx context.Context, tx *sql.Tx, selector ReleaseSelector,
 }
 
 func readReleaseRoutes(ctx context.Context, tx *sql.Tx) ([]ReleasePlanItem, error) {
-	rows, err := tx.QueryContext(ctx, `select id, path, normalized_name from routes`)
+	rows, err := tx.QueryContext(ctx, `select id, path, normalized_name, static_dir from routes`)
 	if err != nil {
 		return nil, err
 	}
 	var items []ReleasePlanItem
 	for rows.Next() {
 		var item ReleasePlanItem
-		if err := rows.Scan(&item.RouteID, &item.Path, &item.Name); err != nil {
+		if err := rows.Scan(&item.RouteID, &item.Path, &item.Name, &item.StaticDir); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}

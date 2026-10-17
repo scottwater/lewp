@@ -153,6 +153,7 @@ func listEntryResponse(record registry.Record) LeaseResponse {
 		Kind:           record.Kind,
 		HostKind:       hostKind,
 		ReleaseState:   registry.StateActive,
+		StaticDir:      record.StaticDir,
 	}
 }
 
@@ -162,13 +163,14 @@ func routeRecordEntry(record registry.Record) ListEntry {
 		kind = KindAlias
 	}
 	return ListEntry{
-		Host:  record.Host,
-		Port:  record.Port,
-		State: recordState(record),
-		Path:  record.Path,
-		Kind:  kind,
-		Root:  record.Root,
-		Name:  record.Name,
+		Host:      record.Host,
+		Port:      record.Port,
+		State:     recordState(record),
+		Path:      record.Path,
+		Kind:      kind,
+		Root:      record.Root,
+		Name:      record.Name,
+		StaticDir: record.StaticDir,
 	}
 }
 

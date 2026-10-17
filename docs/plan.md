@@ -144,6 +144,22 @@ released, forgotten, normalized-name-changed) — **but no per-request rows**.
   expiry field or sweeper; `last_seen_at` is throttled/informational.
 - Path: `~/Library/Application Support/lewp/registry.sqlite`.
 
+### Static routes (schema version 3)
+
+`routes.static_dir` (absolute path, `''` for ordinary routes) lets a route serve files from disk
+instead of proxying (`lewp lease --static <dir>`). Decisions:
+
+- The column lives on the route, not the host, so aliases and wildcards serve the same directory
+  through the existing `RouteByHost` lookup with no extra wiring.
+- A static route still holds its leased port. Port allocation, release, move, and `--no-static`
+  (switching back to proxying) stay unchanged, and the cost is one unused port in the pool.
+- Version 2 registries gain the column through an in-place `alter table` instead of the
+  pre-release reset, so upgrading keeps pinned ports and hosts.
+- Files are opened through `os.Root`, so `..` and symlinks can't escape the directory. Dotfiles
+  and directory listings are refused because people will point `--static` at a project root that
+  holds `.env` and `.git/`. Only `GET`/`HEAD` are allowed, with `Cache-Control: no-cache`.
+- No SPA fallback, CORS headers, file watching, or live reload. Those belong to a dev server.
+
 ## Port allocation
 
 Default routed-app port range: `41000-49999`. Allocate by scanning for a free loopback port in that

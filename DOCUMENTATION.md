@@ -209,6 +209,11 @@ mirror mode is explicitly allowed. Setup is additive: re-running with another
 `lewp system start` (or pass `--start` to setup) so launchd starts or kickstarts
 the daemon and it loads the updated suffix list.
 
+Custom suffixes persist across upgrades in
+`~/Library/Application Support/lewp/suffixes.toml`. Re-running setup without
+`--suffix` keeps them. Remove one with `lewp suffix remove`; uninstall removes
+the full suffix configuration.
+
 `--log-requests errors|all` sets how much request traffic the daemon logs
 (persisted in the launchd plist). The default, `errors`, logs only failed
 requests (a proxy error or an HTTP status ≥ 400) so a steady stream of
@@ -286,6 +291,11 @@ already loaded, it falls back to `launchctl kickstart -k`. `uninstall` also
 removes the Lewp CA trust from the login keychain, LaunchAgent plist, and
 resolver files, including custom suffix resolver files configured with
 `lewp setup --suffix`.
+
+`start` and `restart` wait up to five seconds for the daemon to answer on its
+control socket. If launchctl succeeds but the daemon does not respond, the
+command fails and prints the daemon log path and available launchd diagnostics.
+`lewp setup --start` uses the same readiness check.
 
 Because `uninstall` is destructive, it first prints an affected-file summary —
 the launchd job to boot out, the keychain trust to remove, the resolver file to
@@ -388,7 +398,8 @@ inference. Inferred values and warnings are printed to stderr so --shell and
 $(...) capture only the clean env lines.
 
 Usage:
-  lewp lease [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset] [--json] [--shell]
+  lewp lease [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset]
+             [--static <dir> | --no-static] [--json] [--shell]
 
 Flags:
   --root <root>   Override the inferred root segment of the hostname
@@ -399,6 +410,9 @@ Flags:
   --reset         Discard the remembered host/root/name override for this
                   directory and re-resolve from flags and inference, keeping the
                   same port and history
+  --static <dir>  Serve files from <dir> (relative to this directory) instead of
+                  proxying to the leased port
+  --no-static     Switch a static route back to proxying to the leased port
   --json          Emit the route as a JSON object
   --shell         Emit shell "export" lines for use with eval
 
@@ -419,9 +433,16 @@ throwing away the port or history the way "lewp release --forget" would. Combine
 it with a flag to keep one value while clearing the rest, e.g.
 "lewp lease --reset --root atlas" re-infers the name and host but keeps root.
 
+A static route serves the directory's files over HTTP and HTTPS with no app
+process running, and its aliases serve the same files. URL paths map straight
+onto the directory: /3.0.0/kol.js serves <dir>/3.0.0/kol.js. Dotfiles are never
+served and directories without an index.html return 404. The setting is
+remembered like --host; plain "lewp lease" keeps it and --reset leaves it alone.
+
 Examples:
   lewp lease
   lewp lease --root atlas --name feature-1
+  lewp lease --static dist
   lewp lease --reset
   eval "$(lewp lease --shell)"
 ```
@@ -531,6 +552,46 @@ lewp lease --reset --root atlas   # re-infer name and host, but keep root=atlas
 
 Only the current directory's primary host and root/name are reset; its aliases
 and wildcard hosts are left untouched.
+
+### Serving files from disk with `--static`
+
+For build output that needs a stable URL but no app server, such as a compiled
+JavaScript bundle, point the route at a directory:
+
+```sh
+cd ~/work/js
+lewp lease --host kickoffjs.lewp --static dist
+```
+
+The daemon then answers `http://kickoffjs.lewp` and `https://kickoffjs.lewp`
+from `~/work/js/dist`. Nothing has to be running. URL paths map directly onto
+the directory, so `https://kickoffjs.lewp/3.0.0/kol.js` serves
+`dist/3.0.0/kol.js`. Aliases added with [`lewp alias add`](#lewp-alias) serve
+the same files.
+
+- The directory is resolved against the current directory and must exist when
+  you lease. If it is deleted later, requests get a Lewp error page naming it.
+- Requests can't leave the directory: `..` segments and symlinks pointing
+  outside it are refused.
+- Dotfiles and dot-directories (`.env`, `.git/`) always return 404, including
+  through a symlink with an ordinary-looking name.
+- A directory serves its `index.html`. Without one it returns 404; directories
+  are never listed.
+- Only `GET` and `HEAD` are allowed. Responses send `Cache-Control: no-cache`,
+  so a rebuild shows up on the next reload, and unchanged files still
+  revalidate with `304`.
+
+The human and `--json` output include the directory as `STATIC_DIR` /
+`static_dir`. `lewp list` adds a `STATIC` column when any route serves files,
+and `lewp info` prints `STATIC_DIR`. The route still holds its leased port, so
+`lewp lease --no-static` switches back to proxying without changing the port or
+host. `lewp move` keeps a static directory inside the project pointing inside
+it. `lewp list` and `lewp doctor` report a static route as up while its
+directory exists, since nothing listens on its port.
+
+`--static` needs a daemon that knows about it. If the CLI was upgraded but the
+daemon is still the old binary, `lewp lease --static` fails and asks you to run
+`lewp system restart`.
 
 ## `lewp alias`
 
@@ -1074,7 +1135,8 @@ Help:
 ```text
 lewp list — list routes, aliases, and bare ports with their health
 
-States are derived from TCP checks: up, down, or stale. The human table has
+States are derived from TCP checks (or, for static routes, whether the
+directory exists): up, down, or stale. The human table has
 HOST, NAME, KIND, PORT, STATE, and PATH columns; KIND is route, alias, or port.
 Bare ports show "-" for HOST.
 
@@ -1112,8 +1174,9 @@ tags.feature-1.atlas.lewp  feature-1  alias  42137  up     /Users/scott/projects
 
 States:
 
-- `up`: TCP connect to the leased port succeeds
-- `down`: TCP connect fails
+- `up`: TCP connect to the leased port succeeds; for a static route, its
+  directory exists
+- `down`: TCP connect fails; for a static route, its directory is missing
 - `stale`: registered path no longer exists
 - `released`: route was explicitly released
 
@@ -1156,8 +1219,8 @@ cli binary: /usr/local/bin/lewp
 launchd plist: /Users/scott/Library/LaunchAgents/dev.lewp.daemon.plist
 installed program: /usr/local/bin/lewp
 installed program matches this CLI
-current version: 0.4.0
-installed version: 0.4.0
+current version: 0.5.0
+installed version: 0.5.0
 daemon log: /Users/scott/Library/Logs/lewp/daemon.err.log
 ```
 
@@ -1325,13 +1388,13 @@ lewp version --detailed
 Example:
 
 ```text
-lewp version 0.4.0
+lewp version 0.5.0
 ```
 
 Detailed example:
 
 ```text
-lewp version 0.4.0
+lewp version 0.5.0
 commit:  0a778ce
 built:   2026-06-27T23:08:00Z
 go:      go1.25.1

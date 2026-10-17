@@ -101,6 +101,9 @@ Actions:
   status     Report whether the daemon is responding
   uninstall  Remove the launchd, resolver, and keychain-trust integration
 
+Start and restart wait up to five seconds for the daemon's control socket to
+respond. If it stays unresponsive, the command fails with diagnostic guidance.
+
 Flags:
   --yes, -y  Skip the confirmation prompt for uninstall (required to uninstall
              non-interactively, e.g. in a script)
@@ -123,7 +126,8 @@ inference. Inferred values and warnings are printed to stderr so --shell and
 $(...) capture only the clean env lines.
 
 Usage:
-  lewp lease [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset] [--json] [--shell]
+  lewp lease [--root <root>] [--name <name>] [--host <host>] [--auto-suffix] [--reset]
+             [--static <dir> | --no-static] [--json] [--shell]
 
 Flags:
   --root <root>   Override the inferred root segment of the hostname
@@ -134,6 +138,9 @@ Flags:
   --reset         Discard the remembered host/root/name override for this
                   directory and re-resolve from flags and inference, keeping the
                   same port and history
+  --static <dir>  Serve files from <dir> (relative to this directory) instead of
+                  proxying to the leased port
+  --no-static     Switch a static route back to proxying to the leased port
   --json          Emit the route as a JSON object
   --shell         Emit shell "export" lines for use with eval
 
@@ -147,9 +154,16 @@ throwing away the port or history the way "lewp release --forget" would. Combine
 it with a flag to keep one value while clearing the rest, e.g.
 "lewp lease --reset --root atlas" re-infers the name and host but keeps root.
 
+A static route serves the directory's files over HTTP and HTTPS with no app
+process running, and its aliases serve the same files. URL paths map straight
+onto the directory: /3.0.0/kol.js serves <dir>/3.0.0/kol.js. Dotfiles are never
+served and directories without an index.html return 404. The setting is
+remembered like --host; plain "lewp lease" keeps it and --reset leaves it alone.
+
 Examples:
   lewp lease
   lewp lease --root atlas --name feature-1
+  lewp lease --static dist
   lewp lease --reset
   eval "$(lewp lease --shell)"
 `
@@ -335,7 +349,8 @@ Examples:
 
 	listHelp = `lewp list — list routes, aliases, and bare ports with their health
 
-States are derived from TCP checks: up, down, or stale. The human table has
+States are derived from TCP checks (or, for static routes, whether the
+directory exists): up, down, or stale. The human table has
 HOST, NAME, KIND, PORT, STATE, and PATH columns; KIND is route, alias, or port.
 Bare ports show "-" for HOST.
 

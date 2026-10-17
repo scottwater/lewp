@@ -25,14 +25,25 @@ func runLease(cfg Config) int {
 	shell := fs.Bool("shell", false, "")
 	autoSuffix := fs.Bool("auto-suffix", false, "")
 	reset := fs.Bool("reset", false, "")
+	static := fs.String("static", "", "")
+	noStatic := fs.Bool("no-static", false, "")
 	if !parseFlags(cfg, fs, "lease") {
+		return 2
+	}
+	if *static != "" && *noStatic {
+		fmt.Fprintln(cfg.Stderr, "lewp lease: --static and --no-static cannot be combined")
 		return 2
 	}
 	// The wire command stays "add" so a newer CLI keeps working against an
 	// older daemon; only the CLI-visible verb is "lease".
-	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix, Reset: *reset, Env: cfg.Env}})
+	resp, err := call(cfg, control.Request{Command: "add", Lease: control.LeaseRequest{WorkDir: cfg.WorkDir, Root: *root, Name: *name, Host: *host, AutoSuffix: *autoSuffix, Reset: *reset, Static: *static, NoStatic: *noStatic, Env: cfg.Env}})
 	if err != nil {
 		return daemonError(cfg, err)
+	}
+	if (*static != "" || *noStatic) && !resp.Lease.StaticSupported {
+		fmt.Fprintln(cfg.Stderr, "running daemon does not support --static or --no-static; the route was leased but still serves as before")
+		fmt.Fprintln(cfg.Stderr, "Run: lewp system restart")
+		return 1
 	}
 	writeLease(cfg.Stdout, cfg.Stderr, *resp.Lease, *jsonOut, *shell)
 	return 0
@@ -796,13 +807,30 @@ func runList(cfg Config) int {
 }
 
 func writeEntriesTable(stdout io.Writer, entries []control.ListEntry) {
+	// The STATIC column only appears when some route serves files, so the
+	// common all-proxy table keeps its familiar shape.
+	showStatic := false
+	for _, entry := range entries {
+		if entry.StaticDir != "" {
+			showStatic = true
+			break
+		}
+	}
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "HOST\tNAME\tKIND\tPORT\tSTATE\tPATH")
+	header := "HOST\tNAME\tKIND\tPORT\tSTATE\tPATH"
+	if showStatic {
+		header += "\tSTATIC"
+	}
+	fmt.Fprintln(tw, header)
 	for _, entry := range entries {
 		host := dashIfEmpty(entry.Host)
 		name := dashIfEmpty(entry.Name)
 		kind := dashIfEmpty(string(entry.Kind))
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", host, name, kind, entry.Port, entry.State, entry.Path)
+		row := fmt.Sprintf("%s\t%s\t%s\t%d\t%s\t%s", host, name, kind, entry.Port, entry.State, entry.Path)
+		if showStatic {
+			row += "\t" + dashIfEmpty(entry.StaticDir)
+		}
+		fmt.Fprintln(tw, row)
 	}
 	_ = tw.Flush()
 }
@@ -853,6 +881,9 @@ func writeLease(stdout, stderr io.Writer, lease control.LeaseResponse, jsonOut, 
 		if lease.HostKind != "" {
 			fmt.Fprintf(stdout, "HOST_KIND=%s\n", lease.HostKind)
 		}
+		if lease.StaticDir != "" {
+			fmt.Fprintf(stdout, "STATIC_DIR=%s\n", lease.StaticDir)
+		}
 	}
 	if lease.RootSource == "inferred" {
 		fmt.Fprintf(stderr, "# inferred root=%s\n", lease.Root)
@@ -901,6 +932,9 @@ func writeRoutes(stdout, stderr io.Writer, entries []control.ListEntry, jsonOut 
 			fmt.Fprintf(stdout, "HOST=%s\n", entry.Host)
 		}
 		fmt.Fprintf(stdout, "DIR=%s\n", entry.Path)
+		if entry.StaticDir != "" {
+			fmt.Fprintf(stdout, "STATIC_DIR=%s\n", entry.StaticDir)
+		}
 	}
 	writeLocalOnlyNote(stderr, host)
 }

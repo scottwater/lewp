@@ -111,8 +111,9 @@ func TestMigrateBacksUpAndLogsBeforeReset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate a schema bump / stale binary: an on-disk version below the binary.
-	setUserVersionOnDisk(t, path, schemaVersion-1)
+	// Simulate a schema bump / stale binary: an on-disk version below the binary
+	// that has no in-place migration (version 2 upgrades without a reset).
+	setUserVersionOnDisk(t, path, 1)
 
 	var logBuf bytes.Buffer
 	defer swapResetLog(&logBuf)()
@@ -146,7 +147,7 @@ func TestMigrateBacksUpAndLogsBeforeReset(t *testing.T) {
 	if got := countRows(t, backupDB, "select count(*) from routes"); got != 1 {
 		t.Fatalf("routes in backup = %d, want 1", got)
 	}
-	assertUserVersion(t, backupDB, schemaVersion-1)
+	assertUserVersion(t, backupDB, 1)
 
 	// The reset was logged loudly and points at the backup.
 	logged := logBuf.String()
@@ -155,6 +156,54 @@ func TestMigrateBacksUpAndLogsBeforeReset(t *testing.T) {
 	}
 	if !strings.Contains(logged, backups[0]) {
 		t.Fatalf("reset log %q does not mention backup path %q", logged, backups[0])
+	}
+}
+
+func TestMigrateUpgradesVersion2InPlace(t *testing.T) {
+	path := t.TempDir() + "/registry.sqlite"
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ident := testIdentity(t, "feature.audit.lewp", identity.KindRoute)
+	lease, err := store.Lease(context.Background(), ident, PortRange{Start: 42000, End: 42010})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the version 2 shape: no routes.static_dir column.
+	if _, err := store.db.Exec(`alter table routes drop column static_dir`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	setUserVersionOnDisk(t, path, 2)
+
+	var logBuf bytes.Buffer
+	defer swapResetLog(&logBuf)()
+
+	reopened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	assertUserVersion(t, reopened.db, schemaVersion)
+	if logBuf.Len() != 0 {
+		t.Fatalf("version 2 upgrade logged a reset: %q", logBuf.String())
+	}
+	backups, err := filepath.Glob(path + ".*.bak")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("version 2 upgrade wrote backups %v, want none", backups)
+	}
+	route, ok, err := reopened.RouteByHost(context.Background(), "feature.audit.lewp")
+	if err != nil || !ok {
+		t.Fatalf("RouteByHost after upgrade = %+v, %v, %v", route, ok, err)
+	}
+	if route.Port != lease.Port || route.StaticDir != "" {
+		t.Fatalf("route after upgrade = port %d static %q, want port %d and no static dir", route.Port, route.StaticDir, lease.Port)
 	}
 }
 

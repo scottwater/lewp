@@ -208,7 +208,7 @@ LOGS=/Users/scott/Library/Logs/lewp</pre>
         </svg>
         <h2 class="cmd">lewp system</h2>
       </div>
-      <p>Manage the macOS LaunchAgent: start | stop | restart | status | uninstall. Each action runs the matching launchctl command and prints it. If start sees bootstrap status 5 because the job is already loaded, it falls back to launchctl kickstart -k.</p>
+      <p>Manage the macOS LaunchAgent: start | stop | restart | status | uninstall. Each action runs the matching launchctl command and prints it. If start sees bootstrap status 5 because the job is already loaded, it falls back to launchctl kickstart -k. start and restart then wait up to five seconds for the daemon to answer on its control socket; if it does not, the command fails and prints the daemon log path and launchd diagnostics.</p>
       <pre>lewp system start
 lewp system status
 lewp system uninstall --yes</pre>
@@ -263,6 +263,11 @@ export HOST=feature-1.atlas.lewp</pre>
 lewp lease --reset --root atlas  # keep root, re-infer name and host</pre>
       <p>An inferred host that conflicts with another directory receives a stable deterministic suffix. An explicit --host that is already assigned elsewhere fails with the owning path and a cleanup command you can run from anywhere; pass --auto-suffix to take a deterministic suffix instead of failing.</p>
       <pre>lewp release --path "/work/old app" --route --forget</pre>
+      <p>--static &lt;dir&gt; serves files from a directory instead of proxying, so build output such as a compiled JavaScript bundle gets a stable URL with nothing running. URL paths map straight onto the directory, aliases serve the same files, and the setting is remembered like --host. --no-static switches back to proxying on the same port and host.</p>
+      <pre>cd ~/work/js
+lewp lease --host kickoffjs.lewp --static dist
+curl https://kickoffjs.lewp/3.0.0/kol.js   # serves dist/3.0.0/kol.js</pre>
+      <p>Requests can't leave the directory: .. segments and symlinks pointing outside it are refused. Dotfiles and dot-directories (.env, .git/) always return 404, even through a symlink. A directory serves its index.html or 404s; directories are never listed. Only GET and HEAD are allowed, and responses send Cache-Control: no-cache so a rebuild shows up on the next reload. --static needs a daemon that knows about it; if the daemon is older than the CLI, lease fails and asks you to run lewp system restart.</p>
     </section>
 
     <section id="alias" class="doc-section doc-scroll">
@@ -394,12 +399,12 @@ lewp release --pick --dry-run</pre>
         </svg>
         <h2 class="cmd">lewp list</h2>
       </div>
-      <p>List registry entries (routes, aliases, and bare ports) with their health. States are derived from TCP checks. The default list hides released routes; --all includes registry history. KIND is route, alias, or port; a bare port has no host, so HOST shows "-".</p>
+      <p>List registry entries (routes, aliases, and bare ports) with their health. States are derived from TCP checks, or for static routes, whether the directory exists. The default list hides released routes; --all includes registry history. KIND is route, alias, or port; a bare port has no host, so HOST shows "-".</p>
       <pre>HOST                       NAME       KIND   PORT   STATE  PATH
 feature-1.atlas.lewp       feature-1  route  42137  up     .../atlas/feature-1
 tags.feature-1.atlas.lewp  feature-1  alias  42137  up     .../atlas/feature-1
 -                          vite       port   42138  down   .../atlas/feature-1</pre>
-      <p>States: up (TCP connect succeeds), down (connect fails), stale (registered path no longer exists), released (route was explicitly released). --json emits a JSON array (always an array, never null), each entry with host, port, state, path, kind, root, and name.</p>
+      <p>States: up (TCP connect succeeds, or a static route's directory exists), down (connect fails, or the directory is missing), stale (registered path no longer exists), released (route was explicitly released). --json emits a JSON array (always an array, never null), each entry with host, port, state, path, kind, root, and name.</p>
       <pre>lewp list --json | jq '.[] | select(.kind == "alias")'</pre>
     </section>
 
@@ -420,8 +425,8 @@ cli binary: /usr/local/bin/lewp
 launchd plist: ~/Library/LaunchAgents/dev.lewp.daemon.plist
 installed program: /usr/local/bin/lewp
 installed program matches this CLI
-current version: 0.4.0
-installed version: 0.4.0
+current version: 0.5.0
+installed version: 0.5.0
 daemon log: ~/Library/Logs/lewp/daemon.err.log</pre>
       <p>When the daemon is up, doctor resolves probe.lewp through the macOS system resolver — the same path browsers use — and warns (with sudo killall -HUP mDNSResponder as the recovery hint) when the name does not resolve. If launchd runs a different binary than the current CLI it prints a mismatch line pointing at bin/reinstall and lewp system restart.</p>
       <pre>mismatch: launchd runs /old/bin/lewp but this CLI is /usr/local/bin/lewp
@@ -470,7 +475,7 @@ lewp completion fish &gt; ~/.config/fish/completions/lewp.fish</pre>
       </div>
       <p>Print the public version. Add --detailed for development/build metadata. version, --version, and -v are equivalent. The version is injected at link time by bin/build; an un-stamped go build reports "dev".</p>
       <pre>lewp version --detailed
-lewp version 0.4.0
+lewp version 0.5.0
 commit:  0a778ce
 built:   2026-06-27T23:08:00Z
 go:      go1.25.1</pre>
@@ -512,6 +517,7 @@ lewp system restart   # so launchd runs the new binary</pre>
       <p>The proxy serves debuggable HTML rather than blank gateway errors for the two common failure modes. Both pages share a small, framework-neutral inline stylesheet (no external assets, no web fonts, no JavaScript) that renders in light and dark mode.</p>
       <p>Registered but not responding: when a host is leased but its target port is closed, the proxy returns 502 with the host, loopback target, project path, root/name, last-seen time, release state, a copyable PORT=&lt;n&gt; &lt;your dev command&gt; start command, and lewp list / lewp doctor hints.</p>
       <p>Unregistered managed host: when a host under .lewp or a configured suffix has no route, the proxy returns 404 with parsed labels and next steps. Unmanaged hosts get a plain 404. The host is HTML-escaped so a crafted hostname cannot inject markup.</p>
+      <p>Missing static directory: when a --static route's directory can't be opened, the proxy returns 502 with the directory, the error, the project path, and the lewp lease --static &lt;dir&gt; command to re-point it.</p>
     </section>
 
     <section id="browser" class="doc-section doc-scroll">

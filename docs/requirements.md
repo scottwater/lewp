@@ -23,6 +23,9 @@ It does:
 - register that hostname with the daemon
 - route HTTP traffic to `127.0.0.1:<port>` or `[::1]:<port>`
 - show a useful local error page if the target process is not running
+- optionally serve a route from a directory of files on disk (`lewp lease
+  --static <dir>`) instead of proxying to its port, so build output such as a
+  compiled JS bundle has a stable local URL without a server process
 - expose enough CLI/status output to debug what it inferred and registered
 
 It does not:

@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/scottwater/lewp/internal/identity"
@@ -87,7 +89,12 @@ where r.path=? and l.state=?`, toPath, StateActive).Scan(&activeDestination)
 		return nil, err
 	}
 	for _, r := range moved {
-		if _, err := tx.ExecContext(ctx, `update routes set path=?, updated_at=? where id=?`, toPath, now, r.RouteID); err != nil {
+		var staticDir string
+		if err := tx.QueryRowContext(ctx, `select static_dir from routes where id=?`, r.RouteID).Scan(&staticDir); err != nil {
+			return nil, err
+		}
+		staticDir = rebaseStaticDir(staticDir, fromPath, toPath)
+		if _, err := tx.ExecContext(ctx, `update routes set path=?, static_dir=?, updated_at=? where id=?`, toPath, staticDir, now, r.RouteID); err != nil {
 			return nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `insert into events(route_id, event_type, message, created_at) values(?, ?, ?, ?)`,
@@ -110,7 +117,7 @@ where r.path=? and l.state=?`, toPath, StateActive).Scan(&activeDestination)
 }
 
 func movedRouteHosts(ctx context.Context, tx *sql.Tx, routeID int64, kind identity.Kind) ([]Record, error) {
-	rows, err := tx.QueryContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+	rows, err := tx.QueryContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, ''), r.static_dir
 from routes r
 join route_hosts rh on rh.route_id = r.id
 join leases l on l.route_id = r.id
@@ -123,7 +130,7 @@ order by case rh.host_type when 'primary' then 0 when 'alias' then 1 when 'wildc
 	var records []Record
 	for rows.Next() {
 		var r Record
-		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt); err != nil {
+		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt, &r.StaticDir); err != nil {
 			return nil, err
 		}
 		r.Kind = kind
@@ -131,4 +138,17 @@ order by case rh.host_type when 'primary' then 0 when 'alias' then 1 when 'wildc
 		records = append(records, r)
 	}
 	return records, rows.Err()
+}
+
+// rebaseStaticDir keeps a static directory that lives inside the moved project
+// pointing inside it: <from>/dist becomes <to>/dist. Directories outside the
+// project are left alone.
+func rebaseStaticDir(dir, fromPath, toPath string) string {
+	if dir == fromPath {
+		return toPath
+	}
+	if rest, ok := strings.CutPrefix(dir, fromPath+string(filepath.Separator)); ok {
+		return filepath.Join(toPath, rest)
+	}
+	return dir
 }

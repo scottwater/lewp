@@ -47,6 +47,11 @@ type LeaseRequest struct {
 	// identity is persisted in place, so the active lease (port) and event history
 	// survive — unlike release --forget, which deletes the whole route.
 	Reset bool
+	// Static, when set, switches the route to serving files from this directory
+	// (relative paths resolve against WorkDir) instead of proxying to its port.
+	// NoStatic switches it back. With neither, the route keeps its current mode.
+	Static   string `json:"static,omitempty"`
+	NoStatic bool   `json:"no_static,omitempty"`
 }
 
 // HostConflictError is returned when an explicitly requested host (--host, env,
@@ -128,6 +133,13 @@ type LeaseResponse struct {
 	// LeaseState is new, reused, or conflict-renamed for this call.
 	LeaseState   string `json:"lease_state,omitempty"`
 	ReleaseState string `json:"release_state"`
+	// StaticDir is set when the route serves files from disk instead of
+	// proxying to Port.
+	StaticDir string `json:"static_dir,omitempty"`
+	// StaticSupported is always true from a daemon that understands
+	// --static/--no-static. Older daemons silently drop those request fields,
+	// so the CLI uses its absence to ask for a daemon restart.
+	StaticSupported bool `json:"static_supported,omitempty"`
 }
 
 // ReleaseSelector is the public, ID-free description of a planned selector.
@@ -189,6 +201,9 @@ type ListEntry struct {
 	Kind  identity.Kind `json:"kind"`
 	Root  string        `json:"root"`
 	Name  string        `json:"name"`
+	// StaticDir is set for routes (and their aliases) that serve files from
+	// disk instead of proxying to Port.
+	StaticDir string `json:"static_dir,omitempty"`
 }
 
 func NewService(store *registry.Store, portRange registry.PortRange) *Service {
@@ -233,6 +248,19 @@ func requestEnv(env map[string]string) map[string]string {
 }
 
 func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, error) {
+	if req.Static != "" && req.NoStatic {
+		return LeaseResponse{}, errors.New("--static and --no-static cannot be combined")
+	}
+	// Validate the static directory before leasing so a bad path never leaves a
+	// half-applied lease behind.
+	staticDir := ""
+	if req.Static != "" {
+		dir, err := resolveStaticDir(req.WorkDir, req.Static)
+		if err != nil {
+			return LeaseResponse{}, err
+		}
+		staticDir = dir
+	}
 	resolved, err := identity.Resolve(ctx, identity.Options{
 		WorkDir:         req.WorkDir,
 		Root:            req.Root,
@@ -301,7 +329,40 @@ func (s *Service) Lease(ctx context.Context, req LeaseRequest) (LeaseResponse, e
 	if err != nil {
 		return LeaseResponse{}, err
 	}
-	return response(resolved, lease.Port, leaseState(lease, conflictRenamed)), nil
+	if req.Static != "" || req.NoStatic {
+		if err := s.store.SetRouteStaticDir(ctx, lease.RouteID, staticDir); err != nil {
+			return LeaseResponse{}, err
+		}
+	} else if staticDir, err = s.store.RouteStaticDir(ctx, lease.RouteID); err != nil {
+		return LeaseResponse{}, err
+	}
+	resp := response(resolved, lease.Port, leaseState(lease, conflictRenamed))
+	resp.StaticDir = staticDir
+	resp.StaticSupported = true
+	return resp, nil
+}
+
+// resolveStaticDir turns a --static value into the absolute directory the
+// proxy will serve, failing early when it does not exist or is not a directory.
+func resolveStaticDir(workDir, dir string) (string, error) {
+	if !filepath.IsAbs(dir) {
+		if workDir == "" {
+			return "", errors.New("request has no working directory")
+		}
+		dir = filepath.Join(workDir, dir)
+	}
+	dir = filepath.Clean(dir)
+	info, err := os.Stat(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("static directory %s does not exist", dir)
+		}
+		return "", fmt.Errorf("static directory %s: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("static path %s is not a directory", dir)
+	}
+	return dir, nil
 }
 
 func (s *Service) Port(ctx context.Context, req PortRequest) (LeaseResponse, error) {
@@ -594,6 +655,9 @@ func releaseItemState(item registry.ReleasePlanItem) string {
 			return "stale"
 		}
 	}
+	if item.StaticDir != "" {
+		return staticDirState(item.StaticDir)
+	}
 	if item.ActivePort == nil {
 		return "down"
 	}
@@ -795,6 +859,9 @@ func recordState(record registry.Record) string {
 	if record.State != registry.StateActive {
 		return record.State
 	}
+	if record.StaticDir != "" {
+		return staticDirState(record.StaticDir)
+	}
 	if record.Port == 0 {
 		return "down"
 	}
@@ -803,6 +870,15 @@ func recordState(record registry.Record) string {
 		return "down"
 	}
 	_ = conn.Close()
+	return "up"
+}
+
+// staticDirState reports a static route as up while its directory exists. The
+// leased port has no listener by design, so a TCP probe would always say down.
+func staticDirState(dir string) string {
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "down"
+	}
 	return "up"
 }
 

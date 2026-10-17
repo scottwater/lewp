@@ -27,7 +27,7 @@ const (
 	HostTypeWildcard = "wildcard"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // resetLog receives the loud warning emitted before Migrate wipes a
 // schema-mismatched registry. It defaults to stderr (which the launchd daemon
@@ -115,6 +115,9 @@ type Record struct {
 	State          string
 	LastSeenAt     string
 	ReleasedAt     string
+	// StaticDir is the absolute directory a static route serves files from. It
+	// is empty for ordinary routes, which proxy to the leased loopback port.
+	StaticDir string
 }
 
 func Open(path string) (*Store, error) {
@@ -175,6 +178,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)
 	}
 
+	// Version 2 differs from version 3 only by the additive routes.static_dir
+	// column, so upgrade it in place instead of resetting pinned ports and hosts.
+	if version == 2 {
+		return s.migrateV2ToV3(ctx)
+	}
+
 	// A version below the current schema means the on-disk data cannot be used as
 	// is. Pre-release policy is to reset rather than migrate, but never silently:
 	// back the registry up and log the wipe loudly first so it is recoverable and
@@ -223,6 +232,7 @@ create table if not exists routes (
 	normalized_root text not null,
 	normalized_name text not null,
 	path text not null,
+	static_dir text not null default '',
 	created_at text not null,
 	updated_at text not null
 );
@@ -276,6 +286,21 @@ create table if not exists events (
 	created_at text not null
 );`
 	if _, err := tx.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`pragma user_version=%d`, schemaVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateV2ToV3(ctx context.Context) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `alter table routes add column static_dir text not null default ''`); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`pragma user_version=%d`, schemaVersion)); err != nil {
@@ -584,14 +609,14 @@ limit 1`, HostTypePrimary, path).
 func (s *Store) RouteByHost(ctx context.Context, host string) (Record, bool, error) {
 	host = normalizeRouteHost(host)
 	var r Record
-	err := s.db.QueryRowContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+	err := s.db.QueryRowContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, ''), r.static_dir
 from route_hosts rh
 join routes r on r.id = rh.route_id
 join leases l on l.route_id = r.id
 where rh.host=? and l.state=?
 order by case rh.host_type when 'primary' then 0 else 1 end, rh.id
 limit 1`, host, StateActive).
-		Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt)
+		Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt, &r.StaticDir)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s.wildcardRouteByHost(ctx, host)
 	}
@@ -602,7 +627,7 @@ limit 1`, host, StateActive).
 
 func (s *Store) wildcardRouteByHost(ctx context.Context, host string) (Record, bool, error) {
 	host = normalizeRouteHost(host)
-	rows, err := s.db.QueryContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+	rows, err := s.db.QueryContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, ''), r.static_dir
 from route_hosts rh
 join routes r on r.id = rh.route_id
 join leases l on l.route_id = r.id
@@ -614,7 +639,7 @@ order by rh.id`, HostTypeWildcard, StateActive)
 	defer rows.Close()
 	for rows.Next() {
 		var r Record
-		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt); err != nil {
+		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt, &r.StaticDir); err != nil {
 			return Record{}, false, err
 		}
 		if !wildcardMatches(r.Host, host) {
@@ -633,14 +658,14 @@ order by rh.id`, HostTypeWildcard, StateActive)
 
 func (s *Store) ActiveRouteByPath(ctx context.Context, path string) (Record, bool, error) {
 	var r Record
-	err := s.db.QueryRowContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, '')
+	err := s.db.QueryRowContext(ctx, `select r.id, rh.id, l.id, r.root, r.name, r.normalized_root, r.normalized_name, rh.host, rh.host_type, r.path, l.port, l.state, coalesce(l.last_seen_at, ''), coalesce(l.released_at, ''), r.static_dir
 from routes r
 join leases l on l.route_id = r.id
 join route_hosts rh on rh.route_id = r.id and rh.host_type=?
 where r.path=? and l.state=?
 order by l.id desc
 limit 1`, HostTypePrimary, path, StateActive).
-		Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt)
+		Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt, &r.StaticDir)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Record{}, false, nil
 	}
@@ -650,6 +675,30 @@ limit 1`, HostTypePrimary, path, StateActive).
 	r.MatchedHost = r.Host
 	r.Kind = identity.KindRoute
 	return r, true, nil
+}
+
+// SetRouteStaticDir switches a route between proxying (dir == "") and serving
+// files from dir, which must already be an absolute, cleaned path.
+func (s *Store) SetRouteStaticDir(ctx context.Context, routeID int64, dir string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `update routes set static_dir=?, updated_at=? where id=?`, dir, now, routeID)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("route %d not found", routeID)
+	}
+	return nil
+}
+
+// RouteStaticDir reports the static directory recorded for a route, or "" when
+// the route proxies to its leased port.
+func (s *Store) RouteStaticDir(ctx context.Context, routeID int64) (string, error) {
+	var dir string
+	err := s.db.QueryRowContext(ctx, `select static_dir from routes where id=?`, routeID).Scan(&dir)
+	return dir, err
 }
 
 func (s *Store) AddRouteHost(ctx context.Context, routeID int64, host, hostType, source string) (RouteHost, bool, error) {
@@ -745,15 +794,15 @@ func (s *Store) TouchLastSeen(ctx context.Context, leaseID int64) error {
 }
 
 func (s *Store) List(ctx context.Context, all bool) ([]Record, error) {
-	query := `select route_id, host_id, lease_id, root, name, normalized_root, normalized_name, host, host_type, kind, path, port, state, last_seen_at, released_at
+	query := `select route_id, host_id, lease_id, root, name, normalized_root, normalized_name, host, host_type, kind, path, port, state, last_seen_at, released_at, static_dir
 from (
-select r.id route_id, rh.id host_id, coalesce(l.id, 0) lease_id, r.root root, r.name name, r.normalized_root normalized_root, r.normalized_name normalized_name, rh.host host, rh.host_type host_type, 'route' kind, r.path path, coalesce(l.port, 0) port, coalesce(l.state, '') state, coalesce(l.last_seen_at, '') last_seen_at, coalesce(l.released_at, '') released_at
+select r.id route_id, rh.id host_id, coalesce(l.id, 0) lease_id, r.root root, r.name name, r.normalized_root normalized_root, r.normalized_name normalized_name, rh.host host, rh.host_type host_type, 'route' kind, r.path path, coalesce(l.port, 0) port, coalesce(l.state, '') state, coalesce(l.last_seen_at, '') last_seen_at, coalesce(l.released_at, '') released_at, r.static_dir static_dir
 from routes r
 join route_hosts rh on rh.route_id = r.id
 left join leases l on l.route_id = r.id
 where (? or l.state = ?)
 union all
-select p.id route_id, 0 host_id, p.id lease_id, '' root, p.name name, '' normalized_root, p.normalized_name normalized_name, '' host, '' host_type, 'port' kind, p.path path, p.port port, p.state state, '' last_seen_at, coalesce(p.released_at, '') released_at
+select p.id route_id, 0 host_id, p.id lease_id, '' root, p.name name, '' normalized_root, p.normalized_name normalized_name, '' host, '' host_type, 'port' kind, p.path path, p.port port, p.state state, '' last_seen_at, coalesce(p.released_at, '') released_at, '' static_dir
 from ports p
 where (? or p.state = ?)
 )
@@ -766,7 +815,7 @@ order by path, case when kind='route' and host_type='primary' then 0 when kind='
 	var records []Record
 	for rows.Next() {
 		var r Record
-		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Kind, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt); err != nil {
+		if err := rows.Scan(&r.RouteID, &r.HostID, &r.LeaseID, &r.Root, &r.Name, &r.NormalizedRoot, &r.NormalizedName, &r.Host, &r.HostType, &r.Kind, &r.Path, &r.Port, &r.State, &r.LastSeenAt, &r.ReleasedAt, &r.StaticDir); err != nil {
 			return nil, err
 		}
 		records = append(records, r)

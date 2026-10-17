@@ -86,6 +86,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.touch(r.Context(), route.LeaseID)
+	if route.StaticDir != "" {
+		status, err := serveStatic(w, r, route)
+		p.logRequest(r, host, "static:"+route.StaticDir, status, err)
+		return
+	}
 	target := &url.URL{Scheme: "http", Host: net.JoinHostPort("127.0.0.1", fmt.Sprint(route.Port))}
 	var proxyErr error
 	proxy := &httputil.ReverseProxy{
