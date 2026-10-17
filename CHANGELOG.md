@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.5.0
+
+### Added
+
+- Added `lewp lease --static <dir>` to serve a directory's files over HTTP and HTTPS with no app process running, for build output such as a compiled JavaScript bundle. Aliases serve the same files, and `--no-static` switches back to proxying on the same port and host. Requests can't leave the directory, dotfiles are never served (even through symlinks), and directories are never listed.
+- `lewp list`, `lewp info`, and `--json` output show a route's static directory. `lewp list` and `lewp doctor` report a static route as up while its directory exists.
+
+### Changed
+
+- `lewp system start`, `lewp system restart`, and `lewp setup --start` now wait up to five seconds for the daemon to answer and fail with log and launchd diagnostics if it doesn't.
+- `lewp move` keeps a static directory inside the project pointing inside it.
+- The registry moves to schema version 3 in place, keeping existing ports, hosts, and custom suffixes.
+
+### Fixed
+
+- `lewp lease --static` against a daemon older than the CLI now fails with a `lewp system restart` hint instead of silently proxying.
+- CLI tests run against an isolated home directory so they can never touch a developer's real `suffixes.toml`.
+
 ## 0.4.0
 
 ### Added
